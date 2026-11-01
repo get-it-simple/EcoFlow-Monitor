@@ -1,11 +1,9 @@
-import sys
-
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizeGrip, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor import __version__
-from ecoflow_monitor.adapters.windows import acrylic, raise_without_focus
+from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.adapters.reference_effects import get_accent_color
 from ecoflow_monitor.ui.theme import SETTINGS_STYLE, monitor_style
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
@@ -28,19 +26,7 @@ class MonitorWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setMinimumSize(380, 320)
-        self._warming = False
         self._quitting = False
-        self._backdrop_timer = QTimer(self)
-        self._backdrop_timer.setSingleShot(True)
-        self._backdrop_timer.timeout.connect(self._apply_backdrop)
-        self._warmup_timer = QTimer(self)
-        self._warmup_timer.setSingleShot(True)
-        self._warmup_timer.setInterval(150)
-        self._warmup_timer.timeout.connect(self._finish_warmup)
-        self._reshow_timer = QTimer(self)
-        self._reshow_timer.setSingleShot(True)
-        self._reshow_timer.setInterval(50)
-        self._reshow_timer.timeout.connect(self._complete_warmup)
         self._desired_visible = controller.settings.monitor_visible
         self._scale = effective_scale(self, controller.settings.scale)
         self._logical_size = None
@@ -151,25 +137,8 @@ class MonitorWindow(QWidget):
         return button
 
     def startup(self):
-        if self._quitting or self._warming:
+        if self._quitting:
             return
-        if sys.platform == "win32" and self.controller.settings.transparency:
-            self._warming = True
-            self.show()
-            self._warmup_timer.start()
-        else:
-            self.setVisible(self._desired_visible)
-
-    def _finish_warmup(self):
-        if self._quitting or not self._warming:
-            return
-        self.hide()
-        self._reshow_timer.start()
-
-    def _complete_warmup(self):
-        if self._quitting or not self._warming:
-            return
-        self._warming = False
         self.setVisible(self._desired_visible)
         if self._desired_visible:
             raise_without_focus(self)
@@ -179,10 +148,9 @@ class MonitorWindow(QWidget):
             return
         self._desired_visible = visible
         self.controller.update_preferences(monitor_visible=visible)
-        if not self._warming:
-            self.setVisible(visible)
-            if visible:
-                raise_without_focus(self)
+        self.setVisible(visible)
+        if visible:
+            raise_without_focus(self)
 
     def apply_appearance(self):
         if self._quitting:
@@ -214,7 +182,7 @@ class MonitorWindow(QWidget):
     def _set_scale(self, scale):
         scaled_font(self, scale)
         self._scale = scale
-        self.setStyleSheet(self.styleSheet() + monitor_style(scale, get_accent_color(), False))
+        self.setStyleSheet(self.styleSheet() + monitor_style(scale, get_accent_color(), self.controller.settings.transparency))
         self._shell_layout.setContentsMargins(round(12 * scale), round(10 * scale), round(12 * scale), round(8 * scale))
         self._shell_layout.setSpacing(round(6 * scale))
         for button in (self.settings_button, self.refresh_button, self.close_button):
@@ -227,7 +195,6 @@ class MonitorWindow(QWidget):
         self.profile_scroll.setFixedHeight(controls_height + margins.top() + margins.bottom() + 2)
         self.profile_scroll.setMinimumWidth(self._profile_container.minimumSizeHint().width() + 2)
         self.flow.setMinimumSize(round(420 * scale), round(407 * scale))
-        self._apply_backdrop()
         for widget in reversed(self.shell.findChildren(QWidget)):
             child_layout = widget.layout()
             if child_layout is not None:
@@ -237,13 +204,6 @@ class MonitorWindow(QWidget):
         self._shell_layout.activate()
         self._outer_layout.invalidate()
         self._outer_layout.activate()
-
-    def _apply_backdrop(self):
-        if self._quitting:
-            return
-        active = acrylic(self, self.controller.settings.transparency)
-        scaled_font(self, self._scale)
-        self.setStyleSheet(self.styleSheet() + monitor_style(self._scale, get_accent_color(), active))
 
     def refresh(self):
         controller = self.controller
@@ -283,7 +243,7 @@ class MonitorWindow(QWidget):
             self._layout_timer.start()
 
     def _save_geometry(self):
-        if self._quitting or self._warming:
+        if self._quitting:
             return
         geometry = (self.x(), self.y(), self.width(), self.height())
         if geometry != self.controller.settings.monitor_geometry:
@@ -302,26 +262,19 @@ class MonitorWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._screen_tracker.watch()
-        self._apply_backdrop()
         clamp_window(self)
         self.flow.refresh()
 
     def closeEvent(self, event):
         if self._quitting:
-            self._warmup_timer.stop()
-            self._reshow_timer.stop()
-            self._backdrop_timer.stop()
             self._layout_timer.stop()
             self._screen_tracker.stop()
-            self._warming = False
             event.accept()
         else:
             event.ignore()
             self.request_visibility(False)
 
     def event(self, event):
-        if event.type() == QEvent.Type.WinIdChange and hasattr(self, "_backdrop_timer") and not self._quitting:
-            self._backdrop_timer.start()
         if event.type() == QEvent.Type.DevicePixelRatioChange and hasattr(self, "flow"):
             self._layout_timer.start()
         return super().event(event)

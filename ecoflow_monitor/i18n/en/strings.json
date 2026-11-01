@@ -58,7 +58,7 @@
   "refresh": "Refresh",
   "hide": "Hide",
   "scale": "Interface scale (%)",
-  "transparency": "Windows acrylic background",
+  "transparency": "Transparent background",
   "animations": "Animate energy flow",
   "visible_on_start": "Show monitor on startup",
   "mini_scale": "Mini widget scale (%)",

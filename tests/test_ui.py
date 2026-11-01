@@ -3,9 +3,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import time
-from types import SimpleNamespace
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint
 from PySide6.QtTest import QTest
 import pytest
 
@@ -190,13 +189,13 @@ def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
     assert runtime.window.auto_toggle.text() == i18n.t("automatic_mode")
 
 
-@pytest.mark.parametrize("available,enabled,alpha", [(True, True, 140), (True, False, 255), (False, True, 255)])
-def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, monkeypatch, available, enabled, alpha):
-    monkeypatch.setattr("ecoflow_monitor.ui.window.acrylic", lambda target, requested: available and requested)
+@pytest.mark.parametrize("enabled,alpha", [(True, 140), (False, 255)])
+def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, alpha):
     runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, msi_enabled=True))
     window = runtime.window
     window.show()
     qapp.processEvents()
+    assert window.windowOpacity() == 1
     image = window.grab().toImage()
     for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.flow, QPoint(2, 2)), (window.msi_section, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
         position = widget.mapTo(window, point)
@@ -214,23 +213,24 @@ def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime
         dialog.deleteLater()
 
 
-def test_transparency_draft_save_reset_and_restart(runtime, qapp, monkeypatch):
-    monkeypatch.setattr("ecoflow_monitor.ui.window.acrylic", lambda target, enabled: enabled)
+@pytest.mark.parametrize("enabled", [False, True])
+def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
-        dialog.transparency.setChecked(False)
+        assert dialog.transparency.text() == "Transparent background"
+        dialog.transparency.setChecked(not enabled)
         assert runtime.controller.settings.transparency is True
         dialog.load_draft()
         assert dialog.transparency.isChecked()
-        dialog.transparency.setChecked(False)
+        dialog.transparency.setChecked(enabled)
         dialog.save()
-        assert runtime.controller.store.load().transparency is False
+        assert runtime.controller.store.load().transparency is enabled
         restarted_controller = Controller(runtime.controller.store, NoCredentials())
         restarted = window_module.MonitorWindow(restarted_controller, lambda: None)
         try:
             restarted.show()
             qapp.processEvents()
-            assert restarted.grab().toImage().pixelColor(4, restarted.height() // 2).alpha() == 255
+            assert restarted.grab().toImage().pixelColor(4, restarted.height() // 2).alpha() == (140 if enabled else 255)
         finally:
             restarted._quitting = True
             restarted.close()
@@ -244,19 +244,21 @@ def test_transparency_draft_save_reset_and_restart(runtime, qapp, monkeypatch):
         dialog.deleteLater()
 
 
-def wait_for_ui(predicate):
-    deadline = time.monotonic() + 2
-    while not predicate() and time.monotonic() < deadline:
-        QTest.qWait(10)
-    assert predicate()
-
-
 @pytest.mark.parametrize("visible", [False, True])
-def test_acrylic_warmup_preserves_startup_visibility(runtime, monkeypatch, visible):
-    monkeypatch.setattr("ecoflow_monitor.ui.window.sys", SimpleNamespace(platform="win32"))
+def test_startup_preserves_visibility_without_temporary_show(runtime, visible):
+    events = []
+
+    class VisibilityTracker(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+                events.append(event.type())
+            return False
+
+    tracker = VisibilityTracker()
+    runtime.window.installEventFilter(tracker)
     runtime.window._desired_visible = visible
     runtime.window.startup()
-    wait_for_ui(lambda: not runtime.window._warming)
+    assert events == ([QEvent.Type.Show] if visible else [])
     assert runtime.window.isVisible() == visible
     for _ in range(3):
         runtime.window.request_visibility(True)
@@ -265,49 +267,44 @@ def test_acrylic_warmup_preserves_startup_visibility(runtime, monkeypatch, visib
         assert not runtime.window.isVisible()
 
 
-def test_visibility_requests_during_both_warmup_phases_use_latest_request(runtime, monkeypatch):
-    monkeypatch.setattr("ecoflow_monitor.ui.window.sys", SimpleNamespace(platform="win32"))
+def test_rapid_visibility_requests_and_transparency_changes_use_latest_request(runtime, qapp):
     window = runtime.window
-    window._reshow_timer.setInterval(100)
     window.startup()
-    window.request_visibility(False)
-    wait_for_ui(lambda: window._reshow_timer.isActive())
-    window.request_visibility(True)
-    assert window.isHidden()
-    window.request_visibility(False)
-    wait_for_ui(lambda: not window._warming)
+    for enabled in (False, True, False, True):
+        runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled))
+        window.request_visibility(True)
+        assert window.isVisible()
+        window.request_visibility(False)
+    qapp.processEvents()
     assert window.isHidden()
     assert runtime.controller.store.load().monitor_visible is False
-
-
-@pytest.mark.parametrize("reshow", [False, True])
-def test_shutdown_cancels_pending_acrylic_warmup(runtime, monkeypatch, reshow):
-    monkeypatch.setattr("ecoflow_monitor.ui.window.sys", SimpleNamespace(platform="win32"))
-    window = runtime.window
-    window.startup()
-    if reshow:
-        wait_for_ui(lambda: window._reshow_timer.isActive())
-    runtime.stop()
-    QTest.qWait(250)
-    assert window.isHidden()
-    assert not window._warmup_timer.isActive()
-    assert not window._reshow_timer.isActive()
-    assert not window._backdrop_timer.isActive()
-
-
-def test_show_and_native_handle_change_restore_backdrop(runtime, qapp, monkeypatch):
-    available = False
-    monkeypatch.setattr("ecoflow_monitor.ui.window.acrylic", lambda target, enabled: available and enabled)
-    window = runtime.window
-    window.show()
-    qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255
-    window.hide()
-    available = True
-    window.show()
+    window.request_visibility(True)
     qapp.processEvents()
     assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 140
-    available = False
-    QCoreApplication.sendEvent(window, QEvent(QEvent.Type.WinIdChange))
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_shutdown_prevents_later_window_show(runtime, visible):
+    window = runtime.window
+    window._desired_visible = visible
+    window.startup()
+    runtime.stop()
+    window.startup()
+    window.request_visibility(True)
+    QTest.qWait(250)
+    assert window.isHidden()
+    assert not window._layout_timer.isActive()
+
+
+@pytest.mark.parametrize("enabled,alpha", [(True, 140), (False, 255)])
+def test_background_survives_repeated_show_and_native_handle_recreation(runtime, qapp, enabled, alpha):
+    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled))
+    window = runtime.window
+    window.show()
     qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == alpha
+    window.hide()
+    window.destroy()
+    window.show()
+    qapp.processEvents()
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == alpha
