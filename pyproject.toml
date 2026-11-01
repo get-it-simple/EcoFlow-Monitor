@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecoflow-monitoring-win-support"
+dynamic = ["version", "dependencies"]
+description = "Foundation for an EcoFlow monitoring and GPU profile automation application for Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "ecoflow_monitor.__version__"}
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["ecoflow_monitor*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"ecoflow_monitor.i18n" = ["*/strings.json"]
