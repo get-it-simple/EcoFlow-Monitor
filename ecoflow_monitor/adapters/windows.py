@@ -5,6 +5,8 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
 
+from ecoflow_monitor.adapters.reference_effects import apply_acrylic_effect
+
 
 def internet_unavailable() -> bool:
     if sys.platform != "win32":
@@ -30,15 +32,16 @@ def acrylic(window: QWidget, enabled: bool) -> bool:
     except OSError:
         enabled = False
     try:
-        dwm = ctypes.WinDLL("dwmapi")
+        dwm = ctypes.windll.dwmapi
         dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
         dwm.DwmSetWindowAttribute.restype = ctypes.c_long
-        succeeded = True
-        for attribute, value in ((20, 1), (33, 2), (38, 3 if enabled else 1)):
-            native = ctypes.c_int(value)
-            result = dwm.DwmSetWindowAttribute(int(window.winId()), attribute, ctypes.byref(native), ctypes.sizeof(native))
-            succeeded = succeeded and result == 0
-        return enabled and succeeded
+        dwm.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+        apply_acrylic_effect(window, enabled)
+        hwnd = int(window.winId())
+        backdrop = ctypes.c_int()
+        result = dwm.DwmGetWindowAttribute(hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
+        return enabled and result == 0 and backdrop.value == 3
     except OSError:
         return False
 

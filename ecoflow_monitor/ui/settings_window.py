@@ -12,6 +12,9 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import HOTKEY_ACTIONS, METRICS, HotkeyBinding, SettingsError
 from ecoflow_monitor.ui.common import action, clamp_window, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import RulesEditor, optional_percent
+from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
+from ecoflow_monitor.ui.reference_style import toggle_switch_style
+from ecoflow_monitor.ui.theme import SETTINGS_STYLE
 
 
 class SettingsWindow(QDialog):
@@ -21,6 +24,7 @@ class SettingsWindow(QDialog):
         self.setWindowTitle(t("settings"))
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         scaled_font(self, effective_scale(self, controller.settings.scale))
+        self.setStyleSheet(self.styleSheet() + SETTINGS_STYLE)
         self.resize(850, 780)
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -165,10 +169,23 @@ class SettingsWindow(QDialog):
     def _build_hotkeys(self):
         layout = self._tab(t("hotkeys_settings"))
         layout.addWidget(hint(t("hotkey_hint")))
-        self.hotkeys = QTableWidget(len(HOTKEY_ACTIONS), 3)
-        self.hotkeys.setHorizontalHeaderLabels([t("rule_enabled"), t("profile_label"), t("hotkeys_settings")])
-        self.hotkeys.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.hotkeys)
+        self.hotkey_rows = {}
+        for action_name in HOTKEY_ACTIONS:
+            field = QWidget()
+            row = QVBoxLayout(field)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(QLabel(t(action_name)))
+            controls = QHBoxLayout()
+            enabled = QCheckBox()
+            enabled.setObjectName(action_name + "HotkeyToggle")
+            enabled.setStyleSheet(toggle_switch_style(enabled.objectName()))
+            editor = HotkeyComboEditor("")
+            controls.addWidget(enabled)
+            controls.addWidget(editor, 1)
+            row.addLayout(controls)
+            layout.addWidget(field)
+            self.hotkey_rows[action_name] = (field, editor, enabled)
+        layout.addStretch()
 
     def load_draft(self):
         settings = self.controller.settings
@@ -216,27 +233,17 @@ class SettingsWindow(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, key)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if key in settings.mini_metrics else Qt.CheckState.Unchecked)
-        for row, binding in enumerate(settings.hotkeys):
-            enabled = QCheckBox()
+        for binding in settings.hotkeys:
+            field, editor, enabled = self.hotkey_rows[binding.action]
             enabled.setChecked(binding.enabled)
-            self.hotkeys.setCellWidget(row, 0, enabled)
-            label = QTableWidgetItem(t(binding.action))
-            label.setData(Qt.ItemDataRole.UserRole, binding.action)
-            label.setFlags(label.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.hotkeys.setItem(row, 1, label)
-            self.hotkeys.setItem(row, 2, QTableWidgetItem(binding.combo))
-            self.hotkeys.setRowHidden(row, not settings.msi_enabled and binding.action not in {"toggle_monitor", "toggle_mini"})
-        self.hotkeys.resizeColumnsToContents()
-        self.hotkeys.resizeRowsToContents()
+            editor.set_combo(binding.combo)
+            field.setVisible(settings.msi_enabled or binding.action in {"toggle_monitor", "toggle_mini"})
         self.profile_table.resizeRowsToContents()
 
     def _msi_toggled(self, enabled):
         self.tabs.setTabVisible(self.rules_tab_index, enabled)
-        for row in range(self.hotkeys.rowCount()):
-            item = self.hotkeys.item(row, 1)
-            if item is not None:
-                action_name = item.data(Qt.ItemDataRole.UserRole)
-                self.hotkeys.setRowHidden(row, not enabled and action_name not in {"toggle_monitor", "toggle_mini"})
+        for action_name, (field, editor, toggle) in self.hotkey_rows.items():
+            field.setVisible(enabled or action_name in {"toggle_monitor", "toggle_mini"})
 
     def _entered_credentials(self):
         access, secret = self.access.text().strip(), self.secret.text().strip()
@@ -274,7 +281,7 @@ class SettingsWindow(QDialog):
         current = self.controller.settings
         serial = self.devices.currentData() if self.devices.currentIndex() >= 0 and self.devices.currentText() == self.devices.itemText(self.devices.currentIndex()) else self.devices.currentText().strip()
         profiles = tuple(ProfileDefinition(row + 1, self.profile_table.item(row, 1).text(), float(self.profile_table.item(row, 2).text()) if self.profile_table.item(row, 2).text().strip() else None) for row in range(5))
-        hotkeys = tuple(HotkeyBinding(self.hotkeys.item(row, 1).data(Qt.ItemDataRole.UserRole), self.hotkeys.item(row, 2).text().strip().lower(), self.hotkeys.cellWidget(row, 0).isChecked()) for row in range(self.hotkeys.rowCount()))
+        hotkeys = tuple(HotkeyBinding(action_name, editor.combo(), enabled.isChecked()) for action_name, (field, editor, enabled) in self.hotkey_rows.items())
         msi_path = self.msi_path.text().strip()
         if msi_path:
             msi_path = local_executable(msi_path, allow_shortcut=False)

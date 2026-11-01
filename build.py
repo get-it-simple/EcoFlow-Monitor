@@ -72,7 +72,8 @@ def main() -> None:
         "--name", "EcoFlowMonitor", "--paths", str(ROOT),
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), "--version-file", str(version_resource()),
-        "--collect-data", "ecoflow_monitor.i18n", str(ROOT / "ecoflow_monitor" / "__main__.py"),
+        "--collect-data", "ecoflow_monitor.i18n", "--collect-data", "ecoflow_monitor.ui",
+        str(ROOT / "ecoflow_monitor" / "__main__.py"),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
     executable = ROOT / "dist" / "EcoFlowMonitor.exe"

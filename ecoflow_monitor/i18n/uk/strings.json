@@ -142,5 +142,6 @@
   "no_profile_policy": "Auto ввімкнено; відповідного правила немає.",
   "profile_observed": "Підтверджений профіль: {number}",
   "operation_failed": "Не вдалося завершити операцію.",
-  "application_files": "Застосунки"
+  "application_files": "Застосунки",
+  "press_shortcut": "Натисніть комбінацію клавіш"
 }

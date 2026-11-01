@@ -2,10 +2,10 @@ import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import duration, number
+from ecoflow_monitor.ui.common import duration, number, update_status
 
 
 class FlowWidget(QWidget):
@@ -17,9 +17,13 @@ class FlowWidget(QWidget):
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._advance)
         self.setObjectName("flow")
-        self.setMinimumSize(420, 560)
+        self.setMinimumSize(420, 407)
+        self.status = QLabel(self)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def refresh(self):
+        update_status(self.status, self.controller)
+        self._position_status()
         active = self.isVisible() and self.controller.settings.animations and self.controller.fresh
         telemetry = self.controller.telemetry
         active = active and telemetry is not None and (telemetry.input_w > 0 or telemetry.output_w > 0)
@@ -33,6 +37,15 @@ class FlowWidget(QWidget):
         self.phase = (self.phase + 0.017) % 1
         self.update()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_status()
+
+    def _position_status(self):
+        scale = min(self.width() / 640, self.height() / 620)
+        self.status.setGeometry(round(self.width() / 2 - 18 * scale), round((self.height() - 620 * scale) / 2 + 32 * scale), round(36 * scale), round(36 * scale))
+        self.status.setStyleSheet(self.status.styleSheet() + f"font-size: {max(1, round(22 * scale))}px;")
+
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh()
@@ -44,8 +57,8 @@ class FlowWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        scale = min(self.width() / 640, self.height() / 680)
-        painter.translate((self.width() - 640 * scale) / 2, (self.height() - 680 * scale) / 2)
+        scale = min(self.width() / 640, self.height() / 620)
+        painter.translate((self.width() - 640 * scale) / 2, (self.height() - 620 * scale) / 2)
         painter.scale(scale, scale)
         telemetry = self.controller.telemetry
         ports = dict(telemetry.ports) if telemetry else {}
@@ -66,9 +79,9 @@ class FlowWidget(QWidget):
         text((350, 36, 260, 60), number(telemetry.output_w if telemetry else None, "W"), 43, foreground, Qt.AlignmentFlag.AlignRight)
 
         def branch(x, incoming, value, label):
-            y = 146 if incoming else 554
+            y = 116 if incoming else 514
             path = QPainterPath(QPointF(x, y + (24 if incoming else -24)))
-            path.cubicTo(x, 219 if incoming else 480, 320, 198 if incoming else 502, 320, 224 if incoming else 458)
+            path.cubicTo(x, 189 if incoming else 440, 320, 168 if incoming else 462, 320, 194 if incoming else 428)
             painter.setPen(QPen(QColor("#3b484d"), 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
@@ -81,7 +94,7 @@ class FlowWidget(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(point, 4, 4)
             painter.setPen(QPen(QColor("#3c484d"), 1))
-            painter.setBrush(QColor("#252e32"))
+            painter.setBrush(QColor(0, 0, 0, 70))
             painter.drawEllipse(QPointF(x, y), 27, 27)
             text((x - 90, y - 14, 180, 29), label, 16, foreground)
             text((x - 95, y + 34, 190, 28), number(value, "W"), 21)
@@ -91,10 +104,10 @@ class FlowWidget(QWidget):
         branch(130, False, ports.get("ac_output"), "AC")
         branch(510, False, ports.get("dc_output"), "DC")
 
-        circle = QRectF(175, 225, 290, 290)
-        gradient = QLinearGradient(0, 225, 0, 515)
-        gradient.setColorAt(0, QColor("#293337"))
-        gradient.setColorAt(1, QColor("#101a1c"))
+        circle = QRectF(175, 195, 290, 290)
+        gradient = QLinearGradient(0, 195, 0, 485)
+        gradient.setColorAt(0, QColor(0, 0, 0, 70))
+        gradient.setColorAt(1, QColor(0, 0, 0, 100))
         painter.setPen(QPen(QColor("#34464a"), 1.5))
         painter.setBrush(gradient)
         painter.drawEllipse(circle)
@@ -103,7 +116,7 @@ class FlowWidget(QWidget):
             clipping = QPainterPath()
             clipping.addEllipse(circle)
             painter.setClipPath(clipping)
-            water_y = 515 - 290 * telemetry.soc_pct / 100
+            water_y = 485 - 290 * telemetry.soc_pct / 100
             wave = QPainterPath(QPointF(170, 520))
             wave.lineTo(170, water_y)
             for x in range(170, 472, 5):
@@ -111,23 +124,23 @@ class FlowWidget(QWidget):
                 wave.lineTo(x, water_y + math.sin(x / 52 + self.phase * 2 * math.pi) * amplitude)
             wave.lineTo(472, 520)
             wave.closeSubpath()
-            fill = QLinearGradient(0, 225, 0, 515)
+            fill = QLinearGradient(0, 195, 0, 485)
             fill.setColorAt(0, QColor("#22e49a" if fresh else "#3b7460"))
             fill.setColorAt(1, QColor("#00b975" if fresh else "#244f43"))
             painter.fillPath(wave, fill)
             painter.restore()
-        text((190, 300, 260, 80), number(telemetry.soc_pct if telemetry else None, "%"), 67)
-        text((185, 394, 270, 28), t("estimated_runtime"), 16)
-        text((185, 427, 270, 35), duration(self.controller.runtime), 23)
+        text((190, 270, 260, 80), number(telemetry.soc_pct if telemetry else None, "%"), 67)
+        text((185, 364, 270, 28), t("estimated_runtime"), 16)
+        text((185, 397, 270, 35), duration(self.controller.runtime), 23)
 
         for limit, color in ((self.controller.maximum, green), (self.controller.minimum, orange)):
             if limit.value is not None:
-                y = 515 - 290 * limit.value / 100
+                y = 485 - 290 * limit.value / 100
                 painter.setPen(QPen(QColor(color), 1, Qt.PenStyle.DotLine))
                 painter.drawLine(QPointF(175, y), QPointF(465, y))
         usb = [(key, value) for key, value in ports.items() if key.startswith(("usb_", "anderson_"))]
         if usb:
-            text((20, 610, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[:4]), 14)
+            text((20, 570, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[:4]), 14)
             if len(usb) > 4:
-                text((20, 640, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[4:]), 14)
+                text((20, 596, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[4:]), 14)
         painter.end()

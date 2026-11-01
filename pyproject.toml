@@ -28,3 +28,4 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "ecoflow_monitor.i18n" = ["*/strings.json"]
+"ecoflow_monitor.ui" = ["assets/*.svg"]

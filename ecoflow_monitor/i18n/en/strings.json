@@ -142,5 +142,6 @@
   "no_profile_policy": "Auto is enabled; no matching rule.",
   "profile_observed": "Observed profile: {number}",
   "operation_failed": "The operation could not be completed.",
-  "application_files": "Applications"
+  "application_files": "Applications",
+  "press_shortcut": "Press a shortcut"
 }

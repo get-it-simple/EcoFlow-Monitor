@@ -1,14 +1,14 @@
 # EcoFlow Monitor
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional MSI Afterburner saved
-profile switching and application/system automation rules. Version **0.2.0**.
+profile switching and application/system automation rules. Version **0.2.1**.
 
 The application uses only the official EcoFlow developer API. The model mapping
 follows the official documentation; real-device validation remains pending.
 
 ## Install
 
-Extract `EcoFlowMonitor-0.2.0-portable.zip` to a writable folder and run
+Extract `EcoFlowMonitor-0.2.1-portable.zip` to a writable folder and run
 `EcoFlowMonitor.exe`. No installer is required. Windows 10/11 x64 is supported;
 native acrylic requires supported Windows 11 settings.
 
@@ -24,6 +24,9 @@ are different from an EcoFlow mobile-app email/password.
   port loads, and approximate output-based runtime without input power.
 - Settings are available from the top-right button or tray menu. Closing the main
   window hides it; use the tray menu to exit.
+- Toggle **Windows acrylic background** in Appearance for a translucent main
+  background or a solid one. Save applies the change without restarting; Windows
+  may use a solid background when system effects are unavailable.
 - `Ctrl+Alt+NumPad5` shows/hides monitoring. Other shortcuts are configurable and
   initially unassigned. A shortcut owned by another app is reported as unavailable.
 - Enable the mini widget in Appearance and choose/reorder its metrics. Drag it to

@@ -1,10 +1,11 @@
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from ecoflow_monitor.i18n import t
+from ecoflow_monitor.domain import ConnectionState
 
 
 def duration(hours: float | None) -> str:
@@ -40,6 +41,21 @@ def status_tooltip(controller) -> str:
         stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
         last = t("last_update").format(timestamp=stamp)
     return t(controller.connection.value) + "\n" + last
+
+
+def status_color(controller) -> str:
+    if controller.fresh:
+        return "#50e9a2"
+    if controller.connection in {ConnectionState.UNCONFIGURED, ConnectionState.CONNECTING}:
+        return "#ffc16c"
+    return "#ff6060"
+
+
+def update_status(label: QLabel, controller) -> None:
+    label.setText("●")
+    label.setStyleSheet(f"color: {status_color(controller)}; background: transparent;")
+    label.setToolTip(status_tooltip(controller))
+    label.setAccessibleName(status_tooltip(controller))
 
 
 def hint(text: str) -> QLabel:
@@ -100,3 +116,48 @@ def scaled_font(window: QWidget, scale: float) -> None:
     font.setPixelSize(round(13 * scale))
     window.setFont(font)
     window.setStyleSheet(f"QWidget {{ font-size: {round(13 * scale)}px; }} QCheckBox::indicator {{ width: {round(17 * scale)}px; height: {round(17 * scale)}px; }}")
+
+
+class ScreenTracker(QObject):
+    def __init__(self, window, callback):
+        super().__init__(window)
+        self._window = window
+        self._handle = None
+        self._screen = None
+        self._stopped = False
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(callback)
+
+    def schedule(self, *args):
+        if not self._stopped:
+            self._timer.start()
+
+    def watch(self, *args):
+        handle = self._window.windowHandle()
+        if handle is not None and handle is not self._handle:
+            if self._handle is not None:
+                self._handle.screenChanged.disconnect(self.watch)
+            self._handle = handle
+            handle.screenChanged.connect(self.watch)
+            handle.destroyed.connect(self._forget_handle)
+        screen = self._window.screen()
+        if screen is self._screen:
+            return
+        if self._screen is not None:
+            self._screen.availableGeometryChanged.disconnect(self.schedule)
+            self._screen.geometryChanged.disconnect(self.schedule)
+            self._screen.logicalDotsPerInchChanged.disconnect(self.schedule)
+        self._screen = screen
+        if screen is not None:
+            screen.availableGeometryChanged.connect(self.schedule)
+            screen.geometryChanged.connect(self.schedule)
+            screen.logicalDotsPerInchChanged.connect(self.schedule)
+        self.schedule()
+
+    def _forget_handle(self):
+        self._handle = None
+
+    def stop(self):
+        self._stopped = True
+        self._timer.stop()

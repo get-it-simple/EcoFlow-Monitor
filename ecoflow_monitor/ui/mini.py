@@ -1,9 +1,11 @@
+import math
+
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QLabel, QVBoxLayout
 
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.i18n import get_current_language, t
-from ecoflow_monitor.ui.common import clamp_window, effective_scale, metric_text, scaled_font, status_tooltip
+from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, metric_text, scaled_font, update_status
 
 
 class MiniWidget(QFrame):
@@ -23,6 +25,7 @@ class MiniWidget(QFrame):
         self._layout.addWidget(self.body)
         self.labels = {}
         self._signature = None
+        self._screen_tracker = ScreenTracker(self, self.refresh)
         self._drag = None
         self._initial = True
         self._save_timer = QTimer(self)
@@ -37,6 +40,14 @@ class MiniWidget(QFrame):
         screen = self.screen() or QApplication.primaryScreen()
         area = screen.geometry() if settings.mini_above_taskbar else screen.availableGeometry()
         vertical = settings.mini_dock in {"left", "right"}
+        for _ in range(6):
+            count = max(1, int((area.height() - 40 * scale) / (74 * scale))) if vertical else max(1, int((area.width() - 16 * scale) / (152 * scale)))
+            count = min(count, len(settings.mini_metrics))
+            columns, rows = (math.ceil(len(settings.mini_metrics) / count), count) if vertical else (count, math.ceil(len(settings.mini_metrics) / count))
+            fit = min(1.0, area.width() / ((columns * 152 + 16) * scale), area.height() / ((rows * 74 + 40) * scale))
+            if fit >= 1:
+                break
+            scale *= fit * 0.98
         signature = (settings.mini_metrics, scale, settings.mini_transparency, settings.mini_dock, settings.mini_above_taskbar, get_current_language(), area.width(), area.height())
         if signature != self._signature:
             self._signature = signature
@@ -53,12 +64,13 @@ class MiniWidget(QFrame):
             self.grid.setSpacing(round(4 * scale))
             self.status.setMinimumHeight(round(19 * scale))
             self.status.setStyleSheet(f"font-size: {round(11 * scale)}px;")
-            count = max(1, int((area.height() - 70 * scale) / (74 * scale))) if vertical else max(1, int((area.width() - 20) / (154 * scale)))
             for index, key in enumerate(settings.mini_metrics):
                 tile = QFrame(self.body)
                 tile.setObjectName("mini_tile")
                 tile.setFixedSize(round(148 * scale), round(70 * scale))
                 box = QVBoxLayout(tile)
+                box.setContentsMargins(round(8 * scale), round(6 * scale), round(8 * scale), round(6 * scale))
+                box.setSpacing(round(4 * scale))
                 label = QLabel(t(key), tile)
                 label.setWordWrap(True)
                 label.setStyleSheet(f"font-size: {round(11 * scale)}px;")
@@ -70,14 +82,13 @@ class MiniWidget(QFrame):
                 row, column = (index % count, index // count) if vertical else (index // count, index % count)
                 self.grid.addWidget(tile, row, column)
             alpha = round(255 * (1 - settings.mini_transparency))
-            self.setStyleSheet(f"#mini {{ background: rgba(18, 28, 31, {alpha}); border: 1px solid #456057; border-radius: 10px; }} #mini_tile {{ background: rgba(30, 48, 47, {alpha}); border-radius: 6px; }} QLabel {{ color: #eef8f4; background: transparent; }} #mini_value {{ font-size: {round(20 * scale)}px; font-weight: 600; }}")
+            self.setStyleSheet(f"QWidget, QFrame {{ background: transparent; border: none; }} #mini_tile {{ background: rgba(0, 0, 0, {alpha}); border: 1px solid transparent; border-radius: {round(10 * scale)}px; }} QLabel {{ color: #f2f2f5; background: transparent; }} #mini_value {{ font-size: {round(20 * scale)}px; font-weight: 600; }}")
             self.adjustSize()
             self._dock()
         for key, label in self.labels.items():
             label.setText(metric_text(self.controller, key))
             label.setEnabled(self.controller.fresh)
-        self.status.setText(("● " if self.controller.fresh else "○ ") + t(self.controller.connection.value))
-        self.status.setToolTip(status_tooltip(self.controller))
+        update_status(self.status, self.controller)
         self.status.setMaximumWidth(max(round(148 * scale), self.body.sizeHint().width()))
         self.adjustSize()
         if self._initial:
@@ -133,9 +144,19 @@ class MiniWidget(QFrame):
         if not self._initial:
             self._save_timer.start()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_initial") and not self._initial:
+            self._dock()
+
     def showEvent(self, event):
         super().showEvent(event)
+        self._screen_tracker.watch()
         raise_without_focus(self)
+
+    def closeEvent(self, event):
+        self._screen_tracker.stop()
+        super().closeEvent(event)
 
     def event(self, event):
         if event.type() == QEvent.Type.DevicePixelRatioChange and hasattr(self, "_signature"):

@@ -12,7 +12,7 @@ from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.ui.common import app_icon
 from ecoflow_monitor.ui.mini import MiniWidget
 from ecoflow_monitor.ui.settings_window import SettingsWindow
-from ecoflow_monitor.ui.window import MonitorWindow, STYLE
+from ecoflow_monitor.ui.window import MonitorWindow
 
 
 class Application(QObject):
@@ -22,8 +22,6 @@ class Application(QObject):
         self.controller = controller if controller is not None else Controller(SettingsStore(settings_path))
         self.app = QApplication.instance()
         self.app.setQuitOnLastWindowClosed(False)
-        self.app.setStyle("Fusion")
-        self.app.setStyleSheet(STYLE)
         self.app.setWindowIcon(app_icon())
         self.window = MonitorWindow(self.controller, self.open_settings)
         self.window.setWindowIcon(app_icon())
@@ -33,10 +31,11 @@ class Application(QObject):
         self._dialog = None
         self._stopped = False
         self._hotkey_notice = ""
+        self._hotkey_signature = None
         self._server = None
         self._connections = set()
         self.tray = QSystemTrayIcon(app_icon(), self)
-        self.menu = QMenu(self.window)
+        self.menu = QMenu()
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
         self.controller.preferences_changed.connect(self.preferences)
@@ -85,7 +84,9 @@ class Application(QObject):
         self.menu.addSeparator()
         self.menu.addAction(t("exit"), self.app.quit)
         self.tray.setToolTip(t("app_title"))
-        if self.native:
+        signature = (self.controller.settings.hotkeys, self.controller.settings.msi_enabled)
+        if self.native and signature != self._hotkey_signature:
+            self._hotkey_signature = signature
             failures = self.hotkeys.configure(self.controller.settings.hotkeys, self.controller.settings.msi_enabled)
             if failures:
                 self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(t(action) for action in failures))
