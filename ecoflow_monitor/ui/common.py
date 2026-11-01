@@ -1,0 +1,102 @@
+from datetime import datetime
+
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+
+from ecoflow_monitor.i18n import t
+
+
+def duration(hours: float | None) -> str:
+    if hours is None:
+        return "—"
+    total = max(0, int(hours * 60))
+    return "≈ " + t("duration_hours").format(hours=total // 60, minutes=total % 60)
+
+
+def number(value: float | None, unit: str = "") -> str:
+    if value is None:
+        return "—"
+    return f"{value:.0f}" + (" " + unit if unit else "")
+
+
+def metric_text(controller, key: str) -> str:
+    snapshot = controller.telemetry
+    if key == "battery_level":
+        return number(snapshot.soc_pct if snapshot else None, "%")
+    if key == "input_power":
+        return number(snapshot.input_w if snapshot else None, "W")
+    if key == "output_power":
+        return number(snapshot.output_w if snapshot else None, "W")
+    if key == "estimated_runtime":
+        return duration(controller.runtime)
+    return number(controller.minimum.value if key == "minimum_discharge_level" else controller.maximum.value, "%")
+
+
+def status_tooltip(controller) -> str:
+    if controller.telemetry is None:
+        last = t("never_updated")
+    else:
+        stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        last = t("last_update").format(timestamp=stamp)
+    return t(controller.connection.value) + "\n" + last
+
+
+def hint(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setObjectName("hint")
+    return label
+
+
+def action(text: str, callback, parent=None) -> QPushButton:
+    button = QPushButton(text, parent)
+    button.clicked.connect(callback)
+    return button
+
+
+def app_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#75edb7"), 3))
+    painter.setBrush(QColor("#182d28"))
+    painter.drawRoundedRect(QRect(8, 15, 46, 36), 8, 8)
+    painter.fillRect(QRect(54, 27, 4, 12), QColor("#75edb7"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#14d888"))
+    painter.drawRoundedRect(QRect(14, 21, 28, 24), 3, 3)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def effective_scale(window: QWidget, desired: float) -> float:
+    return min(desired, max(0.5, 3 / max(1, window.devicePixelRatioF())))
+
+
+def clamp_window(window: QWidget, above_taskbar: bool = False) -> None:
+    screen = QApplication.screenAt(window.frameGeometry().center()) or QApplication.primaryScreen()
+    if screen is None:
+        return
+    area = screen.geometry() if above_taskbar else screen.availableGeometry()
+    size = window.size().boundedTo(area.size())
+    if size != window.size():
+        window.resize(size)
+    x = min(max(window.x(), area.left()), max(area.left(), area.right() - window.width() + 1))
+    y = min(max(window.y(), area.top()), max(area.top(), area.bottom() - window.height() + 1))
+    window.move(QPoint(x, y))
+
+
+class DragHeader(QLabel):
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.window().windowHandle() is not None:
+            self.window().windowHandle().startSystemMove()
+        super().mousePressEvent(event)
+
+
+def scaled_font(window: QWidget, scale: float) -> None:
+    font = QFont("Segoe UI")
+    font.setPixelSize(round(13 * scale))
+    window.setFont(font)
+    window.setStyleSheet(f"QWidget {{ font-size: {round(13 * scale)}px; }} QCheckBox::indicator {{ width: {round(17 * scale)}px; height: {round(17 * scale)}px; }}")

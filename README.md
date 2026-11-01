@@ -1,22 +1,96 @@
 # EcoFlow Monitor
 
-A Windows monitoring display and GPU profile automation project for EcoFlow power
-stations, initially targeting DELTA 3 Max and optional MSI Afterburner integration.
+Windows monitoring for **EcoFlow DELTA 3 Max**, with optional MSI Afterburner saved
+profile switching and application/system automation rules. Version **0.2.0**.
 
-**Status: foundation, version 0.1.0.** This repository currently provides project
-metadata, English/Ukrainian localization, and automated checks.
-Monitoring, windows, hotkeys, widgets, and automation are planned, not implemented.
+The application uses only the official EcoFlow developer API. The model mapping
+follows the official documentation; real-device validation remains pending.
 
 ## Install
 
-There is no runnable application, executable, or installer yet. The first working
-release is intended to be portable and will not require an installer.
+Extract `EcoFlowMonitor-0.2.0-portable.zip` to a writable folder and run
+`EcoFlowMonitor.exe`. No installer is required. Windows 10/11 x64 is supported;
+native acrylic requires supported Windows 11 settings.
 
-Official API compatibility and exact telemetry fields for DELTA 3 Max have not
-been verified with a real device.
+Open Settings, enter your official EcoFlow developer access/secret keys, and click
+**Load my devices**. Select your DELTA 3 Max and save. The list contains your bound
+devices; this version's telemetry mapping supports DELTA 3 Max only. Developer keys
+are different from an EcoFlow mobile-app email/password.
 
 <details>
-<summary>Set up the foundation from source</summary>
+<summary>Everyday controls</summary>
+
+- The battery diagram shows input/output power, battery charge, separate limits,
+  port loads, and approximate output-based runtime without input power.
+- Settings are available from the top-right button or tray menu. Closing the main
+  window hides it; use the tray menu to exit.
+- `Ctrl+Alt+NumPad5` shows/hides monitoring. Other shortcuts are configurable and
+  initially unassigned. A shortcut owned by another app is reported as unavailable.
+- Enable the mini widget in Appearance and choose/reorder its metrics. Drag it to
+  move it; docking and placement above the taskbar are optional.
+- A stale/offline status retains the last received readings. Hover over the status
+  for the last successful retrieval time. A retrieval time is not a device sample
+  timestamp.
+
+</details>
+
+<details>
+<summary>MSI Afterburner and automatic profiles</summary>
+
+MSI integration and Auto are initially off. Enable the integration in Settings to
+show its controls. Afterburner must already be running. The app selects existing
+slots 1–5; edit and save actual GPU settings in Afterburner itself.
+
+The initial slot descriptions are 100%, 95%, 90%, 85%, and 51%. They describe the
+user's presets and are not GPU tuning commands. Readable GPU configurations supply
+discovered values; manual descriptions are available otherwise.
+
+Manual selection turns Auto off. Application rules match any running configured
+executable and take priority over system rules; the first matching rule wins.
+Add `.exe` files or Windows shortcuts, then choose input/SOC conditions and a slot.
+An empty rule list leaves the current profile unchanged. Auto waits for fresh
+EcoFlow data and an available Afterburner instance.
+
+A **requested** profile is not a confirmed active profile. The selected slot can
+remain unknown when Afterburner does not expose enough comparable settings. A
+stopped instance, inaccessible data, or ambiguous GPU selection is shown explicitly.
+Command-line dispatch has an external process-exit race; no stopped instance is
+deliberately launched. Real GPU switching has not been exercised during automated
+verification.
+
+</details>
+
+<details>
+<summary>Settings, limits, and practical limitations</summary>
+
+Non-secret preferences use `settings.json` beside the portable executable or source
+tree, with `%LOCALAPPDATA%/EcoFlowMonitor` fallback if the directory is not writable.
+Groups cover EcoFlow device/manual values, Afterburner, ordered rules, hotkeys,
+appearance, mini-widget options, and language. Keys are stored in Windows Credential
+Manager and never in the JSON file. Edit the JSON only while the app is stopped.
+
+Settings dialogs use Save/Reset. A damaged settings file is preserved; explicit
+recovery Save creates `settings.json.bak` before replacing it. Rotating diagnostic
+logs are kept in the settings directory's `logs` folder without keys or raw payloads.
+
+The nominal model capacity is 2048 Wh; it can be overridden for local estimates.
+Runtime uses output power and charge above the discharge floor, only with measured
+zero input. It is approximate and is unavailable without the necessary fresh data.
+Manual limits are local fallback values and never change the station.
+
+Cloud monitoring requires internet, an authorized account-bound device, and valid
+developer keys. Polling starts at 30 seconds; data becomes stale after 90 seconds
+without a valid retrieval. API failure does not by itself prove internet loss.
+This app sends no EcoFlow control commands and uses no private integration methods.
+The current documented server is `api.ecoflow.com`.
+
+Transparency and native overlays depend on Windows capabilities; exclusive
+fullscreen coverage is not guaranteed. No rendering injection is used.
+
+</details>
+
+<details>
+<summary>Run from source</summary>
 
 Use Windows and Python 3.11 or newer. From the repository root:
 
@@ -24,65 +98,32 @@ Use Windows and Python 3.11 or newer. From the repository root:
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pip install --no-deps -e .
+.\.venv\Scripts\python.exe -m ecoflow_monitor
 ```
 
-If Python 3.11 is not installed, select a newer installed Python version explicitly.
-Environment activation is optional. There is no application launch command yet.
-
-</details>
-
-<details>
-<summary>Planned features and controls</summary>
-
-- Official EcoFlow API monitoring: input, output, battery level, charge/discharge
-  limits, and a clearly marked local runtime estimate.
-- An EcoFlow-inspired energy diagram with directional animated flows.
-- Optional MSI Afterburner saved-profile selection, manual controls, and ordered
-  automatic rules for running applications and the system.
-- Configurable global hotkeys, a selectable-metric mini widget, interface scaling,
-  and Windows transparency with a solid-background fallback.
-- Clear offline, unavailable, and stale-data indicators.
-
-MSI support and Auto are initially off. The app will only select existing profiles;
-GPU tuning stays in MSI Afterburner. Selecting a profile manually turns Auto off.
-
-</details>
-
-<details>
-<summary>Settings and practical limits</summary>
-
-Settings persistence is not implemented yet. The planned portable application uses
-human-editable `settings.json` beside the executable, with a per-user fallback
-when the directory is not writable. Preference groups cover EcoFlow connection
-metadata, manual limits, MSI profiles/rules, hotkeys, appearance, language, and
-mini-widget options. Secret values will be stored in Windows Credential Manager.
-
-Cloud monitoring requires internet and official developer credentials. The app
-will not use unofficial EcoFlow integration methods. Manually entered limits are
-display/estimation values and do not change the station. Native acrylic depends
-on Windows support and system settings.
+If Python 3.11 is not installed, choose a newer installed version explicitly.
+`--settings <path>` selects another non-secret preferences file.
 
 </details>
 
 <details>
 <summary>Languages and translations</summary>
 
-English and Ukrainian catalogs are included. The localization module already
-supports language discovery, system locale selection, and English fallback.
+English and Ukrainian are included. The system language is selected by default;
+language changes take effect when Settings is saved.
 
-To add a language, create `ecoflow_monitor/i18n/<Windows-locale>/strings.json`,
-using the English catalog's keys and translating its values. Save it as UTF-8.
-No language registry change is needed. Missing keys fall back to English.
-Preserve formatting placeholders such as `{timestamp}` when translating.
+To add a language, create `ecoflow_monitor/i18n/<Windows-locale>/strings.json` using
+the English catalog's keys. Translate values, preserve placeholders such as
+`{timestamp}`, and save UTF-8. Missing keys use English. No registry change is
+needed; new catalogs are discovered and packaged automatically.
 
 </details>
 
 <details>
 <summary>Third-party packages</summary>
 
-PySide6 is the foundation's declared GUI dependency. The localization module itself
-uses the Python standard library. Development checks use pytest and pytest-xdist;
-package metadata uses setuptools. Network, credential-store, process-inspection,
-and executable-build dependencies will be added when those features are built.
+Runtime: PySide6, httpx, and psutil. Development checks use pytest/pytest-xdist;
+portable builds use PyInstaller. Credentials, native hotkeys, and Windows effects
+use Windows APIs. This independent project is not affiliated with EcoFlow or MSI.
 
 </details>

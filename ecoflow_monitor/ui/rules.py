@@ -1,0 +1,172 @@
+import uuid
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+
+from ecoflow_monitor.adapters.executables import local_executable
+from ecoflow_monitor.domain import AutomationRule, normalized_executable
+from ecoflow_monitor.i18n import t
+from ecoflow_monitor.ui.common import action
+
+
+def optional_percent() -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    spin.setRange(-1, 100)
+    spin.setSpecialValueText(t("unset"))
+    spin.setDecimals(0)
+    spin.setValue(-1)
+    return spin
+
+
+class RuleTable(QTableWidget):
+    def __init__(self, editor):
+        super().__init__(0, 6 if editor.application else 5)
+        self.editor = editor
+        self.setAcceptDrops(editor.application)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+    def dragEnterEvent(self, event):
+        if self.editor.application and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self.editor.application and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if self.editor.application and event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                self.editor.add_application(url.toLocalFile())
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class RulesEditor(QWidget):
+    def __init__(self, application: bool, parent=None):
+        super().__init__(parent)
+        self.application = application
+        layout = QVBoxLayout(self)
+        self.table = RuleTable(self)
+        headings = [t("rule_enabled")]
+        if application:
+            headings.append(t("rule_application"))
+        headings.extend(t(key) for key in ("rule_input", "rule_min", "rule_max", "rule_profile"))
+        self.table.setHorizontalHeaderLabels(headings)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        if application:
+            self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.setMinimumHeight(180)
+        layout.addWidget(self.table)
+        buttons = QHBoxLayout()
+        if application:
+            buttons.addWidget(action(t("add_application"), self.browse))
+        buttons.addWidget(action(t("add_rule"), self.add_rule))
+        buttons.addWidget(action(t("remove"), self.remove))
+        up = action("↑", lambda: self.move(-1))
+        down = action("↓", lambda: self.move(1))
+        up.setToolTip(t("move_up"))
+        down.setToolTip(t("move_down"))
+        buttons.addWidget(up)
+        buttons.addWidget(down)
+        layout.addLayout(buttons)
+
+    def set_rules(self, rules: tuple[AutomationRule, ...]) -> None:
+        self.table.setRowCount(0)
+        for rule in rules:
+            self.append(rule)
+
+    def append(self, rule: AutomationRule) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        enabled = QCheckBox()
+        enabled.setChecked(rule.enabled)
+        enabled.setProperty("rule_id", rule.id)
+        self.table.setCellWidget(row, 0, enabled)
+        column = 1
+        if self.application:
+            item = QTableWidgetItem(rule.executable)
+            item.setToolTip(rule.executable)
+            self.table.setItem(row, column, item)
+            column += 1
+        condition = QComboBox()
+        for value in ("any", "present", "absent"):
+            condition.addItem(t("rule_" + value), value)
+        condition.setCurrentIndex(max(0, condition.findData(rule.input_condition)))
+        self.table.setCellWidget(row, column, condition)
+        for offset, value in ((1, rule.min_soc), (2, rule.max_soc)):
+            spin = optional_percent()
+            spin.setValue(-1 if value is None else value)
+            self.table.setCellWidget(row, column + offset, spin)
+        profile = QComboBox()
+        for slot in range(1, 6):
+            profile.addItem(str(slot), slot)
+        profile.setCurrentIndex(rule.slot - 1)
+        self.table.setCellWidget(row, column + 3, profile)
+        self.table.selectRow(row)
+        self.table.resizeRowsToContents()
+
+    def rules(self, validate_paths: bool = False) -> tuple[AutomationRule, ...]:
+        result = []
+        for row in range(self.table.rowCount()):
+            enabled = self.table.cellWidget(row, 0)
+            column = 2 if self.application else 1
+            path = self.table.item(row, 1).text().strip() if self.application else ""
+            if path and validate_paths:
+                path = local_executable(path)
+            minimum = self.table.cellWidget(row, column + 1).value()
+            maximum = self.table.cellWidget(row, column + 2).value()
+            rule = AutomationRule(
+                enabled.property("rule_id"), self.table.cellWidget(row, column + 3).currentData(),
+                enabled.isChecked(), path, self.table.cellWidget(row, column).currentData(),
+                minimum if minimum >= 0 else None, maximum if maximum >= 0 else None,
+            )
+            if validate_paths:
+                rule.validate()
+            result.append(rule)
+        return tuple(result)
+
+    def add_application(self, path: str) -> None:
+        try:
+            path = local_executable(path)
+            for row, rule in enumerate(self.rules()):
+                if normalized_executable(rule.executable) == normalized_executable(path):
+                    self.table.selectRow(row)
+                    return
+            self.append(AutomationRule(uuid.uuid4().hex, 1, executable=path))
+        except (OSError, ValueError):
+            QMessageBox.warning(self, t("error_title"), t("invalid_executable"))
+
+    def browse(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, t("add_application"), "", t("application_files") + " (*.exe *.lnk)")
+        if path:
+            self.add_application(path)
+
+    def add_rule(self) -> None:
+        path = ""
+        if self.application:
+            row = self.table.currentRow()
+            if row < 0:
+                self.browse()
+                return
+            path = self.table.item(row, 1).text()
+        self.append(AutomationRule(uuid.uuid4().hex, 1, executable=path))
+
+    def remove(self) -> None:
+        row = self.table.currentRow()
+        if row >= 0:
+            self.table.removeRow(row)
+
+    def move(self, delta: int) -> None:
+        row = self.table.currentRow()
+        target = row + delta
+        if 0 <= row < self.table.rowCount() and 0 <= target < self.table.rowCount():
+            rules = list(self.rules())
+            rules[row], rules[target] = rules[target], rules[row]
+            self.set_rules(tuple(rules))
+            self.table.selectRow(target)

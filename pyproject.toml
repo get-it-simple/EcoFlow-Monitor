@@ -5,15 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ecoflow-monitoring-win-support"
 dynamic = ["version", "dependencies"]
-description = "Foundation for an EcoFlow monitoring and GPU profile automation application for Windows"
+description = "DELTA 3 Max monitoring and MSI Afterburner profile automation for Windows"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Topic :: System :: Monitoring",
 ]
+
+[project.gui-scripts]
+ecoflow-monitor = "ecoflow_monitor.__main__:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "ecoflow_monitor.__version__"}

@@ -1,0 +1,151 @@
+import hashlib
+from pathlib import Path
+
+from PySide6.QtCore import QObject
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+
+from ecoflow_monitor.adapters.hotkeys import HotkeyManager
+from ecoflow_monitor.controller import Controller
+from ecoflow_monitor.i18n import t
+from ecoflow_monitor.settings import SettingsStore
+from ecoflow_monitor.ui.common import app_icon
+from ecoflow_monitor.ui.mini import MiniWidget
+from ecoflow_monitor.ui.settings_window import SettingsWindow
+from ecoflow_monitor.ui.window import MonitorWindow, STYLE
+
+
+class Application(QObject):
+    def __init__(self, settings_path: Path, native: bool = True, controller: Controller | None = None):
+        super().__init__()
+        self.native = native
+        self.controller = controller if controller is not None else Controller(SettingsStore(settings_path))
+        self.app = QApplication.instance()
+        self.app.setQuitOnLastWindowClosed(False)
+        self.app.setStyle("Fusion")
+        self.app.setStyleSheet(STYLE)
+        self.app.setWindowIcon(app_icon())
+        self.window = MonitorWindow(self.controller, self.open_settings)
+        self.window.setWindowIcon(app_icon())
+        self.mini = MiniWidget(self.controller)
+        self.hotkeys = HotkeyManager(self)
+        self.hotkeys.triggered.connect(self.hotkey)
+        self._dialog = None
+        self._stopped = False
+        self._hotkey_notice = ""
+        self._server = None
+        self._connections = set()
+        self.tray = QSystemTrayIcon(app_icon(), self)
+        self.menu = QMenu(self.window)
+        self.tray.setContextMenu(self.menu)
+        self.tray.activated.connect(self._tray_activated)
+        self.controller.preferences_changed.connect(self.preferences)
+        self.app.aboutToQuit.connect(self.stop)
+        self.preferences()
+
+    def ensure_single_instance(self, path: Path) -> bool:
+        name = "EcoFlowMonitor-" + hashlib.sha256(str(path.resolve()).casefold().encode()).hexdigest()[:24]
+        server = QLocalServer(self)
+        server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+        if server.listen(name):
+            self._server = server
+            server.newConnection.connect(self._new_connection)
+            return True
+        client = QLocalSocket()
+        client.connectToServer(name)
+        if client.waitForConnected(500):
+            client.write(b"show")
+            if client.bytesToWrite() > 0:
+                client.waitForBytesWritten(500)
+            client.disconnectFromServer()
+        else:
+            QMessageBox.warning(None, t("error_title"), t("operation_failed"))
+        return False
+
+    def _new_connection(self):
+        while self._server.hasPendingConnections():
+            socket = self._server.nextPendingConnection()
+            self._connections.add(socket)
+            def receive(connection=socket):
+                if bytes(connection.readAll()) == b"show":
+                    self.window.request_visibility(True)
+            def release(connection=socket):
+                self._connections.discard(connection)
+                connection.deleteLater()
+            socket.readyRead.connect(receive)
+            socket.disconnected.connect(release)
+            if socket.bytesAvailable():
+                receive()
+
+    def preferences(self):
+        self.menu.clear()
+        self.menu.addAction(t("show_monitor"), lambda: self.window.request_visibility(True))
+        self.menu.addAction(t("toggle_mini"), lambda: self.hotkey("toggle_mini"))
+        self.menu.addAction(t("settings"), self.open_settings)
+        self.menu.addSeparator()
+        self.menu.addAction(t("exit"), self.app.quit)
+        self.tray.setToolTip(t("app_title"))
+        if self.native:
+            failures = self.hotkeys.configure(self.controller.settings.hotkeys, self.controller.settings.msi_enabled)
+            if failures:
+                self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(t(action) for action in failures))
+                self.controller.notice = self._hotkey_notice
+                self.controller.changed.emit()
+            elif self._hotkey_notice and self.controller.notice == self._hotkey_notice:
+                self.controller.notice = ""
+                self._hotkey_notice = ""
+                self.controller.changed.emit()
+        self.mini.refresh()
+
+    def start(self):
+        if self.native and QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.show()
+        elif not self.controller.settings.monitor_visible and not self.controller.settings.mini_enabled:
+            self.controller.update_preferences(monitor_visible=True)
+            self.window._desired_visible = True
+        self.window.startup()
+        self.mini.refresh()
+        if self.native:
+            self.controller.start()
+
+    def hotkey(self, action: str):
+        if action == "toggle_monitor":
+            self.window.request_visibility(not self.window._desired_visible)
+        elif action == "toggle_mini":
+            self.controller.update_preferences(mini_enabled=not self.controller.settings.mini_enabled)
+        elif action == "toggle_auto":
+            self.controller.set_auto(not self.controller.settings.auto_enabled)
+        elif action.startswith("profile_"):
+            self.controller.request_profile(int(action.rsplit("_", 1)[1]))
+
+    def _tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.hotkey("toggle_monitor")
+
+    def open_settings(self):
+        if self._dialog is not None:
+            self._dialog.raise_()
+            self._dialog.activateWindow()
+            return
+        dialog = SettingsWindow(self.controller, self.window)
+        self._dialog = dialog
+        dialog.exec()
+        self._dialog = None
+        dialog.deleteLater()
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        self.hotkeys.stop()
+        self.tray.hide()
+        self.window._save_geometry()
+        self.mini._save_position()
+        self.window._quitting = True
+        self.window._geometry_timer.stop()
+        self.mini._save_timer.stop()
+        self.controller.stop()
+        if self._server is not None:
+            self._server.close()
+        self.window.close()
+        self.mini.close()

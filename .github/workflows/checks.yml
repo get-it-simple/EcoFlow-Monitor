@@ -1,4 +1,4 @@
-name: Foundation checks
+name: Application checks
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
           }
           $changed = 'true'
           if ($baseRevision) {
-            git diff --quiet $baseRevision HEAD -- requirements.txt requirements-dev.txt pyproject.toml
+            git diff --quiet $baseRevision HEAD -- requirements.txt requirements-dev.txt requirements-build.txt pyproject.toml
             if ($LASTEXITCODE -eq 0) { $changed = 'false' }
             elseif ($LASTEXITCODE -ne 1) { throw 'Dependency comparison failed' }
           }
@@ -44,7 +44,7 @@ jobs:
         if: steps.dependencies.outputs.changed == 'true'
         run: |
           python -m pip install --disable-pip-version-check pip-audit
-          python -m pip_audit -r requirements-dev.txt
+          python -m pip_audit -r requirements-dev.txt -r requirements-build.txt
       - name: No dependency changes
         if: steps.dependencies.outputs.changed != 'true'
         run: Write-Output 'Dependency files are unchanged in this change.'
@@ -67,6 +67,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            requirements-build.txt
             pyproject.toml
       - name: Validate the single version source and exact release tag
         shell: pwsh
@@ -78,13 +79,19 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne $version) {
             throw 'Tag must match the application version exactly, without a v prefix'
           }
-      - name: Install foundation dependencies
-        run: python -m pip install -r requirements-dev.txt
+      - name: Install application and check dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-build.txt
       - name: Run the full suite
         run: python -m pytest -q
       - name: Build the Python wheel
         run: python -m pip wheel --no-deps --wheel-dir dist/wheels .
       - name: Verify packaged metadata and all language catalogs
         run: python -m scripts.check_package dist/wheels
+      - name: Build portable executable
+        if: matrix.python == '3.13'
+        run: python build.py
+      - name: Smoke the actual executable
+        if: matrix.python == '3.13'
+        run: python -m scripts.smoke_executable dist/EcoFlowMonitor.exe
       - name: Check whitespace
         run: git diff --check
