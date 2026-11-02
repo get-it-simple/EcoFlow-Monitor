@@ -59,6 +59,7 @@ class Controller(QObject):
     changed = Signal()
     preferences_changed = Signal()
     devices_ready = Signal(object)
+    elevation_needed = Signal(str)
 
     def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic) -> None:
         super().__init__()
@@ -182,6 +183,8 @@ class Controller(QObject):
         previous = self.settings
         self.settings = settings
         i18n.setup(settings.language)
+        if hasattr(self.integration_adapter, "retain_sessions"):
+            self.integration_adapter.retain_sessions(settings.integrations)
         self._generation += 1
         self._discovery_pending = None
         if (previous.serial, previous.credential_ref) != (settings.serial, settings.credential_ref):
@@ -214,6 +217,8 @@ class Controller(QObject):
         except SettingsError as error:
             self.notice = str(error)
         self.settings = settings
+        if "integrations" in changes and hasattr(self.integration_adapter, "retain_sessions"):
+            self.integration_adapter.retain_sessions(settings.integrations)
         if set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
             self.preferences_changed.emit()
         self.changed.emit()
@@ -289,6 +294,9 @@ class Controller(QObject):
 
     def _completed(self, kind, generation, result, error) -> None:
         self._active.pop(kind, None)
+        if kind.startswith("elevate:"):
+            if hasattr(self.integration_adapter, "retain_sessions"):
+                self.integration_adapter.retain_sessions(() if self._stopped else self.settings.integrations)
         if self._stopped:
             return
         if generation == self._generation:
@@ -316,6 +324,11 @@ class Controller(QObject):
             elif kind.startswith("scan:"):
                 integration_id = kind.split(":", 1)[1]
                 self.integration_states[integration_id].observation = result if error is None else IntegrationObservation("integration_error")
+            elif kind.startswith("elevate:"):
+                self.notice = "integration_helper_failed" if error else "integration_helper_ready"
+            elif kind.startswith("elevation_check:"):
+                if result is True and error is None:
+                    self.elevation_needed.emit(kind.split(":", 1)[1])
             elif kind.startswith("dispatch:"):
                 integration_id = kind.split(":", 1)[1]
                 state = self.integration_states[integration_id]
@@ -329,6 +342,8 @@ class Controller(QObject):
                     state.gate.dispatched(profile_id, self.clock(), outcome.success)
                 if not outcome.success:
                     self.notice = "profile_failed"
+                    if outcome.winerror in (5, 740):
+                        self.elevation_needed.emit(integration_id)
                 elif self.notice in {"profile_failed", "profile_unavailable"}:
                     self.notice = ""
                 state.next_scan = 0
@@ -349,4 +364,8 @@ class Controller(QObject):
         self._generation += 1
         self._timer.stop()
         self._pool.clear()
+        if hasattr(self.integration_adapter, "close"):
+            self.integration_adapter.close()
         self._pool.waitForDone(22000)
+        if hasattr(self.integration_adapter, "close"):
+            self.integration_adapter.close()

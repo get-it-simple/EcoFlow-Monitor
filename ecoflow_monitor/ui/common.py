@@ -2,10 +2,22 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.domain import ConnectionState
+
+
+def elevation_prompt(parent: QWidget, name: str) -> QMessageBox:
+    prompt = QMessageBox(parent)
+    prompt.setWindowTitle(t("integration_helper_title"))
+    prompt.setText(t("integration_helper_prompt").format(name=name))
+    prompt.setIcon(QMessageBox.Icon.Question)
+    prompt.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    prompt.setDefaultButton(QMessageBox.StandardButton.No)
+    prompt.setWindowModality(Qt.WindowModality.ApplicationModal)
+    prompt.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    return prompt
 
 
 def duration(hours: float | None) -> str:

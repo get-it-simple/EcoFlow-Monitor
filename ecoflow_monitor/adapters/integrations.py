@@ -59,6 +59,31 @@ def running_processes() -> ProcessSnapshot:
 
 
 class IntegrationAdapter:
+    def __init__(self):
+        self.sessions = {}
+
+    def start_elevated(self, module):
+        from ecoflow_monitor.adapters.elevation import ElevatedSession
+        observation = self.inspect(module)
+        if not observation.ready:
+            raise ValueError(observation.availability)
+        session = ElevatedSession(module, observation.executable)
+        session.start()
+        previous = self.sessions.pop(module.id, None)
+        if previous:
+            previous.close()
+        self.sessions[module.id] = session
+
+    def retain_sessions(self, modules):
+        definitions = {module.id: module for module in modules if module.enabled}
+        for identity, session in tuple(self.sessions.items()):
+            if identity not in definitions or not session.matches(definitions[identity]):
+                self.sessions.pop(identity, None)
+                session.close()
+
+    def close(self):
+        self.retain_sessions(())
+
     def inspect(self, module: IntegrationDefinition) -> IntegrationObservation:
         if not module.enabled:
             return IntegrationObservation("integration_disabled")
@@ -100,6 +125,16 @@ class IntegrationAdapter:
                     args = module.expand(template, observation.executable)
                     if not current():
                         return TransitionResult(False, completed, phase, index, "integration_cancelled")
+                    session = self.sessions.get(module.id)
+                    if session is not None:
+                        if not session.matches(module):
+                            return TransitionResult(False, completed, phase, index, "integration_helper_failed")
+                        response = session.run(args)
+                        if response["error"]:
+                            return TransitionResult(False, completed, phase, index, response["error"],
+                                                    exit_code=response["exit_code"], winerror=response["winerror"])
+                        completed += 1
+                        continue
                     result = subprocess.run(args, shell=False, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW,
                                             cwd=str(Path(observation.executable).parent), check=False,
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

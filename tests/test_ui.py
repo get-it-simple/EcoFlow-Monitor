@@ -45,6 +45,62 @@ def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
     assert "No successful update" in status_tooltip(runtime.controller)
 
 
+def test_helper_requires_consent_and_does_not_repeat_on_auto_toggle(runtime, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from types import SimpleNamespace
+    module = replace(runtime.controller.settings.integrations[0], enabled=True)
+    runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(module,)))
+    submitted = []
+    prompts = []
+    monkeypatch.setattr(Controller, "_submit", lambda self, *args: submitted.append(args))
+    def decline(*args):
+        prompts.append(args)
+        return QMessageBox.StandardButton.No
+    monkeypatch.setattr("ecoflow_monitor.application.elevation_prompt",
+                        lambda *args: SimpleNamespace(exec=decline, deleteLater=lambda: None))
+    runtime._offer_elevation(module.id, automatic=True)
+    assert len(prompts) == 1 and not submitted
+    runtime.controller.set_auto(module.id, True)
+    runtime._offer_elevation(module.id, automatic=True)
+    assert len(prompts) == 1 and not submitted
+    monkeypatch.setattr("ecoflow_monitor.application.elevation_prompt",
+                        lambda *args: SimpleNamespace(exec=lambda: QMessageBox.StandardButton.Yes, deleteLater=lambda: None))
+    runtime._offer_elevation(module.id)
+    assert [item[0] for item in submitted] == ["elevate:" + module.id]
+
+
+@pytest.mark.parametrize("settings_open", [False, True])
+def test_helper_consent_stays_above_monitor_and_active_settings(runtime, qapp, monkeypatch, settings_open):
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtWidgets import QMessageBox
+    module = replace(runtime.controller.settings.integrations[0], enabled=True)
+    runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(module,)))
+    submitted = []
+    monkeypatch.setattr(Controller, "_submit", lambda self, *args: submitted.append(args))
+    runtime.window.startup()
+    settings = SettingsWindow(runtime.controller, runtime.window) if settings_open else None
+    if settings:
+        settings.setWindowModality(Qt.WindowModality.ApplicationModal)
+        settings.show()
+        qapp.processEvents()
+    seen = []
+    def decline():
+        prompt = qapp.activeModalWidget()
+        if isinstance(prompt, QMessageBox):
+            seen.append((prompt.parentWidget(), bool(prompt.windowFlags() & Qt.WindowType.WindowStaysOnTopHint),
+                         prompt.windowModality(), prompt.defaultButton() == prompt.button(QMessageBox.StandardButton.No)))
+            QTest.mouseClick(prompt.button(QMessageBox.StandardButton.No), Qt.MouseButton.LeftButton)
+    QTimer.singleShot(0, decline)
+    try:
+        runtime._offer_elevation(module.id)
+        assert seen == [(settings or runtime.window, True, Qt.WindowModality.ApplicationModal, True)]
+        assert not submitted
+    finally:
+        if settings:
+            settings.close()
+            settings.deleteLater()
+
+
 def test_settings_are_drafts_and_reset_does_not_apply(runtime, qapp):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     dialog.scale.setValue(150)

@@ -50,9 +50,12 @@ Laptop profiles may instead differ by Core Offset, such as 0 and −50 MHz.
 Saved slots use `MSIAfterburner.exe -profile1` through `-profile5`. The integration
 checks only the executable and running process, then sends the selected command.
 It does not inspect GPU identity, synchronization, clocks or internal profile files.
-If Windows requires elevation, exit EcoFlow Monitor from the tray and explicitly
-run it as administrator. The application never elevates automatically. Windows
-errors and command exit codes are shown when dispatch fails.
+If an integration requires administrator rights, approve the separate helper
+and Windows UAC prompt. EcoFlow Monitor keeps running with normal access.
+The helper accepts only that integration's configured commands and stops when
+the integration is disabled or edited, or the application exits. Retry a declined
+or disconnected helper through the tray menu. Approve only trusted integrations
+and executables. Windows errors and command exit codes are shown when dispatch fails.
 Global Afterburner hotkeys are not used by this integration.
 
 Manual selection turns Auto off. Application rules match any running configured

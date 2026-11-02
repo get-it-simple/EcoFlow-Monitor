@@ -17,6 +17,9 @@ from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfi
 
 
 def main() -> int:
+    if "--elevated-helper" in sys.argv[1:]:
+        from ecoflow_monitor.adapters.elevation import helper_main
+        return helper_main(sys.argv[1:])
     parser = argparse.ArgumentParser(description="DELTA 3 Max monitoring and saved GPU profile automation")
     parser.add_argument("--settings", type=Path)
     parser.add_argument("--version", action="version", version=__version__)

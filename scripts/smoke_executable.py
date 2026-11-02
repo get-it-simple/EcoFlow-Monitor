@@ -23,6 +23,9 @@ def main() -> None:
     args = parser.parse_args()
     executable = args.executable.resolve(strict=True)
     verify_version(executable)
+    helper = subprocess.run([str(executable), "--elevated-helper"], timeout=90, check=False)
+    if helper.returncode != 2:
+        raise RuntimeError("Executable helper entry point did not reject invalid arguments")
     with tempfile.TemporaryDirectory(prefix="ecoflow-exe-check-") as directory:
         report = Path(directory) / "smoke.json"
         result = subprocess.run([str(executable), "--smoke-test", "--smoke-output", str(report)], cwd=directory, timeout=90, check=False)
