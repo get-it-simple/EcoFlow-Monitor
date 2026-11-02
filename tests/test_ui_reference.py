@@ -14,7 +14,7 @@ import pytest
 from ecoflow_monitor.adapters import hotkeys
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.domain import ConnectionState, Telemetry
-from ecoflow_monitor.settings import HotkeyBinding, SettingsStore
+from ecoflow_monitor.settings import HotkeyBinding
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
 from ecoflow_monitor.ui.settings_window import SettingsWindow
 from ecoflow_monitor.ui.window import MonitorWindow
@@ -35,7 +35,7 @@ def runtime(tmp_path, qapp):
 def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, language, msi):
     controller = runtime.controller
     window = runtime.window
-    controller.apply_settings(replace(controller.settings, language=language, msi_enabled=msi))
+    controller.apply_settings(replace(controller.settings, language=language, integrations=(replace(controller.settings.integrations[0], enabled=msi),)))
     window.show()
     for scale in (0.5, 1, 2, 3, 0.5, 3, 1):
         controller.apply_settings(replace(controller.settings, scale=scale))
@@ -111,16 +111,17 @@ def test_hotkey_editor_keeps_reference_capture_selection_and_clear(qapp):
 def test_hotkey_rows_are_drafts_and_follow_msi_visibility(runtime):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
-        field, editor, enabled = dialog.hotkey_rows["profile_3"]
+        field, editor, enabled = dialog.hotkey_rows["profile:afterburner:profile_3"]
         assert field.isHidden()
-        dialog.msi_enabled.setChecked(True)
+        dialog.integrations_editor.enabled.setChecked(True)
+        field, editor, enabled = dialog.hotkey_rows["profile:afterburner:profile_3"]
         assert not field.isHidden()
         editor.set_combo("ctrl+shift+num3")
         enabled.setChecked(True)
-        assert not runtime.controller.settings.hotkeys[5].enabled
+        assert not any(binding.enabled for binding in runtime.controller.settings.hotkeys if binding.action == "profile:afterburner:profile_3")
         dialog.save()
-        binding = next(item for item in runtime.controller.store.load().hotkeys if item.action == "profile_3")
-        assert binding == HotkeyBinding("profile_3", "ctrl+shift+num3", True)
+        binding = next(item for item in runtime.controller.store.load().hotkeys if item.action == "profile:afterburner:profile_3")
+        assert binding == HotkeyBinding("profile:afterburner:profile_3", "ctrl+shift+num3", True)
     finally:
         dialog.deleteLater()
 
@@ -150,7 +151,7 @@ def test_manager_replaces_bindings_delivers_both_event_types_and_reports_conflic
     manager.triggered.connect(received.append)
     bindings = (HotkeyBinding("toggle_monitor", "ctrl+alt+num5", True), HotkeyBinding("profile_1", "ctrl+num1", True), HotkeyBinding("toggle_mini", "ctrl+f1", True))
     try:
-        assert manager.configure(bindings, False) == ("toggle_mini",)
+        assert manager.configure(bindings, {"toggle_monitor", "toggle_mini"}) == ("toggle_mini",)
         assert len(registered) == 1
         assert next(iter(registered.values())) == (3 | 0x4000, 0x65)
         message = wintypes.MSG()
@@ -160,7 +161,7 @@ def test_manager_replaces_bindings_delivers_both_event_types_and_reports_conflic
             assert manager.nativeEventFilter(event_type, ctypes.addressof(message)) == (True, 0)
         assert received == ["toggle_monitor", "toggle_monitor"]
         old_ids = set(registered)
-        assert manager.configure(bindings[:2], True) == ()
+        assert manager.configure(bindings[:2], {binding.action for binding in bindings[:2]}) == ()
         assert len(registered) == 2 and not old_ids.intersection(registered)
     finally:
         manager.stop()
@@ -174,7 +175,7 @@ def test_geometry_preference_updates_do_not_reload_global_hotkeys(runtime, monke
     runtime.preferences()
     runtime.controller.update_preferences(monitor_geometry=(10, 10, 600, 700))
     assert len(calls) == 1
-    runtime.controller.update_preferences(msi_enabled=True)
+    runtime.controller.update_preferences(integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),))
     assert len(calls) == 2
 
 
@@ -190,7 +191,7 @@ def test_screen_and_dpi_changes_restore_desired_scale_without_clipping(runtime, 
 
     window = ScreenConstrainedMonitor(runtime.controller, lambda: None)
     try:
-        runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3, msi_enabled=True))
+        runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
         qapp.processEvents()
         assert window.width() <= 640 and window.height() <= 480
         assert window._scale <= 1.5

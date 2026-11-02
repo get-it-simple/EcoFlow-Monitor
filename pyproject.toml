@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ecoflow-monitoring-win-support"
 dynamic = ["version", "dependencies"]
-description = "DELTA 3 Max monitoring and MSI Afterburner profile automation for Windows"
+description = "DELTA 3 Max monitoring and modular CLI profile automation for Windows"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
@@ -29,3 +29,4 @@ namespaces = false
 [tool.setuptools.package-data]
 "ecoflow_monitor.i18n" = ["*/strings.json"]
 "ecoflow_monitor.ui" = ["assets/*.svg"]
+"ecoflow_monitor.integration_examples" = ["*.json"]

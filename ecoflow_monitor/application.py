@@ -9,6 +9,7 @@ from ecoflow_monitor.adapters.hotkeys import HotkeyManager
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
+from ecoflow_monitor.integrations import hotkey_label
 from ecoflow_monitor.ui.common import app_icon
 from ecoflow_monitor.ui.mini import MiniWidget
 from ecoflow_monitor.ui.settings_window import SettingsWindow
@@ -84,12 +85,17 @@ class Application(QObject):
         self.menu.addSeparator()
         self.menu.addAction(t("exit"), self.app.quit)
         self.tray.setToolTip(t("app_title"))
-        signature = (self.controller.settings.hotkeys, self.controller.settings.msi_enabled)
+        enabled_actions = {"toggle_monitor", "toggle_mini"}
+        for module in self.controller.settings.integrations:
+            if module.enabled:
+                enabled_actions.add("auto:" + module.id)
+                enabled_actions.update("profile:" + module.id + ":" + profile.id for profile in module.profiles)
+        signature = (self.controller.settings.hotkeys, frozenset(enabled_actions), self.controller.settings.language)
         if self.native and signature != self._hotkey_signature:
             self._hotkey_signature = signature
-            failures = self.hotkeys.configure(self.controller.settings.hotkeys, self.controller.settings.msi_enabled)
+            failures = self.hotkeys.configure(self.controller.settings.hotkeys, enabled_actions)
             if failures:
-                self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(t(action) for action in failures))
+                self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(hotkey_label(action, self.controller.settings.integrations) for action in failures))
                 self.controller.notice = self._hotkey_notice
                 self.controller.changed.emit()
             elif self._hotkey_notice and self.controller.notice == self._hotkey_notice:
@@ -114,10 +120,16 @@ class Application(QObject):
             self.window.request_visibility(not self.window._desired_visible)
         elif action == "toggle_mini":
             self.controller.update_preferences(mini_enabled=not self.controller.settings.mini_enabled)
-        elif action == "toggle_auto":
-            self.controller.set_auto(not self.controller.settings.auto_enabled)
-        elif action.startswith("profile_"):
-            self.controller.request_profile(int(action.rsplit("_", 1)[1]))
+        elif action.startswith("auto:"):
+            integration_id = action.split(":", 1)[1]
+            if integration_id not in self.controller.integration_states:
+                return
+            self.controller.set_auto(integration_id, not self.controller.module(integration_id).auto_enabled)
+        elif action.startswith("profile:"):
+            _, integration_id, profile_id = action.split(":")
+            if integration_id not in self.controller.integration_states:
+                return
+            self.controller.request_profile(integration_id, profile_id)
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:

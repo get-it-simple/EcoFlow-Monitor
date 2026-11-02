@@ -11,7 +11,8 @@ import pytest
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.controller import Controller
-from ecoflow_monitor.domain import AfterburnerObservation, Availability, ConnectionState, Telemetry
+from ecoflow_monitor.domain import ConnectionState, Telemetry
+from ecoflow_monitor.adapters.integrations import IntegrationObservation, TransitionResult
 from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.ui.common import metric_text, status_tooltip
 from ecoflow_monitor.ui.common import effective_scale
@@ -58,24 +59,24 @@ def test_settings_are_drafts_and_reset_does_not_apply(runtime, qapp):
 
 def test_settings_save_merges_background_auto_change(runtime):
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, msi_enabled=True, auto_enabled=True))
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True, auto_enabled=True),)))
     dialog = SettingsWindow(controller, runtime.window)
     dialog.scale.setValue(150)
-    controller.set_auto(False)
+    controller.set_auto("afterburner", False)
     dialog.save()
-    assert controller.settings.scale == 1.5 and controller.settings.auto_enabled is False
+    assert controller.settings.scale == 1.5 and controller.module("afterburner").auto_enabled is False
     assert controller.store.load().scale == 1.5
     dialog.deleteLater()
 
 
 def test_msi_enable_reveals_only_draft_controls_until_save(runtime):
     dialog = SettingsWindow(runtime.controller, runtime.window)
-    assert not dialog.tabs.isTabVisible(dialog.rules_tab_index)
-    dialog.msi_enabled.setChecked(True)
-    assert dialog.tabs.isTabVisible(dialog.rules_tab_index)
-    assert runtime.controller.settings.msi_enabled is False
+    assert not dialog.integrations_editor.enabled.isChecked()
+    dialog.integrations_editor.enabled.setChecked(True)
+    assert dialog.integrations_editor.enabled.isChecked()
+    assert runtime.controller.module("afterburner").enabled is False
     dialog.save()
-    assert runtime.controller.settings.msi_enabled is True
+    assert runtime.controller.module("afterburner").enabled is True
     assert not runtime.window.msi_section.isHidden()
     dialog.deleteLater()
 
@@ -109,12 +110,31 @@ def test_flow_animation_stops_when_hidden_or_stale(runtime, qapp):
 
 def test_requested_profile_is_not_shown_as_confirmed(runtime):
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, msi_enabled=True))
-    controller.observation = AfterburnerObservation(Availability.READY)
-    controller.requested_slot = 3
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True),)))
+    controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
+    controller.integration_states["afterburner"].requested_profile = "profile_3"
     runtime.window.refresh()
-    assert "Requested profile: 3" in runtime.window.profile_status.text()
-    assert not any(button.isChecked() for button in runtime.window.profile_buttons)
+    assert "Requested profile: Profile 3" in runtime.window.profile_status.text()
+    assert "Current profile" not in runtime.window.profile_status.text()
+
+
+@pytest.mark.parametrize("result,expected", [
+    (TransitionResult(True, 1, exit_code=0), "Command completed"),
+    (TransitionResult(False, 0, "activation", 1, "integration_elevation_required", winerror=740), "Windows error: 740"),
+    (TransitionResult(False, 0, "activation", 1, "integration_command_failed", exit_code=7), "Exit code: 7"),
+])
+def test_cli_result_is_shown_without_claiming_observed_gpu_state(runtime, result, expected):
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True),)))
+    state = controller.integration_states["afterburner"]
+    state.observation = IntegrationObservation("integration_ready")
+    state.requested_profile = "profile_5"
+    state.result = result
+    runtime.window.refresh()
+    text = runtime.window.profile_status.text()
+    assert expected in text and "Requested profile: Profile 5" in text
+    assert "Current profile" not in text and "unknown" not in text
+    assert runtime.window.profile_status.toolTip() == text
 
 
 def test_every_literal_translation_key_exists_in_english():
@@ -181,7 +201,7 @@ def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp):
 
 
 def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
-    runtime.controller.apply_settings(replace(runtime.controller.settings, msi_enabled=True))
+    runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     runtime.window.show()
     qapp.processEvents()
     scroller = runtime.window.profile_scroll
@@ -191,7 +211,7 @@ def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
 
 @pytest.mark.parametrize("enabled,alpha", [(True, 140), (False, 255)])
 def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, alpha):
-    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, msi_enabled=True))
+    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     window = runtime.window
     window.show()
     qapp.processEvents()

@@ -5,10 +5,12 @@ import time
 from PySide6.QtTest import QTest
 import pytest
 
-from ecoflow_monitor.adapters.ecoflow import Credentials, Device, EcoFlowError
+from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowError
 from ecoflow_monitor.controller import Controller
-from ecoflow_monitor.domain import AfterburnerObservation, AutomationRule, Availability, ConnectionState, Telemetry
-from ecoflow_monitor.settings import AppSettings, SettingsStore
+from ecoflow_monitor.domain import ConnectionState, Telemetry
+from ecoflow_monitor.integrations import IntegrationRule
+from ecoflow_monitor.adapters.integrations import IntegrationObservation, TransitionResult
+from ecoflow_monitor.settings import SettingsStore
 
 
 class MemoryCredentials:
@@ -25,18 +27,18 @@ class MemoryCredentials:
         self.values.pop(reference, None)
 
 
-class FakeAfterburner:
+class FakeIntegrationAdapter:
     def __init__(self):
         self.inspections = 0
         self.commands = []
 
-    def inspect(self, executable, gpu_id):
+    def inspect(self, module):
         self.inspections += 1
-        return AfterburnerObservation(Availability.READY), frozenset()
+        return IntegrationObservation("integration_ready")
 
-    def dispatch(self, executable, slot, gpu_id):
-        self.commands.append(slot)
-        return True
+    def transition(self, module, previous, target, current):
+        self.commands.append(target.slot)
+        return TransitionResult(True, 1)
 
 
 def wait_until(qapp, condition):
@@ -49,7 +51,7 @@ def wait_until(qapp, condition):
 
 @pytest.fixture
 def controller(tmp_path, qapp):
-    instance = Controller(SettingsStore(tmp_path / "settings.json"), MemoryCredentials(), FakeAfterburner())
+    instance = Controller(SettingsStore(tmp_path / "settings.json"), MemoryCredentials(), FakeIntegrationAdapter())
     yield instance
     instance.stop()
     qapp.processEvents()
@@ -57,28 +59,40 @@ def controller(tmp_path, qapp):
 
 def test_disabled_integration_has_no_process_watcher(controller):
     controller.tick()
-    assert controller.afterburner.inspections == 0
-    assert controller.observation.availability == Availability.DISABLED
+    assert controller.integration_adapter.inspections == 0
+    assert controller.integration_states["afterburner"].observation.availability == "integration_disabled"
 
 
 def test_manual_profile_turns_auto_off_before_external_command(controller, qapp):
-    controller.apply_settings(replace(controller.settings, msi_enabled=True, auto_enabled=True))
-    controller.observation = AfterburnerObservation(Availability.READY)
-    controller.request_profile(3)
-    assert controller.settings.auto_enabled is False
-    wait_until(qapp, lambda: "dispatch" not in controller._active)
-    assert controller.afterburner.commands == [3]
-    assert controller.requested_slot == 3 and controller.observation.observed_slot is None
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True, auto_enabled=True),)))
+    controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
+    controller.request_profile("afterburner", "profile_3")
+    assert controller.module("afterburner").auto_enabled is False
+    wait_until(qapp, lambda: "dispatch:afterburner" not in controller._active)
+    assert controller.integration_adapter.commands == [3]
+    assert controller.integration_states["afterburner"].requested_profile == "profile_3" and controller.integration_states["afterburner"].result.success
 
 
 def test_offline_automation_cannot_dispatch(controller):
-    controller.apply_settings(replace(controller.settings, msi_enabled=True, auto_enabled=True, system_rules=(AutomationRule("s", 5),)))
-    controller.observation = AfterburnerObservation(Availability.READY)
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True, auto_enabled=True, system_rules=(IntegrationRule("s", "profile_5"),)),)))
+    controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
     controller.telemetry = Telemetry(0, 200, 80, 100, time.monotonic())
     controller.connection = ConnectionState.API_ERROR
     controller.tick()
-    assert controller.afterburner.commands == []
+    assert controller.integration_adapter.commands == []
     assert controller.runtime is None
+
+
+def test_manual_retry_of_msi_slot_sends_again(controller, qapp):
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True),)))
+    state = controller.integration_states["afterburner"]
+    state.observation = IntegrationObservation("integration_ready")
+    for _ in range(2):
+        controller.request_profile("afterburner", "profile_5")
+        wait_until(qapp, lambda: "dispatch:afterburner" not in controller._active)
+    assert controller.integration_adapter.commands == [5, 5]
+    assert state.active_profile == "profile_5"
+    assert state.requested_profile == "profile_5" and state.result.success
 
 
 def test_bad_credentials_discovery_does_not_replace_live_monitor_state(controller, qapp):
@@ -141,19 +155,19 @@ def test_refreshes_coalesce_to_one_pending_job(controller, qapp):
 def test_automatic_dispatch_stability_suspension_and_recovery(controller, qapp):
     now = [100.0]
     controller.clock = lambda: now[0]
-    controller.apply_settings(replace(controller.settings, msi_enabled=True, auto_enabled=True, system_rules=(AutomationRule("system", 5),)))
-    controller.observation = AfterburnerObservation(Availability.READY)
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True, auto_enabled=True, system_rules=(IntegrationRule("system", "profile_5"),)),)))
+    controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
     controller.telemetry = Telemetry(0, 200, 80, 100, now[0])
     controller.connection = ConnectionState.LIVE
     controller.tick()
-    assert controller.afterburner.commands == []
+    assert controller.integration_adapter.commands == []
     now[0] = 105
     controller.tick()
-    wait_until(qapp, lambda: "dispatch" not in controller._active)
-    assert controller.afterburner.commands == [5]
+    wait_until(qapp, lambda: "dispatch:afterburner" not in controller._active)
+    assert controller.integration_adapter.commands == [5]
     now[0] = 120
     controller.tick()
-    assert controller.afterburner.commands == [5]
+    assert controller.integration_adapter.commands == [5]
     now[0] = 195
     controller.tick()
     assert not controller.fresh and controller.connection == ConnectionState.STALE
@@ -162,8 +176,8 @@ def test_automatic_dispatch_stability_suspension_and_recovery(controller, qapp):
     controller.tick()
     now[0] = 200
     controller.tick()
-    wait_until(qapp, lambda: "dispatch" not in controller._active)
-    assert controller.afterburner.commands == [5, 5]
+    wait_until(qapp, lambda: "dispatch:afterburner" not in controller._active)
+    assert controller.integration_adapter.commands == [5]
 
 
 def test_unexpected_automatic_dispatch_error_does_not_loop(controller, qapp):
@@ -171,19 +185,19 @@ def test_unexpected_automatic_dispatch_error_does_not_loop(controller, qapp):
     controller.clock = lambda: now[0]
     def fail(*args):
         raise RuntimeError("Synthetic external failure")
-    controller.afterburner.dispatch = fail
-    controller.apply_settings(replace(controller.settings, msi_enabled=True, auto_enabled=True, system_rules=(AutomationRule("system", 5),)))
-    controller.observation = AfterburnerObservation(Availability.READY)
+    controller.integration_adapter.transition = fail
+    controller.apply_settings(replace(controller.settings, integrations=(replace(controller.settings.integrations[0], enabled=True, auto_enabled=True, system_rules=(IntegrationRule("system", "profile_5"),)),)))
+    controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
     controller.telemetry = Telemetry(0, 200, 80, 100, now[0])
     controller.connection = ConnectionState.LIVE
     controller.tick()
     now[0] = 105
     controller.tick()
-    wait_until(qapp, lambda: "dispatch" not in controller._active)
+    wait_until(qapp, lambda: "dispatch:afterburner" not in controller._active)
     assert controller.notice == "profile_failed"
     now[0] = 120
     controller.tick()
-    assert "dispatch" not in controller._active
+    assert "dispatch:afterburner" not in controller._active
 
 
 def test_failed_preferences_save_keeps_old_credentials_and_discards_new_target(controller, monkeypatch):

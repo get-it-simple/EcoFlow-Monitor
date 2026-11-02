@@ -1,33 +1,9 @@
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import QFile
 
-from ecoflow_monitor.adapters.afterburner import match_profile, read_profiles
 from ecoflow_monitor.adapters.executables import InvalidExecutable, local_executable
 from ecoflow_monitor.adapters.hotkeys import parse_combo, validate_bindings
-from ecoflow_monitor.domain import ProfileDefinition
 from ecoflow_monitor.settings import HotkeyBinding
-
-
-def test_profile_discovery_reads_gpu_sections_and_preserves_file(tmp_path):
-    path = tmp_path / "VEN_TEST.cfg"
-    content = "[Profile1]\nPowerLimit=100\nCoreClock=1500\nMemoryClock=7000\n[Profile5]\nPowerLimit=51\nCoreClock=1400\nMemoryClock=7000\n"
-    path.write_text(content, encoding="utf-8")
-    original = path.read_bytes()
-    profiles = read_profiles(path)
-    assert [(profile.slot, profile.power_pct) for profile in profiles] == [(1, 100), (5, 51)]
-    assert path.read_bytes() == original
-    assert match_profile(profiles, {"powerlimit": 51, "coreclock": 1400, "memoryclock": 7000}) == 5
-
-
-def test_unknown_curve_or_ambiguous_match_cannot_confirm_slot():
-    settings = (("powerlimit", "100"), ("coreclock", "1500"), ("memoryclock", "7000"))
-    live = {"powerlimit": 100, "coreclock": 1500, "memoryclock": 7000}
-    profiles = (ProfileDefinition(1, "", 100, settings), ProfileDefinition(2, "", 100, settings))
-    assert match_profile(profiles, live) is None
-    assert match_profile((ProfileDefinition(1, "", 100, (*settings, ("vfcurve", "unknown"))),), live) is None
-    assert match_profile((ProfileDefinition(1, "", 100),), live) is None
 
 
 def test_real_shortcut_unicode_and_duplicate_targets(tmp_path, qapp):

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 from pathlib import PureWindowsPath
+from typing import Generic, Protocol, TypeVar
 
 
 class ConnectionState(str, Enum):
@@ -14,14 +15,6 @@ class ConnectionState(str, Enum):
     AUTH_ERROR = "authentication_error"
     UNSUPPORTED = "unsupported_device"
     API_ERROR = "api_unavailable"
-
-
-class Availability(str, Enum):
-    DISABLED = "msi_disabled"
-    NOT_RUNNING = "msi_not_running"
-    READY = "msi_ready"
-    ACCESS_DENIED = "msi_access_denied"
-    ERROR = "msi_error"
 
 
 @dataclass(frozen=True)
@@ -43,25 +36,6 @@ class Telemetry:
 class ResolvedLimit:
     value: float | None
     source: str
-
-
-@dataclass(frozen=True)
-class ProfileDefinition:
-    slot: int
-    label: str
-    power_pct: float | None = None
-    settings: tuple[tuple[str, str], ...] = ()
-    source: str = "manual"
-
-
-@dataclass(frozen=True)
-class AfterburnerObservation:
-    availability: Availability
-    profiles: tuple[ProfileDefinition, ...] = ()
-    gpu_ids: tuple[str, ...] = ()
-    gpu_id: str = ""
-    observed_slot: int | None = None
-    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,7 +85,28 @@ def runtime_hours(telemetry: Telemetry | None, capacity_wh: float, floor: float 
     return capacity_wh * max(telemetry.soc_pct - floor, 0) / 100 / telemetry.output_w
 
 
-def select_rule(telemetry: Telemetry, running: frozenset[str], application_rules: tuple[AutomationRule, ...], system_rules: tuple[AutomationRule, ...]) -> AutomationRule | None:
+class RuleConditions(Protocol):
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def executable(self) -> str: ...
+
+    @property
+    def input_condition(self) -> str: ...
+
+    @property
+    def min_soc(self) -> float | None: ...
+
+    @property
+    def max_soc(self) -> float | None: ...
+
+
+RuleType = TypeVar("RuleType", bound=RuleConditions)
+ProfileKey = TypeVar("ProfileKey", int, str)
+
+
+def select_rule(telemetry: Telemetry, running: frozenset[str], application_rules: tuple[RuleType, ...], system_rules: tuple[RuleType, ...]) -> RuleType | None:
     paths = {normalized_executable(path) for path in running}
     for rules, application in ((application_rules, True), (system_rules, False)):
         for rule in rules:
@@ -129,12 +124,12 @@ def select_rule(telemetry: Telemetry, running: frozenset[str], application_rules
     return None
 
 
-class AutomationGate:
+class AutomationGate(Generic[ProfileKey]):
     def __init__(self) -> None:
-        self._candidate: int | None = None
+        self._candidate: ProfileKey | None = None
         self._since = 0.0
         self._last_dispatch = -math.inf
-        self._requested: int | None = None
+        self._requested: ProfileKey | None = None
         self._failed = False
         self._confirmed = False
 
@@ -150,7 +145,7 @@ class AutomationGate:
         self._failed = False
         self._confirmed = False
 
-    def evaluate(self, slot: int | None, now: float, observed: int | None) -> int | None:
+    def evaluate(self, slot: ProfileKey | None, now: float, observed: ProfileKey | None) -> ProfileKey | None:
         if slot != self._candidate:
             self._candidate = slot
             self._since = now
@@ -171,7 +166,7 @@ class AutomationGate:
             return None
         return slot
 
-    def dispatched(self, slot: int, now: float, success: bool) -> None:
+    def dispatched(self, slot: ProfileKey, now: float, success: bool) -> None:
         self._last_dispatch = now
         self._requested = slot if success else None
         self._failed = not success

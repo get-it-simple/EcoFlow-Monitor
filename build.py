@@ -73,6 +73,7 @@ def main() -> None:
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), "--version-file", str(version_resource()),
         "--collect-data", "ecoflow_monitor.i18n", "--collect-data", "ecoflow_monitor.ui",
+        "--collect-data", "ecoflow_monitor.integration_examples",
         str(ROOT / "ecoflow_monitor" / "__main__.py"),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)

@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "id": "afterburner",
+  "label": "MSI Afterburner",
+  "driver": "afterburner",
+  "enabled": false,
+  "auto_enabled": false,
+  "executable": "",
+  "allow_launch": false,
+  "gpu_id": "",
+  "conditions": [
+    "application",
+    "input",
+    "soc"
+  ],
+  "mapping": [
+    {
+      "id": "profile_1",
+      "label": "Profile 1",
+      "arguments": [
+        "-profile1"
+      ]
+    },
+    {
+      "id": "profile_2",
+      "label": "Profile 2",
+      "arguments": [
+        "-profile2"
+      ]
+    },
+    {
+      "id": "profile_3",
+      "label": "Profile 3",
+      "arguments": [
+        "-profile3"
+      ]
+    },
+    {
+      "id": "profile_4",
+      "label": "Profile 4",
+      "arguments": [
+        "-profile4"
+      ]
+    },
+    {
+      "id": "profile_5",
+      "label": "Profile 5",
+      "arguments": [
+        "-profile5"
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "profile_1",
+      "label": "Profile 1",
+      "slot": 1,
+      "power_pct": null,
+      "activation": {
+        "enabled": true,
+        "commands": [
+          "{app} {cli:profile_1}"
+        ]
+      },
+      "deactivation": {
+        "enabled": false,
+        "commands": []
+      }
+    },
+    {
+      "id": "profile_2",
+      "label": "Profile 2",
+      "slot": 2,
+      "power_pct": null,
+      "activation": {
+        "enabled": true,
+        "commands": [
+          "{app} {cli:profile_2}"
+        ]
+      },
+      "deactivation": {
+        "enabled": false,
+        "commands": []
+      }
+    },
+    {
+      "id": "profile_3",
+      "label": "Profile 3",
+      "slot": 3,
+      "power_pct": null,
+      "activation": {
+        "enabled": true,
+        "commands": [
+          "{app} {cli:profile_3}"
+        ]
+      },
+      "deactivation": {
+        "enabled": false,
+        "commands": []
+      }
+    },
+    {
+      "id": "profile_4",
+      "label": "Profile 4",
+      "slot": 4,
+      "power_pct": null,
+      "activation": {
+        "enabled": true,
+        "commands": [
+          "{app} {cli:profile_4}"
+        ]
+      },
+      "deactivation": {
+        "enabled": false,
+        "commands": []
+      }
+    },
+    {
+      "id": "profile_5",
+      "label": "Profile 5",
+      "slot": 5,
+      "power_pct": null,
+      "activation": {
+        "enabled": true,
+        "commands": [
+          "{app} {cli:profile_5}"
+        ]
+      },
+      "deactivation": {
+        "enabled": false,
+        "commands": []
+      }
+    }
+  ],
+  "application_rules": [],
+  "system_rules": []
+}

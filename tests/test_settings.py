@@ -3,18 +3,18 @@ import json
 
 import pytest
 
-from ecoflow_monitor.domain import AutomationRule
+from ecoflow_monitor.integrations import IntegrationRule
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 
 
 def test_settings_roundtrip_preserves_order_and_does_not_contain_credentials(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
-    settings = replace(AppSettings(), language="uk", msi_enabled=True, system_rules=(AutomationRule("b", 5, max_soc=20), AutomationRule("a", 2, min_soc=20)), mini_metrics=("output_power", "battery_level"))
+    settings = replace(AppSettings(), language="uk", integrations=(replace(AppSettings().integrations[0], enabled=True, system_rules=(IntegrationRule("b", "profile_5", max_soc=20), IntegrationRule("a", "profile_2", min_soc=20))),), mini_metrics=("output_power", "battery_level"))
     store.save(settings)
     assert store.load() == settings
     payload = json.loads(store.path.read_text(encoding="utf-8"))
-    assert payload["version"] == 1
-    assert payload["automation"]["system"][0]["id"] == "b"
+    assert payload["version"] == 2
+    assert payload["integrations"][0]["system_rules"][0]["id"] == "b"
     assert set(payload["ecoflow"]) == {"serial", "credential_ref", "capacity_wh", "manual_min", "manual_max"}
 
 
@@ -28,7 +28,7 @@ def test_invalid_file_is_preserved_until_explicit_save_with_backup(tmp_path):
     assert store.path.read_bytes() == b"broken original"
     store.save(AppSettings(), explicit=True)
     assert store.path.with_suffix(".json.bak").read_bytes() == b"broken original"
-    assert store.load().msi_enabled is False
+    assert store.load().integrations[0].enabled is False
 
 
 def test_failed_atomic_publish_preserves_previous_file(tmp_path, monkeypatch):
@@ -47,7 +47,7 @@ def test_failed_atomic_publish_preserves_previous_file(tmp_path, monkeypatch):
 def test_version_zero_migrates_without_erasing_values():
     settings = AppSettings.from_dict({"language": "uk", "ui_scale": 1.5})
     assert settings.language == "uk" and settings.scale == 1.5
-    assert settings.to_dict()["version"] == 1
+    assert settings.to_dict()["version"] == 2
 
 
 @pytest.mark.parametrize("changes", [{"scale": 0}, {"capacity_wh": float("nan")}, {"manual_min": 90, "manual_max": 80}, {"mini_metrics": ()}, {"mini_metrics": ("battery_level", "battery_level")}, {"mini_dock": "invalid"}])
@@ -66,6 +66,8 @@ def test_future_schema_is_not_silently_overwritten(tmp_path):
 
 def test_reordered_json_profiles_keep_their_slot_identity():
     payload = AppSettings().to_dict()
-    payload["afterburner"]["profiles"].reverse()
+    for profile in payload["integrations"][0]["profiles"]:
+        profile["power_pct"] = {1: 100, 2: 95, 3: 90, 4: 85, 5: 51}[profile["slot"]]
+    payload["integrations"][0]["profiles"].reverse()
     settings = AppSettings.from_dict(payload)
-    assert [(profile.slot, profile.power_pct) for profile in settings.profiles] == [(1, 100), (2, 95), (3, 90), (4, 85), (5, 51)]
+    assert [(profile.slot, profile.power_pct) for profile in sorted(settings.integrations[0].profiles, key=lambda item: item.slot)] == [(1, 100), (2, 95), (3, 90), (4, 85), (5, 51)]

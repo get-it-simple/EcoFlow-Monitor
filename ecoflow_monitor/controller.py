@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 import logging
 import time
 import uuid
@@ -7,12 +7,13 @@ from typing import Callable
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
 
 from ecoflow_monitor import i18n
-from ecoflow_monitor.adapters.afterburner import AfterburnerAdapter
+from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult
 from ecoflow_monitor.adapters.credentials import CredentialError, CredentialStore
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
-from ecoflow_monitor.domain import AfterburnerObservation, AutomationGate, Availability, ConnectionState, resolve_limit, runtime_hours, select_rule
+from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
+from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 
 
@@ -41,16 +42,29 @@ class Task(QRunnable):
         self.signals.finished.emit(self.kind, self.generation, result, failure)
 
 
+@dataclass
+class IntegrationState:
+    observation: IntegrationObservation = field(default_factory=lambda: IntegrationObservation("integration_disabled"))
+    active_profile: str | None = None
+    requested_profile: str | None = None
+    transition_from: str | None = None
+    result: TransitionResult | None = None
+    busy: bool = False
+    gate: AutomationGate[str] = field(default_factory=AutomationGate)
+    next_scan: float = 0
+    auto_reason: str = "automation_paused"
+
+
 class Controller(QObject):
     changed = Signal()
     preferences_changed = Signal()
     devices_ready = Signal(object)
 
-    def __init__(self, store: SettingsStore, credential_store=None, afterburner=None, client_factory=None, clock=time.monotonic) -> None:
+    def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic) -> None:
         super().__init__()
         self.store = store
         self.credential_store = credential_store if credential_store is not None else CredentialStore()
-        self.afterburner = afterburner if afterburner is not None else AfterburnerAdapter()
+        self.integration_adapter = integration_adapter if integration_adapter is not None else IntegrationAdapter()
         self.client_factory = client_factory if client_factory is not None else EcoFlowClient
         self.clock = clock
         self.notice = ""
@@ -62,20 +76,14 @@ class Controller(QObject):
         i18n.setup(self.settings.language)
         self.connection = ConnectionState.UNCONFIGURED
         self.telemetry = None
-        self.observation = AfterburnerObservation(Availability.DISABLED)
-        self.running = frozenset()
-        self.requested_slot = None
-        self.auto_reason = "automation_paused"
-        self._gate = AutomationGate()
+        self.integration_states = {module.id: IntegrationState() for module in self.settings.integrations}
         self._generation = 0
         self._stopped = False
         self._active = {}
         self._api_pending = False
         self._discovery_pending = None
         self._api_mode = "telemetry"
-        self._dispatch_request = None
         self._next_api = 0.0
-        self._next_msi = 0.0
         self._retry = 5.0
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(3)
@@ -99,10 +107,8 @@ class Controller(QObject):
     def runtime(self):
         return runtime_hours(self.telemetry, self.settings.capacity_wh, self.minimum.value, self.fresh)
 
-    @property
-    def profiles(self):
-        discovered = {profile.slot: profile for profile in self.observation.profiles}
-        return tuple(discovered.get(profile.slot, profile) for profile in self.settings.profiles)
+    def module(self, integration_id: str) -> IntegrationDefinition:
+        return next(module for module in self.settings.integrations if module.id == integration_id)
 
     def start(self) -> None:
         self._timer.start()
@@ -178,19 +184,26 @@ class Controller(QObject):
         i18n.setup(settings.language)
         self._generation += 1
         self._discovery_pending = None
-        self._gate.reset()
         if (previous.serial, previous.credential_ref) != (settings.serial, settings.credential_ref):
             self.telemetry = None
             self.connection = ConnectionState.CONNECTING if settings.serial else ConnectionState.UNCONFIGURED
         self._next_api = 0
-        self._next_msi = 0
         self._api_pending = bool(settings.serial)
         self._retry = 5
-        self.requested_slot = None
         self.notice = ""
-        if not settings.msi_enabled:
-            self.observation = AfterburnerObservation(Availability.DISABLED)
-            self.running = frozenset()
+        previous_modules = {module.id: module for module in previous.integrations}
+        self.integration_states = {
+            module.id: self.integration_states[module.id] if previous_modules.get(module.id) == module else IntegrationState()
+            for module in settings.integrations
+        }
+        for module in settings.integrations:
+            state = self.integration_states[module.id]
+            if state.busy:
+                state.busy = False
+                state.active_profile = None
+                state.result = TransitionResult(False, error="integration_cancelled")
+            if not module.enabled:
+                self.integration_states[module.id].observation = IntegrationObservation("integration_disabled")
         self.preferences_changed.emit()
         self.changed.emit()
 
@@ -201,31 +214,47 @@ class Controller(QObject):
         except SettingsError as error:
             self.notice = str(error)
         self.settings = settings
-        if set(changes) - {"monitor_geometry", "mini_position", "auto_enabled", "monitor_visible"}:
+        if set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
             self.preferences_changed.emit()
         self.changed.emit()
 
-    def set_auto(self, enabled: bool) -> None:
-        if not self.settings.msi_enabled:
+    def set_auto(self, integration_id: str, enabled: bool) -> None:
+        module = self.module(integration_id)
+        if not module.enabled:
             return
-        self._gate.reset()
-        self.update_preferences(auto_enabled=enabled)
+        state = self.integration_states[integration_id]
+        state.gate.reset()
+        if not state.busy:
+            state.result = None
+        self.update_preferences(integrations=tuple(replace(item, auto_enabled=enabled) if item.id == integration_id else item for item in self.settings.integrations))
 
-    def request_profile(self, slot: int, automatic: bool = False) -> None:
+    def request_profile(self, integration_id: str, profile_id: str, automatic: bool = False) -> None:
+        module = self.module(integration_id)
         if not automatic:
-            self.set_auto(False)
-        if not self.settings.msi_enabled or self.observation.availability != Availability.READY or self.observation.detail or "dispatch" in self._active:
+            self.set_auto(integration_id, False)
+            module = self.module(integration_id)
+        state = self.integration_states[integration_id]
+        kind = "dispatch:" + integration_id
+        target = next((profile for profile in module.profiles if profile.id == profile_id), None)
+        if not module.enabled or not state.observation.ready or kind in self._active or target is None:
             self.notice = "profile_unavailable"
             self.changed.emit()
             return
-        settings = self.settings
+        manual_retry = not automatic and module.driver == "afterburner"
+        if state.active_profile == profile_id and not manual_retry and (state.result is None or state.result.success):
+            return
+        previous_id = state.active_profile or state.transition_from
+        previous = next((profile for profile in module.profiles if profile.id == previous_id), None)
+        state.transition_from = previous_id
         generation = self._generation
-        self._dispatch_request = (slot, automatic)
-        def operation():
-            if self._stopped or generation != self._generation or not self.settings.msi_enabled:
-                return (slot, False, automatic)
-            return (slot, self.afterburner.dispatch(settings.msi_executable, slot, settings.gpu_id), automatic)
-        self._submit("dispatch", operation)
+        state.busy = True
+        state.requested_profile = profile_id
+        state.result = None
+        def current():
+            return not self._stopped and generation == self._generation and self.module(integration_id).enabled
+        def operation(target_profile: IntegrationProfile = target):
+            return profile_id, automatic, self.integration_adapter.transition(module, previous, target_profile, current)
+        self._submit(kind, operation)
         self.changed.emit()
 
     def tick(self) -> None:
@@ -237,22 +266,26 @@ class Controller(QObject):
             self.changed.emit()
         if self.settings.serial and now >= self._next_api and "api" not in self._active:
             self.refresh()
-        if self.settings.msi_enabled and now >= self._next_msi and "msi" not in self._active:
-            settings = self.settings
-            self._next_msi = now + 2
-            self._submit("msi", lambda: self.afterburner.inspect(settings.msi_executable, settings.gpu_id))
-        eligible = self.settings.msi_enabled and self.settings.auto_enabled and self.fresh and self.observation.availability == Availability.READY and not self.observation.detail
-        reason = "automatic_mode" if eligible else "automation_paused"
-        if reason != self.auto_reason:
-            self.auto_reason = reason
-            self.changed.emit()
-        if not eligible:
-            self._gate.suspend()
-            return
-        rule = select_rule(self.telemetry, self.running, self.settings.application_rules, self.settings.system_rules)
-        slot = self._gate.evaluate(rule.slot if rule else None, now, self.observation.observed_slot)
-        if slot is not None and "dispatch" not in self._active:
-            self.request_profile(slot, automatic=True)
+        for module in self.settings.integrations:
+            state = self.integration_states[module.id]
+            kind = "scan:" + module.id
+            if module.enabled and now >= state.next_scan and kind not in self._active:
+                state.next_scan = now + 2
+                self._submit(kind, lambda selected=module: self.integration_adapter.inspect(selected))
+            eligible = module.enabled and module.auto_enabled and self.fresh and state.observation.ready
+            reason = "automatic_mode" if eligible else "automation_paused"
+            if reason != state.auto_reason:
+                state.auto_reason = reason
+                self.changed.emit()
+            if not eligible:
+                state.gate.suspend()
+                continue
+            if state.busy or (state.result is not None and not state.result.success):
+                continue
+            rule = module.select(self.telemetry, state.observation.running)
+            profile_id = state.gate.evaluate(rule.profile_id if rule else None, now, state.active_profile)
+            if profile_id is not None:
+                self.request_profile(module.id, profile_id, automatic=True)
 
     def _completed(self, kind, generation, result, error) -> None:
         self._active.pop(kind, None)
@@ -280,24 +313,28 @@ class Controller(QObject):
                     self._retry = 5
                     if self.notice in {"credentials_required", "credentials_error", *(state.value for state in ConnectionState)}:
                         self.notice = ""
-            elif kind == "msi":
-                self.observation, self.running = result if error is None else (AfterburnerObservation(Availability.ERROR), frozenset())
-            elif kind == "dispatch":
-                slot, automatic = self._dispatch_request
-                success = bool(result[1]) if error is None else False
+            elif kind.startswith("scan:"):
+                integration_id = kind.split(":", 1)[1]
+                self.integration_states[integration_id].observation = result if error is None else IntegrationObservation("integration_error")
+            elif kind.startswith("dispatch:"):
+                integration_id = kind.split(":", 1)[1]
+                state = self.integration_states[integration_id]
+                profile_id, automatic, outcome = result if error is None else (state.requested_profile, True, TransitionResult(False, error="integration_command_failed"))
+                state.busy = False
+                state.result = outcome
+                state.active_profile = profile_id if outcome.success else None
+                if outcome.success:
+                    state.transition_from = None
                 if automatic:
-                    self._gate.dispatched(slot, self.clock(), success)
-                self.requested_slot = slot if success else None
-                if not success:
+                    state.gate.dispatched(profile_id, self.clock(), outcome.success)
+                if not outcome.success:
                     self.notice = "profile_failed"
                 elif self.notice in {"profile_failed", "profile_unavailable"}:
                     self.notice = ""
-                self._next_msi = 0
+                state.next_scan = 0
             if error is not None and not isinstance(error, (EcoFlowError, CredentialError)):
                 logger.error("Background %s failed (%s)", kind, type(error).__name__)
             self.changed.emit()
-        if kind == "dispatch":
-            self._dispatch_request = None
         if kind == "api":
             if self._discovery_pending is not None:
                 supplied, = self._discovery_pending

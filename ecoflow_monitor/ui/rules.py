@@ -1,10 +1,11 @@
 import uuid
+from typing import cast
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
-from ecoflow_monitor.domain import AutomationRule, normalized_executable
+from ecoflow_monitor.domain import normalized_executable
+from ecoflow_monitor.integrations import IntegrationProfile, IntegrationRule
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action
 
@@ -51,6 +52,8 @@ class RulesEditor(QWidget):
     def __init__(self, application: bool, parent=None):
         super().__init__(parent)
         self.application = application
+        self.profiles: tuple[IntegrationProfile, ...] = ()
+        self.conditions = ("application", "input", "soc")
         layout = QVBoxLayout(self)
         self.table = RuleTable(self)
         headings = [t("rule_enabled")]
@@ -68,20 +71,29 @@ class RulesEditor(QWidget):
             buttons.addWidget(action(t("add_application"), self.browse))
         buttons.addWidget(action(t("add_rule"), self.add_rule))
         buttons.addWidget(action(t("remove"), self.remove))
-        up = action("↑", lambda: self.move(-1))
-        down = action("↓", lambda: self.move(1))
+        up = action("↑", lambda: self.move_rule(-1))
+        down = action("↓", lambda: self.move_rule(1))
         up.setToolTip(t("move_up"))
         down.setToolTip(t("move_down"))
         buttons.addWidget(up)
         buttons.addWidget(down)
         layout.addLayout(buttons)
 
-    def set_rules(self, rules: tuple[AutomationRule, ...]) -> None:
+    def configure(self, profiles, conditions) -> None:
+        self.profiles = profiles
+        self.conditions = conditions
+        column = 2 if self.application else 1
+        self.table.setColumnHidden(column, "input" not in conditions)
+        self.table.setColumnHidden(column + 1, "soc" not in conditions)
+        self.table.setColumnHidden(column + 2, "soc" not in conditions)
+        self.setVisible(not self.application or "application" in conditions)
+
+    def set_rules(self, rules: tuple[IntegrationRule, ...]) -> None:
         self.table.setRowCount(0)
         for rule in rules:
             self.append(rule)
 
-    def append(self, rule: AutomationRule) -> None:
+    def append(self, rule: IntegrationRule) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
         enabled = QCheckBox()
@@ -104,26 +116,26 @@ class RulesEditor(QWidget):
             spin.setValue(-1 if value is None else value)
             self.table.setCellWidget(row, column + offset, spin)
         profile = QComboBox()
-        for slot in range(1, 6):
-            profile.addItem(str(slot), slot)
-        profile.setCurrentIndex(rule.slot - 1)
+        for item in self.profiles:
+            profile.addItem(item.label, item.id)
+        profile.setCurrentIndex(profile.findData(rule.profile_id))
         self.table.setCellWidget(row, column + 3, profile)
         self.table.selectRow(row)
         self.table.resizeRowsToContents()
 
-    def rules(self, validate_paths: bool = False) -> tuple[AutomationRule, ...]:
+    def rules(self, validate_paths: bool = False) -> tuple[IntegrationRule, ...]:
         result = []
         for row in range(self.table.rowCount()):
-            enabled = self.table.cellWidget(row, 0)
+            enabled = cast(QCheckBox, self.table.cellWidget(row, 0))
             column = 2 if self.application else 1
             path = self.table.item(row, 1).text().strip() if self.application else ""
             if path and validate_paths:
                 path = local_executable(path)
-            minimum = self.table.cellWidget(row, column + 1).value()
-            maximum = self.table.cellWidget(row, column + 2).value()
-            rule = AutomationRule(
-                enabled.property("rule_id"), self.table.cellWidget(row, column + 3).currentData(),
-                enabled.isChecked(), path, self.table.cellWidget(row, column).currentData(),
+            minimum = cast(QDoubleSpinBox, self.table.cellWidget(row, column + 1)).value()
+            maximum = cast(QDoubleSpinBox, self.table.cellWidget(row, column + 2)).value()
+            rule = IntegrationRule(
+                enabled.property("rule_id"), cast(QComboBox, self.table.cellWidget(row, column + 3)).currentData(),
+                enabled.isChecked(), path, cast(QComboBox, self.table.cellWidget(row, column)).currentData(),
                 minimum if minimum >= 0 else None, maximum if maximum >= 0 else None,
             )
             if validate_paths:
@@ -138,7 +150,7 @@ class RulesEditor(QWidget):
                 if normalized_executable(rule.executable) == normalized_executable(path):
                     self.table.selectRow(row)
                     return
-            self.append(AutomationRule(uuid.uuid4().hex, 1, executable=path))
+            self.append(IntegrationRule(uuid.uuid4().hex, self.profiles[0].id if self.profiles else "missing", executable=path))
         except (OSError, ValueError):
             QMessageBox.warning(self, t("error_title"), t("invalid_executable"))
 
@@ -155,14 +167,14 @@ class RulesEditor(QWidget):
                 self.browse()
                 return
             path = self.table.item(row, 1).text()
-        self.append(AutomationRule(uuid.uuid4().hex, 1, executable=path))
+        self.append(IntegrationRule(uuid.uuid4().hex, self.profiles[0].id if self.profiles else "missing", executable=path))
 
     def remove(self) -> None:
         row = self.table.currentRow()
         if row >= 0:
             self.table.removeRow(row)
 
-    def move(self, delta: int) -> None:
+    def move_rule(self, delta: int) -> None:
         row = self.table.currentRow()
         target = row + delta
         if 0 <= row < self.table.rowCount() and 0 <= target < self.table.rowCount():

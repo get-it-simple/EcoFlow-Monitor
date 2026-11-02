@@ -8,11 +8,11 @@ import sys
 import tempfile
 import uuid
 
-from ecoflow_monitor.domain import AutomationRule, ProfileDefinition
+from ecoflow_monitor.integrations import IntegrationDefinition, afterburner_example, hotkey_actions, migrate_afterburner
 
 
 METRICS = ("battery_level", "input_power", "output_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")
-HOTKEY_ACTIONS = ("toggle_monitor", "toggle_mini", "toggle_auto", "profile_1", "profile_2", "profile_3", "profile_4", "profile_5")
+HOTKEY_ACTIONS = ("toggle_monitor", "toggle_mini")
 
 
 @dataclass(frozen=True)
@@ -33,13 +33,7 @@ class AppSettings:
     capacity_wh: float = 2048
     manual_min: float | None = None
     manual_max: float | None = None
-    msi_enabled: bool = False
-    auto_enabled: bool = False
-    msi_executable: str = ""
-    gpu_id: str = ""
-    profiles: tuple[ProfileDefinition, ...] = field(default_factory=lambda: tuple(ProfileDefinition(slot, "", power) for slot, power in enumerate((100, 95, 90, 85, 51), 1)))
-    application_rules: tuple[AutomationRule, ...] = ()
-    system_rules: tuple[AutomationRule, ...] = ()
+    integrations: tuple[IntegrationDefinition, ...] = field(default_factory=lambda: (afterburner_example(),))
     hotkeys: tuple[HotkeyBinding, ...] = field(default_factory=default_hotkeys)
     language: str = "system"
     scale: float = 1
@@ -56,9 +50,9 @@ class AppSettings:
     mini_above_taskbar: bool = False
 
     def validate(self) -> None:
-        if any(type(value) is not bool for value in (self.msi_enabled, self.auto_enabled, self.transparency, self.animations, self.monitor_visible, self.mini_enabled, self.mini_above_taskbar)):
+        if any(type(value) is not bool for value in (self.transparency, self.animations, self.monitor_visible, self.mini_enabled, self.mini_above_taskbar)):
             raise ValueError("Boolean preference expected")
-        if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.msi_executable, self.gpu_id, self.language)):
+        if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language)):
             raise ValueError("Text preference expected")
         for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
@@ -74,22 +68,14 @@ class AppSettings:
             raise ValueError("Invalid docking edge")
         if not self.mini_metrics or len(set(self.mini_metrics)) != len(self.mini_metrics) or any(value not in METRICS for value in self.mini_metrics):
             raise ValueError("Invalid mini widget metrics")
-        if tuple(profile.slot for profile in self.profiles) != (1, 2, 3, 4, 5):
-            raise ValueError("Five ordered profile slots are required")
-        for profile in self.profiles:
-            if type(profile.slot) is not int or not isinstance(profile.label, str):
-                raise ValueError("Invalid profile description")
-            if profile.power_pct is not None and (isinstance(profile.power_pct, bool) or not isinstance(profile.power_pct, (int, float)) or not math.isfinite(profile.power_pct) or not 1 <= profile.power_pct <= 200):
-                raise ValueError("Invalid descriptive power percentage")
         ids = set()
-        for rule in (*self.application_rules, *self.system_rules):
-            rule.validate()
-            if rule.id in ids:
-                raise ValueError("Duplicate automation rule ID")
-            ids.add(rule.id)
-        if any(not rule.executable for rule in self.application_rules) or any(rule.executable for rule in self.system_rules):
-            raise ValueError("Application and system rule identities are inconsistent")
-        if {binding.action for binding in self.hotkeys} != set(HOTKEY_ACTIONS) or len(self.hotkeys) != len(HOTKEY_ACTIONS):
+        for module in self.integrations:
+            module.validate()
+            if module.id in ids:
+                raise ValueError("Duplicate integration ID")
+            ids.add(module.id)
+        actions = hotkey_actions(self.integrations)
+        if len({binding.action for binding in self.hotkeys}) != len(self.hotkeys) or any(binding.action not in actions for binding in self.hotkeys):
             raise ValueError("Invalid hotkey actions")
         if any(not isinstance(binding.combo, str) or type(binding.enabled) is not bool for binding in self.hotkeys):
             raise ValueError("Invalid shortcut preference")
@@ -102,10 +88,9 @@ class AppSettings:
     def to_dict(self) -> dict:
         self.validate()
         return {
-            "version": 1,
+            "version": 2,
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
-            "afterburner": {"enabled": self.msi_enabled, "auto": self.auto_enabled, "executable": self.msi_executable, "gpu_id": self.gpu_id, "profiles": [{"slot": p.slot, "label": p.label, "power_pct": p.power_pct} for p in self.profiles]},
-            "automation": {"applications": [asdict(rule) for rule in self.application_rules], "system": [asdict(rule) for rule in self.system_rules]},
+            "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
             "appearance": {"scale": self.scale, "transparency": self.transparency, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry)},
@@ -114,7 +99,7 @@ class AppSettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
-        if not isinstance(data, dict) or type(data.get("version", 0)) is not int or data.get("version", 0) not in (0, 1):
+        if not isinstance(data, dict) or type(data.get("version", 0)) is not int or data.get("version", 0) not in (0, 1, 2):
             raise ValueError("Unsupported settings schema")
         defaults = cls()
         eco = data.get("ecoflow", {})
@@ -134,15 +119,14 @@ class AppSettings:
             if not isinstance(value, str):
                 raise ValueError("Text setting expected")
             return value
+        modules = tuple(IntegrationDefinition.from_dict(item) for item in data["integrations"]) if data.get("version") == 2 else (migrate_afterburner(msi, automation),)
+        bindings = data.get("hotkeys", [asdict(binding) for binding in defaults.hotkeys])
+        if data.get("version") != 2:
+            bindings = [dict(binding, action=("auto:afterburner" if binding["action"] == "toggle_auto" else "profile:afterburner:" + binding["action"] if binding["action"].startswith("profile_") else binding["action"])) for binding in bindings]
         settings = cls(
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
             capacity_wh=eco.get("capacity_wh", 2048), manual_min=eco.get("manual_min"), manual_max=eco.get("manual_max"),
-            msi_enabled=boolean(msi, "enabled", False), auto_enabled=boolean(msi, "auto", False),
-            msi_executable=string(msi, "executable"), gpu_id=string(msi, "gpu_id"),
-            profiles=tuple(sorted((ProfileDefinition(**profile) for profile in msi.get("profiles", [{"slot": p.slot, "label": p.label, "power_pct": p.power_pct} for p in defaults.profiles])), key=lambda profile: profile.slot)),
-            application_rules=tuple(AutomationRule(**rule) for rule in automation.get("applications", [])),
-            system_rules=tuple(AutomationRule(**rule) for rule in automation.get("system", [])),
-            hotkeys=tuple(HotkeyBinding(**binding) for binding in data.get("hotkeys", [asdict(binding) for binding in defaults.hotkeys])),
+            integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),
             transparency=boolean(appearance, "transparency", True), animations=boolean(appearance, "animations", True),
             monitor_visible=boolean(appearance, "visible", True), monitor_geometry=tuple(appearance.get("geometry", defaults.monitor_geometry)),

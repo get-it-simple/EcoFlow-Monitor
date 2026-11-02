@@ -1,13 +1,12 @@
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizeGrip, QStyle, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizeGrip, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor import __version__
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.adapters.reference_effects import get_accent_color
 from ecoflow_monitor.ui.theme import SETTINGS_STYLE, monitor_style
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
-from ecoflow_monitor.domain import Availability
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, number, scaled_font
 from ecoflow_monitor.ui.flow import FlowWidget
@@ -76,6 +75,11 @@ class MonitorWindow(QWidget):
         self.msi_section.setObjectName("monitor_msi")
         msi = QVBoxLayout(self.msi_section)
         msi.setContentsMargins(0, 6, 0, 0)
+        self.integration_selector = QComboBox()
+        self.integration_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.integration_selector.setMinimumContentsLength(15)
+        self.integration_selector.currentIndexChanged.connect(self.refresh)
+        msi.addWidget(self.integration_selector)
         self.msi_status = QLabel()
         self.msi_status.setWordWrap(True)
         msi.addWidget(self.msi_status)
@@ -83,15 +87,16 @@ class MonitorWindow(QWidget):
         self.auto_toggle = QCheckBox()
         self.auto_toggle.setObjectName("autoToggle")
         self.auto_toggle.setStyleSheet(toggle_switch_style("autoToggle"))
-        self.auto_toggle.toggled.connect(controller.set_auto)
+        self.auto_toggle.toggled.connect(self.set_auto)
         row.addWidget(self.auto_toggle)
-        self.profile_buttons = []
-        for slot in range(1, 6):
-            button = QPushButton(str(slot))
-            button.setCheckable(True)
-            button.clicked.connect(lambda checked=False, value=slot: controller.request_profile(value))
-            self.profile_buttons.append(button)
-            row.addWidget(button, 1)
+        self.profile_choice = QComboBox()
+        self.profile_choice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.profile_choice.setMinimumContentsLength(12)
+        row.addWidget(self.profile_choice, 1)
+        self.apply_profile = QPushButton()
+        self.apply_profile.clicked.connect(self.request_profile)
+        row.addWidget(self.apply_profile)
+        self.profile_buttons = [self.apply_profile]
         container = QWidget()
         self._profile_container = container
         self._profile_layout = row
@@ -185,12 +190,13 @@ class MonitorWindow(QWidget):
         self.setStyleSheet(self.styleSheet() + monitor_style(scale, get_accent_color(), self.controller.settings.transparency))
         self._shell_layout.setContentsMargins(round(12 * scale), round(10 * scale), round(12 * scale), round(8 * scale))
         self._shell_layout.setSpacing(round(6 * scale))
+        self._profile_layout.setSpacing(round(8 * scale))
         for button in (self.settings_button, self.refresh_button, self.close_button):
             button.setFixedSize(round(32 * scale), round(32 * scale))
             button.setIconSize(QSize(round(18 * scale), round(18 * scale)))
         for button in (*self.profile_buttons, self.auto_toggle):
             button.ensurePolished()
-        controls_height = max(button.sizeHint().height() for button in (*self.profile_buttons, self.auto_toggle))
+        controls_height = max(button.sizeHint().height() for button in (*self.profile_buttons, self.auto_toggle, self.profile_choice))
         margins = self._profile_layout.contentsMargins()
         self.profile_scroll.setFixedHeight(controls_height + margins.top() + margins.bottom() + 2)
         self.profile_scroll.setMinimumWidth(self._profile_container.minimumSizeHint().width() + 2)
@@ -204,6 +210,7 @@ class MonitorWindow(QWidget):
         self._shell_layout.activate()
         self._outer_layout.invalidate()
         self._outer_layout.activate()
+        self.profile_scroll.setFixedHeight(max(self.profile_scroll.height(), self._profile_container.minimumSizeHint().height() + 2))
 
     def refresh(self):
         controller = self.controller
@@ -217,30 +224,77 @@ class MonitorWindow(QWidget):
         for key, limit in (("minimum_discharge_level", controller.minimum), ("maximum_charge_level", controller.maximum)):
             parts.append(t(key) + ": " + number(limit.value, "%") + " (" + t("source_" + limit.source) + ")")
         self.limits.setText("   ·   ".join(parts))
-        self.msi_section.setVisible(controller.settings.msi_enabled)
-        if controller.settings.msi_enabled:
-            observation = controller.observation
-            self.msi_status.setText(t(observation.detail or observation.availability.value))
+        modules = tuple(module for module in controller.settings.integrations if module.enabled)
+        self.msi_section.setVisible(bool(modules))
+        choices = tuple((module.id, module.label) for module in modules)
+        current_choices = tuple((self.integration_selector.itemData(index), self.integration_selector.itemText(index)) for index in range(self.integration_selector.count()))
+        if choices != current_choices:
+            selected = self.integration_selector.currentData()
+            self.integration_selector.blockSignals(True)
+            self.integration_selector.clear()
+            for module in modules:
+                self.integration_selector.addItem(module.label, module.id)
+            self.integration_selector.setCurrentIndex(max(0, self.integration_selector.findData(selected)))
+            self.integration_selector.blockSignals(False)
+        integration_id = self.integration_selector.currentData()
+        self.integration_selector.setToolTip(self.integration_selector.currentText())
+        if integration_id:
+            module = controller.module(integration_id)
+            state = controller.integration_states[integration_id]
+            observation = state.observation
+            self.msi_status.setText(t(observation.detail or observation.availability))
             self.auto_toggle.blockSignals(True)
             self.auto_toggle.setText(t("automatic_mode"))
-            self.auto_toggle.setChecked(controller.settings.auto_enabled)
-            self.auto_toggle.setToolTip(t(controller.auto_reason))
+            self.auto_toggle.setChecked(module.auto_enabled)
+            self.auto_toggle.setToolTip(t(state.auto_reason))
             self.auto_toggle.blockSignals(False)
-            for profile, button in zip(controller.profiles, self.profile_buttons):
-                label = profile.label or str(profile.slot)
-                button.setText(label + ("\n" + number(profile.power_pct, "%") if profile.power_pct is not None else ""))
-                button.setChecked(observation.observed_slot == profile.slot)
-                button.setEnabled(observation.availability == Availability.READY and not observation.detail and "dispatch" not in controller._active)
-                button.setToolTip(t("profile_expected").format(power=number(profile.power_pct), source=t("source_" + profile.source)))
-            observed = t("profile_observed").format(number=observation.observed_slot) if observation.observed_slot else t("profile_unknown")
-            requested = " · " + t("profile_requested").format(number=controller.requested_slot) if controller.requested_slot else ""
-            mode = " · " + t(controller.auto_reason) if controller.settings.auto_enabled else ""
-            self.profile_status.setText(observed + requested + mode)
+            items = tuple((profile.id, profile.label) for profile in module.profiles)
+            existing = tuple((self.profile_choice.itemData(index), self.profile_choice.itemText(index)) for index in range(self.profile_choice.count()))
+            if items != existing:
+                selected = self.profile_choice.currentData()
+                self.profile_choice.clear()
+                for profile in module.profiles:
+                    self.profile_choice.addItem(profile.label, profile.id)
+                self.profile_choice.setCurrentIndex(max(0, self.profile_choice.findData(selected)))
+            self.apply_profile.setText(t("integration_retry") if state.result and not state.result.success else t("integration_apply"))
+            selected_profile = next((profile for profile in module.profiles if profile.id == self.profile_choice.currentData()), None)
+            tooltip = self.profile_choice.currentText()
+            if selected_profile is not None:
+                power = selected_profile.power_pct
+                if power is not None:
+                    tooltip += " · " + t("profile_expected").format(power=number(power), source=t("source_manual"))
+            self.profile_choice.setToolTip(tooltip)
+            self.apply_profile.setEnabled(observation.ready and not state.busy and bool(module.profiles))
+            requested = next((profile.label for profile in module.profiles if profile.id == state.requested_profile), "")
+            status = t("profile_requested").format(number=requested) if requested else t("integration_no_request")
+            if state.busy:
+                status += " · " + t("integration_busy")
+            elif state.result and state.result.success:
+                status += " · " + t("integration_command_succeeded" if state.result.completed else "integration_no_commands")
+            if state.result and not state.result.success:
+                status += "\n" + t("integration_failure").format(phase=t(state.result.phase) if state.result.phase else "", step=state.result.step, completed=state.result.completed, error=t(state.result.error))
+                if state.result.exit_code is not None:
+                    status += " · " + t("integration_exit_code").format(code=state.result.exit_code)
+                if state.result.winerror is not None:
+                    status += " · " + t("integration_windows_error").format(code=state.result.winerror)
+            self.profile_status.setText(status)
+            self.profile_status.setToolTip(status)
         self.flow.refresh()
-        signature = (controller.settings.msi_enabled, self.notice.text(), self.title.text(), tuple(button.text() for button in self.profile_buttons))
+        signature = (choices, self.notice.text(), self.title.text(), self.apply_profile.text())
         if signature != self._layout_signature:
             self._layout_signature = signature
             self._layout_timer.start()
+
+    def set_auto(self, enabled):
+        integration_id = self.integration_selector.currentData()
+        if integration_id:
+            self.controller.set_auto(integration_id, enabled)
+
+    def request_profile(self):
+        integration_id = self.integration_selector.currentData()
+        profile_id = self.profile_choice.currentData()
+        if integration_id and profile_id:
+            self.controller.request_profile(integration_id, profile_id)
 
     def _save_geometry(self):
         if self._quitting:

@@ -1,17 +1,17 @@
 from dataclasses import replace
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.credentials import CredentialError
 from ecoflow_monitor.adapters.ecoflow import Credentials
-from ecoflow_monitor.adapters.executables import local_executable
-from ecoflow_monitor.domain import ProfileDefinition
+from ecoflow_monitor.integrations import hotkey_actions, hotkey_label
+from ecoflow_monitor.ui.integrations import IntegrationsEditor
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.settings import HOTKEY_ACTIONS, METRICS, HotkeyBinding, SettingsError
+from ecoflow_monitor.settings import METRICS, HotkeyBinding, SettingsError
 from ecoflow_monitor.ui.common import action, clamp_window, effective_scale, hint, scaled_font
-from ecoflow_monitor.ui.rules import RulesEditor, optional_percent
+from ecoflow_monitor.ui.rules import optional_percent
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
 from ecoflow_monitor.ui.reference_style import toggle_switch_style
 from ecoflow_monitor.ui.theme import SETTINGS_STYLE
@@ -30,11 +30,11 @@ class SettingsWindow(QDialog):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs)
         self._build_connection()
-        self._build_msi()
-        self._build_rules()
+        self.integrations_editor = IntegrationsEditor()
+        self._tab(t("integrations")).addWidget(self.integrations_editor)
         self._build_appearance()
         self._build_hotkeys()
-        self.msi_enabled.toggled.connect(self._msi_toggled)
+        self.integrations_editor.changed.connect(self._refresh_hotkeys)
         buttons = QHBoxLayout()
         buttons.addWidget(action(t("reset"), self.load_draft))
         buttons.addStretch()
@@ -86,43 +86,6 @@ class SettingsWindow(QDialog):
         layout.addWidget(hint(t("manual_limit_hint")))
         layout.addStretch()
 
-    def _build_msi(self):
-        layout = self._tab(t("msi_integration"))
-        self.msi_enabled = QCheckBox(t("msi_enabled"))
-        layout.addWidget(self.msi_enabled)
-        self.msi_body = QWidget()
-        body = QVBoxLayout(self.msi_body)
-        self.msi_path = QLineEdit()
-        path_row = QHBoxLayout()
-        path_row.addWidget(self.msi_path)
-        path_row.addWidget(action(t("browse"), self.browse_msi))
-        body.addWidget(QLabel(t("msi_executable")))
-        body.addLayout(path_row)
-        self.gpus = QComboBox()
-        body.addWidget(QLabel(t("gpu")))
-        body.addWidget(self.gpus)
-        self.profile_table = QTableWidget(5, 3)
-        self.profile_table.setHorizontalHeaderLabels([t("rule_profile"), t("profile_label"), t("profile_power")])
-        self.profile_table.horizontalHeader().setStretchLastSection(True)
-        self.profile_table.setMinimumHeight(230)
-        body.addWidget(self.profile_table)
-        body.addWidget(hint(t("profile_description_hint")))
-        layout.addWidget(self.msi_body)
-        layout.addStretch()
-        self.msi_enabled.toggled.connect(self.msi_body.setVisible)
-
-    def _build_rules(self):
-        layout = self._tab(t("rules_settings"))
-        self.rules_hint = hint(t("rule_hint"))
-        layout.addWidget(self.rules_hint)
-        self.application_rules = RulesEditor(True)
-        self.system_rules = RulesEditor(False)
-        layout.addWidget(QLabel(t("application_rules")))
-        layout.addWidget(self.application_rules)
-        layout.addWidget(QLabel(t("system_rules")))
-        layout.addWidget(self.system_rules)
-        self.rules_tab_index = self.tabs.count() - 1
-
     def _build_appearance(self):
         layout = self._tab(t("appearance_settings"))
         form = QFormLayout()
@@ -169,23 +132,43 @@ class SettingsWindow(QDialog):
     def _build_hotkeys(self):
         layout = self._tab(t("hotkeys_settings"))
         layout.addWidget(hint(t("hotkey_hint")))
+        self.hotkey_body = QWidget()
+        self.hotkey_layout = QVBoxLayout(self.hotkey_body)
+        self.hotkey_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.hotkey_body)
+        layout.addStretch()
         self.hotkey_rows = {}
-        for action_name in HOTKEY_ACTIONS:
+
+    def _refresh_hotkeys(self):
+        try:
+            modules = self.integrations_editor.modules()
+        except (ValueError, AttributeError):
+            return
+        values = {binding.action: binding for binding in self.controller.settings.hotkeys}
+        values.update({name: HotkeyBinding(name, editor.combo(), enabled.isChecked()) for name, (field, editor, enabled) in self.hotkey_rows.items()})
+        for field, editor, enabled in self.hotkey_rows.values():
+            self.hotkey_layout.removeWidget(field)
+            field.deleteLater()
+        self.hotkey_rows = {}
+        enabled_modules = {module.id for module in modules if module.enabled}
+        for name in hotkey_actions(modules):
+            binding = values.get(name, HotkeyBinding(name))
             field = QWidget()
             row = QVBoxLayout(field)
             row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(QLabel(t(action_name)))
+            row.addWidget(QLabel(hotkey_label(name, modules)))
             controls = QHBoxLayout()
             enabled = QCheckBox()
-            enabled.setObjectName(action_name + "HotkeyToggle")
+            enabled.setChecked(binding.enabled)
+            enabled.setObjectName("bindingToggle")
             enabled.setStyleSheet(toggle_switch_style(enabled.objectName()))
-            editor = HotkeyComboEditor("")
+            editor = HotkeyComboEditor(binding.combo)
             controls.addWidget(enabled)
             controls.addWidget(editor, 1)
             row.addLayout(controls)
-            layout.addWidget(field)
-            self.hotkey_rows[action_name] = (field, editor, enabled)
-        layout.addStretch()
+            self.hotkey_layout.addWidget(field)
+            self.hotkey_rows[name] = (field, editor, enabled)
+            field.setVisible(":" not in name or name.split(":")[1] in enabled_modules)
 
     def load_draft(self):
         settings = self.controller.settings
@@ -197,26 +180,7 @@ class SettingsWindow(QDialog):
         self.capacity.setValue(settings.capacity_wh)
         self.minimum.setValue(-1 if settings.manual_min is None else settings.manual_min)
         self.maximum.setValue(-1 if settings.manual_max is None else settings.manual_max)
-        self.msi_enabled.setChecked(settings.msi_enabled)
-        self.msi_body.setVisible(settings.msi_enabled)
-        self.msi_path.setText(settings.msi_executable)
-        self.gpus.clear()
-        self.gpus.addItem(t("gpu_auto"), "")
-        ids = set(self.controller.observation.gpu_ids)
-        if settings.gpu_id:
-            ids.add(settings.gpu_id)
-        for gpu in sorted(ids):
-            self.gpus.addItem(gpu, gpu)
-        self.gpus.setCurrentIndex(max(0, self.gpus.findData(settings.gpu_id)))
-        for row, profile in enumerate(settings.profiles):
-            slot = QTableWidgetItem(str(profile.slot))
-            slot.setFlags(slot.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.profile_table.setItem(row, 0, slot)
-            self.profile_table.setItem(row, 1, QTableWidgetItem(profile.label))
-            self.profile_table.setItem(row, 2, QTableWidgetItem("" if profile.power_pct is None else str(profile.power_pct)))
-        self.application_rules.set_rules(settings.application_rules)
-        self.system_rules.set_rules(settings.system_rules)
-        self.tabs.setTabVisible(self.rules_tab_index, settings.msi_enabled)
+        self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.scale.setValue(settings.scale * 100)
         self.transparency.setChecked(settings.transparency)
@@ -233,17 +197,15 @@ class SettingsWindow(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, key)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if key in settings.mini_metrics else Qt.CheckState.Unchecked)
-        for binding in settings.hotkeys:
-            field, editor, enabled = self.hotkey_rows[binding.action]
-            enabled.setChecked(binding.enabled)
-            editor.set_combo(binding.combo)
-            field.setVisible(settings.msi_enabled or binding.action in {"toggle_monitor", "toggle_mini"})
-        self.profile_table.resizeRowsToContents()
+        self.hotkey_rows = self._reset_hotkeys()
 
-    def _msi_toggled(self, enabled):
-        self.tabs.setTabVisible(self.rules_tab_index, enabled)
-        for action_name, (field, editor, toggle) in self.hotkey_rows.items():
-            field.setVisible(enabled or action_name in {"toggle_monitor", "toggle_mini"})
+    def _reset_hotkeys(self):
+        for field, editor, enabled in self.hotkey_rows.values():
+            self.hotkey_layout.removeWidget(field)
+            field.deleteLater()
+        self.hotkey_rows = {}
+        self._refresh_hotkeys()
+        return self.hotkey_rows
 
     def _entered_credentials(self):
         access, secret = self.access.text().strip(), self.secret.text().strip()
@@ -272,25 +234,25 @@ class SettingsWindow(QDialog):
         if index >= 0:
             self.devices.setCurrentIndex(index)
 
-    def browse_msi(self):
-        path, _ = QFileDialog.getOpenFileName(self, t("msi_executable"), "", t("application_files") + " (*.exe)")
-        if path:
-            self.msi_path.setText(path)
-
     def gather(self):
         current = self.controller.settings
         serial = self.devices.currentData() if self.devices.currentIndex() >= 0 and self.devices.currentText() == self.devices.itemText(self.devices.currentIndex()) else self.devices.currentText().strip()
-        profiles = tuple(ProfileDefinition(row + 1, self.profile_table.item(row, 1).text(), float(self.profile_table.item(row, 2).text()) if self.profile_table.item(row, 2).text().strip() else None) for row in range(5))
         hotkeys = tuple(HotkeyBinding(action_name, editor.combo(), enabled.isChecked()) for action_name, (field, editor, enabled) in self.hotkey_rows.items())
-        msi_path = self.msi_path.text().strip()
-        if msi_path:
-            msi_path = local_executable(msi_path, allow_shortcut=False)
+        modules = self.integrations_editor.modules(True)
+        baseline = {module.id: module for module in self._baseline.integrations}
+        latest = {module.id: module for module in current.integrations}
+        merged = []
+        for module in modules:
+            if module.id in baseline and module.id in latest:
+                edits = {name: getattr(module, name) for name in module.__dataclass_fields__ if getattr(module, name) != getattr(baseline[module.id], name)}
+                module = replace(latest[module.id], **edits)
+            merged.append(module)
+        merged.extend(module for module in current.integrations if module.id not in baseline and module.id not in {item.id for item in modules})
         draft = replace(
             self._baseline, serial=serial or "", capacity_wh=self.capacity.value(),
             manual_min=self.minimum.value() if self.minimum.value() >= 0 else None,
             manual_max=self.maximum.value() if self.maximum.value() >= 0 else None,
-            msi_enabled=self.msi_enabled.isChecked(), msi_executable=msi_path, gpu_id=self.gpus.currentData() or "",
-            profiles=profiles, application_rules=self.application_rules.rules(True), system_rules=self.system_rules.rules(True),
+            integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             transparency=self.transparency.isChecked(), animations=self.animations.isChecked(),
             monitor_visible=self.visible_on_start.isChecked(), mini_enabled=self.mini_enabled.isChecked(),

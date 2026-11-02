@@ -50,7 +50,7 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
             app.removeNativeEventFilter(self)
         self._installed = False
 
-    def configure(self, bindings: tuple[HotkeyBinding, ...], msi_enabled: bool) -> tuple[str, ...]:
+    def configure(self, bindings: tuple[HotkeyBinding, ...], enabled_actions: set[str]) -> tuple[str, ...]:
         self.stop()
         if sys.platform != "win32":
             return ("hotkeys_unavailable",)
@@ -60,7 +60,7 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         failures = []
         used = set()
         for binding in bindings:
-            if not binding.enabled or not binding.combo or (not msi_enabled and binding.action not in {"toggle_monitor", "toggle_mini"}):
+            if not binding.enabled or not binding.combo or binding.action not in enabled_actions:
                 continue
             try:
                 modifiers, key = parse_combo(binding.combo)
