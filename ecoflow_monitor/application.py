@@ -1,13 +1,12 @@
-import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from ecoflow_monitor.adapters.hotkeys import HotkeyManager
 from ecoflow_monitor.adapters.accent import AccentWatcher
+from ecoflow_monitor.adapters.windows import activate_window
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
@@ -38,8 +37,6 @@ class Application(QObject):
         self._stopped = False
         self._hotkey_notice = ""
         self._hotkey_signature = None
-        self._server = None
-        self._connections = set()
         self._elevation_checked = {}
         self._elevation_prompted = {}
         self.tray = QSystemTrayIcon(app_icon(), self)
@@ -52,39 +49,15 @@ class Application(QObject):
         self.app.aboutToQuit.connect(self.stop)
         self.preferences()
 
-    def ensure_single_instance(self, path: Path) -> bool:
-        name = "EcoFlowMonitor-" + hashlib.sha256(str(path.resolve()).casefold().encode()).hexdigest()[:24]
-        server = QLocalServer(self)
-        server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
-        if server.listen(name):
-            self._server = server
-            server.newConnection.connect(self._new_connection)
-            return True
-        client = QLocalSocket()
-        client.connectToServer(name)
-        if client.waitForConnected(500):
-            client.write(b"show")
-            if client.bytesToWrite() > 0:
-                client.waitForBytesWritten(500)
-            client.disconnectFromServer()
-        else:
-            QMessageBox.warning(None, t("error_title"), t("operation_failed"))
-        return False
-
-    def _new_connection(self):
-        while self._server.hasPendingConnections():
-            socket = self._server.nextPendingConnection()
-            self._connections.add(socket)
-            def receive(connection=socket):
-                if bytes(connection.readAll()) == b"show":
-                    self.window.request_visibility(True)
-            def release(connection=socket):
-                self._connections.discard(connection)
-                connection.deleteLater()
-            socket.readyRead.connect(receive)
-            socket.disconnected.connect(release)
-            if socket.bytesAvailable():
-                receive()
+    def activate_existing_window(self):
+        if self._stopped:
+            return
+        self.window.restore_for_activation()
+        target = QApplication.activeModalWidget() or self._dialog or self.window
+        if target is not self.window:
+            target.setWindowState(target.windowState() & ~Qt.WindowState.WindowMinimized)
+            target.show()
+        activate_window(target)
 
     def preferences(self):
         self._elevation_checked.clear()
@@ -224,7 +197,5 @@ class Application(QObject):
         self.window._geometry_timer.stop()
         self.mini._save_timer.stop()
         self.controller.stop()
-        if self._server is not None:
-            self._server.close()
         self.window.close()
         self.mini.close()

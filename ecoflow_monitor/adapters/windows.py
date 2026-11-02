@@ -25,3 +25,23 @@ def raise_without_focus(window: QWidget) -> None:
         user = ctypes.WinDLL("user32")
         user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
         user.SetWindowPos(int(window.winId()), wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+
+
+def allow_foreground(process_id: int) -> bool:
+    if sys.platform != "win32":
+        return False
+    user = ctypes.WinDLL("user32")
+    user.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+    user.AllowSetForegroundWindow.restype = wintypes.BOOL
+    return bool(user.AllowSetForegroundWindow(process_id))
+
+
+def activate_window(window: QWidget) -> bool:
+    window.raise_()
+    window.activateWindow()
+    if sys.platform != "win32":
+        return window.isActiveWindow()
+    user = ctypes.WinDLL("user32")
+    user.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user.SetForegroundWindow.restype = wintypes.BOOL
+    return bool(user.SetForegroundWindow(int(window.winId())))

@@ -158,6 +158,12 @@ class MonitorWindow(QWidget):
         if visible:
             raise_without_focus(self)
 
+    def restore_for_activation(self):
+        if self._quitting:
+            return
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.request_visibility(True)
+
     def apply_appearance(self):
         if self._quitting:
             return

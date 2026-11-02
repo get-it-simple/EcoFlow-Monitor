@@ -45,6 +45,41 @@ def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
     assert "No successful update" in status_tooltip(runtime.controller)
 
 
+@pytest.mark.parametrize("state", ["hidden", "minimized", "visible"])
+def test_repeat_launch_restores_monitor(runtime, qapp, state):
+    window = runtime.window
+    window.request_visibility(state != "hidden")
+    if state == "minimized":
+        window.showMinimized()
+    runtime.activate_existing_window()
+    qapp.processEvents()
+    assert window.isVisible()
+    assert not window.isMinimized()
+    assert runtime.controller.store.load().monitor_visible
+
+
+def test_repeat_launch_preserves_settings_draft(runtime, qapp):
+    from PySide6.QtCore import Qt
+    dialog = SettingsWindow(runtime.controller, runtime.window)
+    runtime._dialog = dialog
+    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+    dialog.show()
+    dialog.capacity.setValue(1234)
+    runtime.window.request_visibility(False)
+    try:
+        runtime.activate_existing_window()
+        qapp.processEvents()
+        assert runtime.window.isVisible()
+        assert dialog.isVisible()
+        assert dialog.capacity.value() == 1234
+        assert runtime.controller.settings.capacity_wh != 1234
+        assert runtime._dialog is dialog
+    finally:
+        runtime._dialog = None
+        dialog.close()
+        dialog.deleteLater()
+
+
 @pytest.mark.parametrize("size", [(320, 310), (640, 620), (900, 620), (640, 900), (1280, 1240), (1920, 1860)])
 def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size: tuple[int, int]):
     from PySide6.QtCore import QPointF

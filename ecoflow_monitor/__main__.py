@@ -8,12 +8,13 @@ import tempfile
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ecoflow_monitor import __version__, i18n
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.settings import default_settings_path
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.instance_control import InstanceController
 
 
 def main() -> int:
@@ -26,11 +27,33 @@ def main() -> int:
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-output", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    temporary = tempfile.TemporaryDirectory(prefix="ecoflow-smoke-") if args.smoke_test else None
-    settings_path = Path(temporary.name) / "settings.json" if temporary else args.settings or default_settings_path()
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("EcoFlow Monitor")
     app.setOrganizationName("EcoFlowMonitor")
+    guard = None
+    try:
+        if not args.smoke_test:
+            i18n.setup("system")
+            try:
+                guard = InstanceController()
+                if not guard.start():
+                    if guard.activate_existing():
+                        return 0
+                    QMessageBox.warning(None, i18n.t("error_title"), i18n.t("instance_activation_failed"))
+                    return 1
+            except OSError:
+                QMessageBox.warning(None, i18n.t("error_title"), i18n.t("instance_start_failed"))
+                return 1
+        if args.smoke_test:
+            with tempfile.TemporaryDirectory(prefix="ecoflow-smoke-") as directory:
+                return run_application(app, args, Path(directory) / "settings.json", guard)
+        return run_application(app, args, args.settings or default_settings_path(), guard)
+    finally:
+        if guard is not None:
+            guard.close()
+
+
+def run_application(app, args, settings_path, guard) -> int:
     if not args.smoke_test:
         try:
             directory = settings_path.parent / "logs"
@@ -41,10 +64,8 @@ def main() -> int:
         except OSError:
             pass
     runtime = Application(settings_path, native=not args.smoke_test)
-    if not args.smoke_test and not runtime.ensure_single_instance(settings_path):
-        runtime.stop()
-        return 0
-    runtime.start()
+    if guard is not None:
+        guard.activation_requested.connect(runtime.activate_existing_window)
     if args.smoke_test:
         def finish():
             result = {"version": __version__, "state": runtime.controller.connection.value, "languages": list(i18n.get_available_languages()), "main_visible": runtime.window.isVisible(), "msi_hidden": runtime.window.msi_section.isHidden()}
@@ -66,11 +87,13 @@ def main() -> int:
             runtime.stop()
             app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip")) else 1)
         QTimer.singleShot(750, finish)
-    exit_code = app.exec()
-    runtime.stop()
-    if temporary:
-        temporary.cleanup()
-    return exit_code
+    try:
+        runtime.start()
+        return app.exec()
+    finally:
+        if guard is not None:
+            guard.activation_requested.disconnect(runtime.activate_existing_window)
+        runtime.stop()
 
 
 if __name__ == "__main__":

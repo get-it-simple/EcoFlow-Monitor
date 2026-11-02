@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.7.0**.
+battery charge. Version **0.7.3**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -43,6 +43,8 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 
 - Open Settings from the top-right button or system tray. Closing the main window
   hides it; use the tray menu to exit.
+- Launching the application again restores and focuses the existing window.
+  Only one instance runs per user in a Windows session, even from another folder.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Settings > Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
