@@ -16,11 +16,16 @@ def msi_module(tmp_path, monkeypatch):
     executable = tmp_path / "MSIAfterburner.exe"
     executable.write_bytes(b"synthetic")
     process = SimpleNamespace(info={"name": executable.name, "exe": str(executable)})
-    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.psutil.process_iter", lambda *args: (process,))
+    def process_iter(attrs):
+        assert attrs == ["name", "exe"]
+        return (process,)
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.psutil.process_iter", process_iter)
     return replace(afterburner_example(), enabled=True, executable=str(executable), gpu_id="obsolete GPU identity")
 
 
-def test_saved_slots_dispatch_without_gpu_files_or_shared_memory(msi_module, monkeypatch):
+@pytest.mark.parametrize("driver", ["afterburner", "cli"])
+def test_cli_dispatch_without_gpu_files_or_shared_memory(msi_module, monkeypatch, driver):
+    msi_module = replace(msi_module, driver=driver)
     calls = []
     def forbidden(*args, **kwargs):
         pytest.fail("CLI integration must not inspect GPU files or native shared memory")

@@ -115,7 +115,9 @@ that an external application applied the profile.
 **Allow commands to start the application** is initially off for custom modules.
 Enable it if their CLI must work while the target application is stopped.
 MSI always requires an already-running instance and only accepts existing saved
-slots; its GPU observation and ambiguity checks remain in effect.
+slots; ambiguous executable discovery requires an explicit path. All integrations
+use CLI commands and their completion results. They never read another program's
+process memory, shared memory, or internal GPU profile files.
 
 This complete module can be saved as `example.json` and imported:
 

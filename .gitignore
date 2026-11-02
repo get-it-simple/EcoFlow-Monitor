@@ -10,6 +10,11 @@ dist/
 .venv/
 venv/
 .idea/
+*.iml
+*.ipr
+*.iws
+.run/*
+!.run/Tests (pytest).run.xml
 /docs/
 settings.json
 settings.json.bak
