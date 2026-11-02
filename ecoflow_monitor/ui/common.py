@@ -6,6 +6,11 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QW
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.domain import ConnectionState
+from ecoflow_monitor.integrations import IntegrationProfile
+
+
+def profile_tooltip(profile: IntegrationProfile) -> str:
+    return "\n".join(part for part in (profile.label, profile.technical_details) if part)
 
 
 def elevation_prompt(parent: QWidget, name: str) -> QMessageBox:

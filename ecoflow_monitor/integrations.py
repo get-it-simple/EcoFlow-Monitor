@@ -37,6 +37,7 @@ class IntegrationProfile:
     deactivation: Reaction = field(default_factory=Reaction)
     slot: int | None = None
     power_pct: float | None = None
+    technical_details: str = ""
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,8 @@ class IntegrationDefinition:
             if profile.id in profile_ids or not isinstance(profile.label, str) or not profile.label.strip():
                 raise ValueError("Duplicate or invalid profile")
             profile_ids.add(profile.id)
+            if not isinstance(profile.technical_details, str):
+                raise ValueError("Invalid profile technical details")
             if profile.power_pct is not None and (type(profile.power_pct) not in (int, float) or not math.isfinite(profile.power_pct) or not 1 <= profile.power_pct <= 200):
                 raise ValueError("Invalid descriptive power")
             if self.driver == "afterburner":

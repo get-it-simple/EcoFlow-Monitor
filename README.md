@@ -1,7 +1,7 @@
 # EcoFlow Monitor
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional modular CLI integrations,
-profile reactions and application/system automation rules. Version **0.3.2**.
+profile reactions and application/system automation rules. Version **0.5.0**.
 
 The application uses only the official EcoFlow developer API. The model mapping
 follows the official documentation; real-device validation remains pending.
@@ -24,7 +24,8 @@ are different from an EcoFlow mobile-app email/password.
 - Settings are available from the top-right button or tray menu. Closing the main
   window hides it; use the tray menu to exit.
 - Toggle **Transparent background** in Appearance for a translucent dark main
-  background or a solid one. Save applies the change without restarting.
+  background or a solid one. Set **Main background transparency** from 0% (solid)
+  to 100% (invisible background). Save applies the change without restarting.
   Transparency affects the background only and does not use Windows acrylic.
 - `Ctrl+Alt+NumPad5` shows/hides monitoring. Other shortcuts are configurable and
   initially unassigned. A shortcut owned by another app is reported as unavailable.
@@ -147,7 +148,7 @@ This complete module can be saved as `example.json` and imported:
       "activation": {"enabled": true, "commands": ["{app} {cli:low}"]},
       "deactivation": {"enabled": false, "commands": ["{app} {cli:normal}"]},
       "slot": null,
-      "power_pct": null
+      "technical_details": "Power saving preset for battery operation."
     }
   ],
   "application_rules": [],
@@ -161,6 +162,11 @@ their collection. New custom modules use `driver: "cli"`; the bundled MSI exampl
 uses the built-in `afterburner` adapter. Unknown formats and invalid references
 are rejected without replacing existing modules. Duplicate integration IDs
 are rejected; edit the ID before importing a separate copy.
+
+Use each profile's Technical details field for multiline comments. Hover over a
+profile in the monitor, profile list or rule selector to read its details. These
+comments do not change commands or automation. Appearance controls and each
+integration's hotkeys are grouped into expandable sections.
 
 A system rule can be added through the editor or JSON, for example
 `{"id":"low_battery","profile_id":"eco","enabled":true,"input_condition":"absent","min_soc":0,"max_soc":20,"executable":""}`.

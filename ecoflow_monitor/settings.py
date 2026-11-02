@@ -38,6 +38,7 @@ class AppSettings:
     language: str = "system"
     scale: float = 1
     transparency: bool = True
+    background_opacity: float = 140 / 255
     animations: bool = True
     monitor_visible: bool = True
     monitor_geometry: tuple[int, int, int, int] = (-1, -1, 660, 820)
@@ -54,7 +55,7 @@ class AppSettings:
             raise ValueError("Boolean preference expected")
         if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language)):
             raise ValueError("Text preference expected")
-        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1)):
+        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
                 raise ValueError("Invalid numeric setting")
         for value in (self.manual_min, self.manual_max):
@@ -93,7 +94,7 @@ class AppSettings:
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
-            "appearance": {"scale": self.scale, "transparency": self.transparency, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry)},
+            "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry)},
             "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
 
@@ -129,6 +130,7 @@ class AppSettings:
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),
             transparency=boolean(appearance, "transparency", True), animations=boolean(appearance, "animations", True),
+            background_opacity=appearance.get("background_opacity", defaults.background_opacity),
             monitor_visible=boolean(appearance, "visible", True), monitor_geometry=tuple(appearance.get("geometry", defaults.monitor_geometry)),
             mini_enabled=boolean(mini, "enabled", False), mini_metrics=tuple(mini.get("metrics", defaults.mini_metrics)),
             mini_scale=mini.get("scale", 1), mini_transparency=mini.get("transparency", 0.8),

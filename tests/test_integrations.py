@@ -316,6 +316,36 @@ def test_profile_editor_reactions_preserve_enabled_states(qapp):
     finally:
         dialog.deleteLater()
 
+
+def test_profile_technical_details_roundtrip_and_legacy_default():
+    module = module_example()
+    payload = module.to_dict()
+    for profile in payload["profiles"]:
+        profile.pop("technical_details")
+    restored = IntegrationDefinition.from_dict(payload)
+    assert all(profile.technical_details == "" for profile in restored.profiles)
+    details = "Battery preset\nGPU limit: 70% <manual> & quiet fans"
+    updated = replace(restored, profiles=(replace(restored.profiles[0], technical_details=details),))
+    assert IntegrationDefinition.from_dict(json.loads(json.dumps(updated.to_dict()))) == updated
+    payload["profiles"][0]["technical_details"] = 12
+    with pytest.raises(ValueError, match="technical details"):
+        IntegrationDefinition.from_dict(payload)
+
+
+@pytest.mark.parametrize("driver", ["cli", "afterburner"])
+def test_profile_editor_saves_technical_details_for_all_drivers(qapp, driver):
+    module = module_example() if driver == "cli" else afterburner_example()
+    profile = replace(module.profiles[0], power_pct=85)
+    dialog = ProfileDialog(module, profile)
+    try:
+        dialog.technical_details.setPlainText("Quiet mode\nSaved preset; no GPU observation")
+        dialog.save()
+        assert dialog.result() == QDialog.DialogCode.Accepted
+        assert dialog.profile.technical_details == "Quiet mode\nSaved preset; no GPU observation"
+        assert dialog.profile.power_pct == 85
+    finally:
+        dialog.deleteLater()
+
 @pytest.mark.parametrize("field,value", [
     ("conditions", "soc"),
     ("mapping", {}),

@@ -1,13 +1,14 @@
 import uuid
 from typing import cast
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationProfile, IntegrationRule
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import action
+from ecoflow_monitor.ui.common import action, profile_tooltip
 
 
 def optional_percent() -> QDoubleSpinBox:
@@ -118,7 +119,10 @@ class RulesEditor(QWidget):
         profile = QComboBox()
         for item in self.profiles:
             profile.addItem(item.label, item.id)
+            profile.setItemData(profile.count() - 1, profile_tooltip(item), Qt.ItemDataRole.ToolTipRole)
+        profile.currentIndexChanged.connect(lambda: profile.setToolTip(profile.currentData(Qt.ItemDataRole.ToolTipRole) or ""))
         profile.setCurrentIndex(profile.findData(rule.profile_id))
+        profile.setToolTip(profile.currentData(Qt.ItemDataRole.ToolTipRole) or "")
         self.table.setCellWidget(row, column + 3, profile)
         self.table.selectRow(row)
         self.table.resizeRowsToContents()

@@ -5,13 +5,15 @@ import subprocess
 import uuid
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, Reaction, afterburner_example, template_tokens
-from ecoflow_monitor.ui.common import action, clamp_window, hint
+from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_tooltip
+from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.rules import RulesEditor
+from ecoflow_monitor.ui.theme import SETTINGS_STYLE
 
 
 class ExecutableField(QLineEdit):
@@ -38,6 +40,8 @@ class ProfileDialog(QDialog):
     def __init__(self, module: IntegrationDefinition, profile: IntegrationProfile | None = None, parent=None):
         super().__init__(parent)
         self.module = module
+        self.setObjectName("settings_dialog")
+        self.setStyleSheet(SETTINGS_STYLE)
         self.setWindowTitle(t("integration_profile"))
         self.resize(640, 620)
         outer = QVBoxLayout(self)
@@ -48,22 +52,28 @@ class ProfileDialog(QDialog):
         scroll.setWidget(body)
         outer.addWidget(scroll)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.identity = QLineEdit(profile.id if profile else uuid.uuid4().hex)
         self.identity.setReadOnly(profile is not None)
         self.label = QLineEdit(profile.label if profile else "")
         self.slot = QSpinBox()
         self.slot.setRange(1, 5)
         self.slot.setValue(profile.slot if profile and profile.slot else 1)
-        self.power = QDoubleSpinBox()
-        self.power.setRange(0, 200)
-        self.power.setSpecialValueText(t("unset"))
-        self.power.setValue(profile.power_pct if profile and profile.power_pct else 0)
-        form.addRow(t("integration_id"), self.identity)
+        self.technical_details = QPlainTextEdit(profile.technical_details if profile else "")
+        self.technical_details.setPlaceholderText(t("profile_technical_details_hint"))
+        self.technical_details.setMinimumHeight(self.fontMetrics().lineSpacing() * 5)
         form.addRow(t("profile_label"), self.label)
         if module.driver == "afterburner":
             form.addRow(t("rule_profile"), self.slot)
-            form.addRow(t("profile_power"), self.power)
+        form.addRow(t("profile_technical_details"), self.technical_details)
         layout.addLayout(form)
+        layout.addWidget(hint(t("integration_profile_help")))
+        advanced = CollapsibleSection(t("integration_advanced"))
+        advanced_form = QFormLayout()
+        advanced_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        advanced.content.addLayout(advanced_form)
+        advanced_form.addRow(t("integration_id"), self.identity)
+        layout.addWidget(advanced)
         self.reactions = {}
         for name in ("activation", "deactivation"):
             reaction = getattr(profile, name) if profile else Reaction()
@@ -96,7 +106,9 @@ class ProfileDialog(QDialog):
         layout.addWidget(hint(t("integration_reaction_hint")))
         buttons = QHBoxLayout()
         buttons.addWidget(action(t("cancel"), self.reject))
-        buttons.addWidget(action(t("save"), self.save))
+        save_button = action(t("save"), self.save)
+        save_button.setObjectName("primary")
+        buttons.addWidget(save_button)
         outer.addLayout(buttons)
         self.profile: IntegrationProfile | None = profile
 
@@ -109,7 +121,8 @@ class ProfileDialog(QDialog):
             reactions = {name: Reaction(toggle.isChecked(), tuple(line.strip() for line in editor.toPlainText().splitlines() if line.strip())) for name, (toggle, editor) in self.reactions.items()}
             profile = IntegrationProfile(self.identity.text().strip(), self.label.text().strip(), **reactions,
                                          slot=self.slot.value() if self.module.driver == "afterburner" else None,
-                                         power_pct=self.power.value() or None)
+                                         power_pct=self.profile.power_pct if self.profile else None,
+                                         technical_details=self.technical_details.toPlainText())
             profiles = tuple(item for item in self.module.profiles if self.profile is None or item.id != self.profile.id) + (profile,)
             replace(self.module, profiles=profiles).validate()
             self.profile = profile
@@ -128,7 +141,10 @@ class IntegrationsEditor(QWidget):
         self._index = -1
         self._profiles: tuple[IntegrationProfile, ...] = ()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.addWidget(hint(t("integration_setup_help")))
         self.selector = QComboBox()
+        self.selector.setAccessibleName(t("integrations"))
         self.selector.currentIndexChanged.connect(self.select)
         layout.addWidget(self.selector)
         buttons = QHBoxLayout()
@@ -137,8 +153,12 @@ class IntegrationsEditor(QWidget):
         layout.addLayout(buttons)
         self.body = QTabWidget()
         layout.addWidget(self.body)
+        self.empty_hint = hint(t("integration_empty_help"))
+        layout.addWidget(self.empty_hint)
         general = QWidget()
         form = QFormLayout(general)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.addRow(hint(t("integration_general_help")))
         self.identity = QLineEdit()
         self.identity.setReadOnly(True)
         self.label = QLineEdit()
@@ -148,21 +168,29 @@ class IntegrationsEditor(QWidget):
         path_row = QHBoxLayout()
         path_row.addWidget(self.path)
         path_row.addWidget(action(t("browse"), self.browse))
-        form.addRow(t("integration_id"), self.identity)
         form.addRow(t("profile_label"), self.label)
         form.addRow(self.enabled)
         form.addRow(t("integration_executable"), path_row)
         form.addRow(self.allow_launch)
+        conditions_group = QGroupBox(t("integration_conditions_title"))
+        conditions_form = QVBoxLayout(conditions_group)
         self.conditions = {}
         for name, key in (("application", "application_rules"), ("input", "rule_input"), ("soc", "battery_level")):
             control = QCheckBox(t(key))
             self.conditions[name] = control
-            form.addRow(control)
-        form.addRow(hint(t("integration_conditions_hint")))
+            conditions_form.addWidget(control)
+        conditions_form.addWidget(hint(t("integration_conditions_hint")))
+        form.addRow(conditions_group)
+        form.addRow(t("integration_id"), self.identity)
+        self.identity.setToolTip(t("integration_id_help"))
         self.body.addTab(general, t("integration_general"))
         mapping_body = QWidget()
         mapping_layout = QVBoxLayout(mapping_body)
         self.mapping = QTableWidget(0, 3)
+        self.mapping.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.mapping.setAlternatingRowColors(True)
+        self.mapping.verticalHeader().hide()
+        self.mapping.setAccessibleName(t("integration_mapping"))
         self.mapping.setHorizontalHeaderLabels([t("integration_id"), t("profile_label"), t("integration_arguments")])
         self.mapping.horizontalHeader().setStretchLastSection(True)
         self.mapping.itemChanged.connect(self.mapping_tooltip)
@@ -175,7 +203,9 @@ class IntegrationsEditor(QWidget):
         self.body.addTab(mapping_body, t("integration_mapping"))
         profiles_body = QWidget()
         profiles_layout = QVBoxLayout(profiles_body)
+        profiles_layout.addWidget(hint(t("integration_profile_help")))
         self.profiles = QListWidget()
+        self.profiles.setAccessibleName(t("integration_profiles"))
         profile_buttons = QHBoxLayout()
         profile_buttons.addWidget(action(t("integration_add_profile"), lambda: self.edit_profile(False)))
         profile_buttons.addWidget(action(t("integration_edit_profile"), lambda: self.edit_profile(True)))
@@ -263,6 +293,8 @@ class IntegrationsEditor(QWidget):
             return
         self._index = index
         self.body.setEnabled(index >= 0)
+        self.body.setVisible(index >= 0)
+        self.empty_hint.setVisible(index < 0)
         if index < 0:
             return
         module = self._modules[index]
@@ -324,7 +356,7 @@ class IntegrationsEditor(QWidget):
         self.profiles.addItems([profile.label for profile in self._profiles])
         for index in range(self.profiles.count()):
             item = self.profiles.item(index)
-            item.setToolTip(item.text())
+            item.setToolTip(profile_tooltip(self._profiles[index]))
         self.profiles.setCurrentRow(max(0, min(row, len(self._profiles) - 1)))
         self.update_conditions()
 

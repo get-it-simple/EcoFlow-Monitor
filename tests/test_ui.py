@@ -45,6 +45,85 @@ def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
     assert "No successful update" in status_tooltip(runtime.controller)
 
 
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
+def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, language, scale):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+    controller = runtime.controller
+    module = replace(controller.settings.integrations[0], enabled=True)
+    controller.apply_settings(replace(controller.settings, language=language, scale=scale, integrations=(module,)))
+    dialog = SettingsWindow(controller, runtime.window)
+    try:
+        dialog.show()
+        dialog.tabs.setCurrentIndex(2)
+        qapp.processEvents()
+        for section in dialog.appearance_sections.values():
+            assert section.body.isHidden()
+            QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
+        qapp.processEvents()
+        sections = list(dialog.appearance_sections.values())
+        for above, below in zip(sections, sections[1:]):
+            assert above.geometry().bottom() < below.geometry().top()
+        scroller = dialog.tabs.currentWidget()
+        assert scroller.widget().height() >= scroller.widget().minimumSizeHint().height()
+        dialog.scale.setValue(125)
+        sections[0].set_expanded(False)
+        sections[0].set_expanded(True)
+        assert dialog.scale.value() == 125
+        dialog.tabs.setCurrentIndex(3)
+        section = dialog.hotkey_sections[module.id]
+        assert section.body.isHidden()
+        QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
+        qapp.processEvents()
+        fields = [field for name, (field, _, _) in dialog.hotkey_rows.items() if ":" in name]
+        for above, below in zip(fields, fields[1:]):
+            assert above.geometry().bottom() < below.geometry().top()
+        for field in fields:
+            label = field.findChild(QLabel)
+            assert label.height() >= label.heightForWidth(label.width())
+        name = "profile:afterburner:profile_3"
+        dialog.hotkey_rows[name][1].set_combo("ctrl+shift+num3")
+        section.set_expanded(False)
+        dialog._refresh_hotkeys()
+        assert dialog.hotkey_sections[module.id].body.isHidden()
+        assert dialog.hotkey_rows[name][1].combo() == "ctrl+shift+num3"
+        dialog.load_draft()
+        assert dialog.gather().scale == scale
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
+    from PySide6.QtCore import Qt
+    from ecoflow_monitor.integrations import IntegrationRule
+    from ecoflow_monitor.ui.integrations import IntegrationsEditor
+    module = runtime.controller.settings.integrations[0]
+    profiles = tuple(replace(profile, technical_details=f"Notes for {profile.id}\n70% <manual>") for profile in module.profiles)
+    module = replace(module, enabled=True, profiles=profiles, system_rules=(IntegrationRule("example", profiles[0].id),))
+    runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(module,)))
+    window = runtime.window
+    window.refresh()
+    window.profile_choice.setCurrentIndex(1)
+    expected = profiles[1].label + "\n" + profiles[1].technical_details
+    assert window.profile_choice.toolTip() == expected
+    assert window.profile_choice.itemData(1, Qt.ItemDataRole.ToolTipRole) == expected
+    editor = IntegrationsEditor()
+    try:
+        editor.load((module,))
+        assert editor.profiles.item(1).toolTip() == expected
+        combo = editor.system_rules.table.cellWidget(0, 4)
+        combo.setCurrentIndex(1)
+        assert combo.toolTip() == expected
+        updated = replace(module, profiles=tuple(replace(profile, technical_details="Updated") for profile in profiles))
+        runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(updated,)))
+        window.refresh()
+        assert window.profile_choice.toolTip() == profiles[1].label + "\nUpdated"
+    finally:
+        editor.deleteLater()
+
+
 def test_helper_requires_consent_and_does_not_repeat_on_auto_toggle(runtime, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
     from types import SimpleNamespace
@@ -216,7 +295,10 @@ def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, 
     dialog = SettingsWindow(controller, runtime.window)
     dialog.show()
     qapp.processEvents()
-    assert dialog.capacity.font().pixelSize() == round(13 * effective_scale(dialog, scale))
+    assert dialog.capacity.font().pixelSize() == dialog.font().pixelSize()
+    assert 6 <= dialog.capacity.font().pixelSize() <= round(13 * effective_scale(dialog, scale))
+    assert dialog.screen().availableGeometry().contains(dialog.geometry())
+    assert controller.settings.scale == scale
     dialog.close()
     dialog.deleteLater()
 
@@ -265,9 +347,9 @@ def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
     assert runtime.window.auto_toggle.text() == i18n.t("automatic_mode")
 
 
-@pytest.mark.parametrize("enabled,alpha", [(True, 140), (False, 255)])
-def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, alpha):
-    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
+@pytest.mark.parametrize("enabled,opacity,alpha", [(True, 140 / 255, 140), (False, 0.25, 255), (True, 0, 0), (True, 0.25, 64), (True, 1, 255)])
+def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, opacity, alpha):
+    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, background_opacity=opacity, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     window = runtime.window
     window.show()
     qapp.processEvents()
@@ -318,6 +400,31 @@ def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
         assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 140
     finally:
         dialog.deleteLater()
+
+
+def test_background_transparency_draft_reset_save_and_cancel(runtime, qapp):
+    dialog = SettingsWindow(runtime.controller, runtime.window)
+    try:
+        dialog.background_transparency.setValue(75)
+        assert runtime.controller.settings.background_opacity == 140 / 255
+        dialog.load_draft()
+        assert dialog.gather().background_opacity == 140 / 255
+        dialog.transparency.setChecked(False)
+        assert not dialog.background_transparency.isEnabled()
+        dialog.transparency.setChecked(True)
+        dialog.background_transparency.setValue(75)
+        dialog.save()
+        assert runtime.controller.store.load().background_opacity == 0.25
+        runtime.window.show()
+        qapp.processEvents()
+        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 64
+    finally:
+        dialog.deleteLater()
+    cancelled = SettingsWindow(runtime.controller, runtime.window)
+    cancelled.background_transparency.setValue(10)
+    cancelled.reject()
+    assert runtime.controller.store.load().background_opacity == 0.25
+    cancelled.deleteLater()
 
 
 @pytest.mark.parametrize("visible", [False, True])

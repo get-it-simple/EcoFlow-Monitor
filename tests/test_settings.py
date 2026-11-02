@@ -50,6 +50,27 @@ def test_version_zero_migrates_without_erasing_values():
     assert settings.to_dict()["version"] == 2
 
 
+def test_background_opacity_defaults_for_existing_settings():
+    payload = AppSettings().to_dict()
+    del payload["appearance"]["background_opacity"]
+    assert AppSettings.from_dict(payload).background_opacity == 140 / 255
+
+
+@pytest.mark.parametrize("opacity", [0, 0.25, 1])
+def test_background_opacity_persists(tmp_path, opacity):
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save(replace(AppSettings(), background_opacity=opacity))
+    assert store.load().background_opacity == opacity
+
+
+@pytest.mark.parametrize("opacity", [-0.01, 1.01, True, None, "0.5", float("nan"), float("inf")])
+def test_invalid_background_opacity_is_rejected(opacity):
+    payload = AppSettings().to_dict()
+    payload["appearance"]["background_opacity"] = opacity
+    with pytest.raises(ValueError):
+        AppSettings.from_dict(payload)
+
+
 @pytest.mark.parametrize("changes", [{"scale": 0}, {"capacity_wh": float("nan")}, {"manual_min": 90, "manual_max": 80}, {"mini_metrics": ()}, {"mini_metrics": ("battery_level", "battery_level")}, {"mini_dock": "invalid"}])
 def test_invalid_preferences_are_rejected(changes):
     with pytest.raises(ValueError):
