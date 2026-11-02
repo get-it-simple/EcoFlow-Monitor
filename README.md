@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.7.3**.
+battery charge. Version **0.8.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -11,8 +11,16 @@ remains pending.
 
 ## Install
 
-Extract the portable ZIP to a writable folder and run `EcoFlowMonitor.exe`.
-No installer is required. Windows 10/11 x64 is supported.
+Download the machine installer or portable ZIP from
+[GitHub Releases](https://github.com/get-it-simple/EcoFlow-Monitor/releases).
+The installer installs for all users in Program Files and requests administrator
+approval. Windows 10 version 1809 or newer and Windows 11 x64 are supported.
+
+For portable use, extract the ZIP to a writable folder and run `EcoFlowMonitor.exe`.
+Installed copies save settings and logs in `%LOCALAPPDATA%\EcoFlowMonitor`;
+portable copies use their own folder when writable. Updates and uninstall preserve
+settings, logs and developer keys. Updates close the installed application safely;
+close copies running in other Windows sessions before updating.
 
 Open Settings, enter your official EcoFlow developer access/secret keys, and click
 **Load my devices**. Select your DELTA 3 Max and save. The list contains your bound

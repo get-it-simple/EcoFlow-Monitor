@@ -92,3 +92,21 @@ def test_reordered_json_profiles_keep_their_slot_identity():
     payload["integrations"][0]["profiles"].reverse()
     settings = AppSettings.from_dict(payload)
     assert [(profile.slot, profile.power_pct) for profile in sorted(settings.integrations[0].profiles, key=lambda item: item.slot)] == [(1, 100), (2, 95), (3, 90), (4, 85), (5, 51)]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_installed_settings_use_user_data_even_when_executable_directory_is_writable(tmp_path, monkeypatch, installed):
+    import sys
+    from ecoflow_monitor.settings import default_settings_path
+
+    binary = tmp_path / "application"
+    binary.mkdir()
+    local = tmp_path / "user-data"
+    monkeypatch.setitem(vars(sys), "frozen", True)
+    monkeypatch.setattr(sys, "executable", str(binary / "EcoFlowMonitor.exe"))
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    if installed:
+        (binary / ".ecoflow-monitor-installed").write_text("scope=machine\n", encoding="utf-8")
+    expected = local / "EcoFlowMonitor/settings.json" if installed else binary / "settings.json"
+    assert default_settings_path() == expected
+    assert not local.exists()

@@ -184,6 +184,11 @@ class SettingsStore:
 
 def default_settings_path() -> Path:
     base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    if getattr(sys, "frozen", False) and (base / ".ecoflow-monitor-installed").is_file():
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            raise SettingsError("settings_save_error")
+        return Path(local) / "EcoFlowMonitor" / "settings.json"
     try:
         with tempfile.TemporaryFile(dir=base):
             pass

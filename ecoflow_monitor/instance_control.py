@@ -1,5 +1,8 @@
 import os
+from pathlib import Path
 import time
+
+import psutil
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -10,6 +13,7 @@ from ecoflow_monitor.adapters.windows import allow_foreground
 
 class InstanceController(QObject):
     activation_requested = Signal()
+    shutdown_requested = Signal()
 
     def __init__(self, name: str | None = None, parent: QObject | None = None):
         super().__init__(parent)
@@ -29,6 +33,12 @@ class InstanceController(QObject):
         return True
 
     def activate_existing(self, timeout_ms: int = 5000) -> bool:
+        return self._request(b"activate\n", timeout_ms)
+
+    def shutdown_existing(self, timeout_ms: int = 5000, expected_executable: Path | None = None) -> bool:
+        return self._request(b"shutdown\n", timeout_ms, expected_executable)
+
+    def _request(self, command: bytes, timeout_ms: int, expected_executable: Path | None = None) -> bool:
         deadline = time.monotonic() + timeout_ms / 1000
         def remaining():
             return max(0, int((deadline - time.monotonic()) * 1000))
@@ -56,8 +66,16 @@ class InstanceController(QObject):
                 return False
             if not greeting.startswith(b"pid ") or not 0 < process_id <= 0xFFFFFFFF:
                 return False
-            allow_foreground(process_id)
-            socket.write(b"activate\n")
+            if command == b"shutdown\n":
+                try:
+                    expected = expected_executable or Path(psutil.Process().exe())
+                    if Path(psutil.Process(process_id).exe()).resolve() != expected.resolve():
+                        return False
+                except (OSError, psutil.Error):
+                    return False
+            else:
+                allow_foreground(process_id)
+            socket.write(command)
             if socket.bytesToWrite() and not socket.waitForBytesWritten(remaining()):
                 return False
             return read_line() == b"ok\n"
@@ -93,6 +111,10 @@ class InstanceController(QObject):
             self.activation_requested.emit()
             socket.write(b"ok\n")
             socket.disconnectFromServer()
+        elif bytes(buffer) == b"shutdown\n":
+            socket.write(b"ok\n")
+            socket.disconnectFromServer()
+            QTimer.singleShot(0, self.shutdown_requested.emit)
         else:
             socket.abort()
 

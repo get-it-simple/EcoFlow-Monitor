@@ -1,12 +1,10 @@
 import argparse
-import hashlib
 import importlib.metadata
 from pathlib import Path
 import os
 import struct
 import subprocess
 import sys
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from packaging.requirements import Requirement
 
@@ -55,6 +53,7 @@ def version_resource() -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the portable Windows application")
     parser.add_argument("--install-missing", action="store_true")
+    parser.add_argument("--dist-dir", type=Path, default=ROOT / "dist" / __version__)
     args = parser.parse_args()
     if sys.platform != "win32" or struct.calcsize("P") != 8:
         parser.error("Use a 64-bit Windows Python interpreter")
@@ -70,7 +69,7 @@ def main() -> None:
     command = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--onefile", "--windowed",
         "--name", "EcoFlowMonitor", "--paths", str(ROOT),
-        "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build" / "pyinstaller"),
+        "--distpath", str(args.dist_dir.resolve()), "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), "--version-file", str(version_resource()),
         "--icon", str(ROOT / "ecoflow_monitor" / "ui" / "assets" / "app.ico"),
         "--collect-data", "ecoflow_monitor.i18n", "--collect-data", "ecoflow_monitor.ui",
@@ -78,20 +77,10 @@ def main() -> None:
         str(ROOT / "ecoflow_monitor" / "__main__.py"),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
-    executable = ROOT / "dist" / "EcoFlowMonitor.exe"
-    with executable.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    archive_path = ROOT / "dist" / f"EcoFlowMonitor-{__version__}-portable.zip"
-    with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
-        archive.write(executable, "EcoFlowMonitor.exe")
-        archive.write(ROOT / "README.md", "README.md")
-    with ZipFile(archive_path) as archive:
-        if set(archive.namelist()) != {"EcoFlowMonitor.exe", "README.md"}:
-            raise RuntimeError("Unexpected portable archive payload")
-        if hashlib.sha256(archive.read("EcoFlowMonitor.exe")).hexdigest() != digest:
-            raise RuntimeError("Portable archive executable hash mismatch")
-    (ROOT / "dist" / f"EcoFlowMonitor-{__version__}.sha256").write_text(digest + "  EcoFlowMonitor.exe\n", encoding="utf-8")
-    print(f"Built {executable.name} and {archive_path.name}; SHA-256 {digest}")
+    from scripts.release import package_portable
+    executable = args.dist_dir.resolve() / "EcoFlowMonitor.exe"
+    package_portable(executable, args.dist_dir.resolve() / f"EcoFlowMonitor-{__version__}-portable.zip")
+    print(f"Built and verified {executable}")
 
 
 if __name__ == "__main__":

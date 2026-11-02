@@ -24,6 +24,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="DELTA 3 Max monitoring and saved GPU profile automation")
     parser.add_argument("--settings", type=Path)
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--shutdown-for-update", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-output", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -32,6 +33,9 @@ def main() -> int:
     app.setOrganizationName("EcoFlowMonitor")
     guard = None
     try:
+        if args.shutdown_for_update:
+            guard = InstanceController()
+            return 0 if guard.shutdown_existing() else 2
         if not args.smoke_test:
             i18n.setup("system")
             try:
@@ -66,6 +70,7 @@ def run_application(app, args, settings_path, guard) -> int:
     runtime = Application(settings_path, native=not args.smoke_test)
     if guard is not None:
         guard.activation_requested.connect(runtime.activate_existing_window)
+        guard.shutdown_requested.connect(app.quit)
     if args.smoke_test:
         def finish():
             result = {"version": __version__, "state": runtime.controller.connection.value, "languages": list(i18n.get_available_languages()), "main_visible": runtime.window.isVisible(), "msi_hidden": runtime.window.msi_section.isHidden()}
@@ -93,6 +98,7 @@ def run_application(app, args, settings_path, guard) -> int:
     finally:
         if guard is not None:
             guard.activation_requested.disconnect(runtime.activate_existing_window)
+            guard.shutdown_requested.disconnect(app.quit)
         runtime.stop()
 
 

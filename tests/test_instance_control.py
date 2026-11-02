@@ -134,6 +134,7 @@ def test_invalid_command_does_not_activate(qapp, command):
     guard = InstanceController("EcoFlowMonitor-test-" + uuid.uuid4().hex)
     socket = QLocalSocket()
     spy = QSignalSpy(guard.activation_requested)
+    shutdown = QSignalSpy(guard.shutdown_requested)
     try:
         assert guard.start()
         socket.connectToServer(guard.name)
@@ -141,6 +142,7 @@ def test_invalid_command_does_not_activate(qapp, command):
         socket.write(command)
         wait_until(qapp, lambda: socket.state() == QLocalSocket.LocalSocketState.UnconnectedState)
         assert spy.count() == 0
+        assert shutdown.count() == 0
     finally:
         socket.abort()
         guard.close()
@@ -152,5 +154,35 @@ def test_unavailable_primary_has_bounded_timeout(qapp):
         start = time.monotonic()
         assert not guard.activate_existing(timeout_ms=100)
         assert time.monotonic() - start < 1
+    finally:
+        guard.close()
+
+
+@pytest.mark.parametrize("mode,expected", [("shutdown", b"stopped"), ("shutdown-wrong-path", b"failed")])
+def test_shutdown_targets_matching_executable_only(qapp, tmp_path, mode, expected):
+    name = "EcoFlowMonitor-test-" + uuid.uuid4().hex
+    primary = worker("primary", name, tmp_path)
+    secondary = None
+    try:
+        assert next_line(primary) == b"primary"
+        secondary = worker(mode, name, tmp_path)
+        assert next_line(secondary) == expected
+        assert secondary.waitForFinished(3000)
+        if mode == "shutdown":
+            assert primary.waitForFinished(3000)
+            assert primary.exitCode() == 0
+        else:
+            assert primary.state() == QProcess.ProcessState.Running
+    finally:
+        stop_worker(primary)
+        if secondary is not None:
+            stop_worker(secondary)
+
+
+def test_shutdown_without_primary_does_not_start_one(qapp):
+    guard = InstanceController("EcoFlowMonitor-test-" + uuid.uuid4().hex)
+    try:
+        assert not guard.shutdown_existing(timeout_ms=100)
+        assert guard.start()
     finally:
         guard.close()

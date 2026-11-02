@@ -69,3 +69,23 @@ def test_smoke_entry_uses_temporary_settings_without_main_instance_guard(qapp, m
     assert entry.main() == 0
     assert len(paths) == 1
     assert not paths[0].parent.exists()
+
+
+@pytest.mark.parametrize("stopped,expected", [(True, 0), (False, 2)])
+def test_shutdown_entry_never_starts_runtime_or_acquires_primary(qapp, monkeypatch, stopped, expected):
+    class Shutdown:
+        closed = False
+
+        def shutdown_existing(self):
+            return stopped
+
+        def close(self):
+            self.closed = True
+
+    guard = Shutdown()
+    monkeypatch.setattr(sys, "argv", ["ecoflow-monitor", "--shutdown-for-update"])
+    monkeypatch.setitem(vars(entry), "InstanceController", lambda: guard)
+    monkeypatch.setitem(vars(entry), "Application", lambda *args, **kwargs: pytest.fail("Shutdown started runtime"))
+    monkeypatch.setitem(vars(entry), "default_settings_path", lambda: pytest.fail("Shutdown accessed settings"))
+    assert entry.main() == expected
+    assert guard.closed
