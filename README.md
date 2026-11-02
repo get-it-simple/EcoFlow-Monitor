@@ -1,7 +1,7 @@
 # EcoFlow Monitor
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional modular CLI integrations,
-profile reactions and application/system automation rules. Version **0.5.0**.
+profile reactions and application/system automation rules. Version **0.7.0**.
 
 The application uses only the official EcoFlow developer API. The model mapping
 follows the official documentation; real-device validation remains pending.
@@ -23,6 +23,9 @@ are different from an EcoFlow mobile-app email/password.
   port loads, and approximate output-based runtime without input power.
 - Settings are available from the top-right button or tray menu. Closing the main
   window hides it; use the tray menu to exit.
+- Settings use a dark background and follow the Windows accent color live.
+  Percentage settings offer both numeric input and a slider. Enable an optional
+  charge limit with **Set value**, or disable it to leave the limit unset.
 - Toggle **Transparent background** in Appearance for a translucent dark main
   background or a solid one. Set **Main background transparency** from 0% (solid)
   to 100% (invisible background). Save applies the change without restarting.

@@ -13,7 +13,7 @@ from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, Inte
 from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_tooltip
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.rules import RulesEditor
-from ecoflow_monitor.ui.theme import SETTINGS_STYLE
+from ecoflow_monitor.ui.theme import bind_style, settings_style
 
 
 class ExecutableField(QLineEdit):
@@ -41,7 +41,7 @@ class ProfileDialog(QDialog):
         super().__init__(parent)
         self.module = module
         self.setObjectName("settings_dialog")
-        self.setStyleSheet(SETTINGS_STYLE)
+        bind_style(self, settings_style)
         self.setWindowTitle(t("integration_profile"))
         self.resize(640, 620)
         outer = QVBoxLayout(self)

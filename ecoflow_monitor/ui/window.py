@@ -4,8 +4,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
 
 from ecoflow_monitor import __version__
 from ecoflow_monitor.adapters.windows import raise_without_focus
-from ecoflow_monitor.adapters.reference_effects import get_accent_color
-from ecoflow_monitor.ui.theme import SETTINGS_STYLE, monitor_style
+from ecoflow_monitor.ui.theme import SETTINGS_STYLE, bind_style, current_accent, monitor_style
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, number, profile_tooltip, scaled_font
@@ -86,7 +85,7 @@ class MonitorWindow(QWidget):
         row = QHBoxLayout()
         self.auto_toggle = QCheckBox()
         self.auto_toggle.setObjectName("autoToggle")
-        self.auto_toggle.setStyleSheet(toggle_switch_style("autoToggle"))
+        bind_style(self.auto_toggle, lambda color: toggle_switch_style("autoToggle", color))
         self.auto_toggle.toggled.connect(self.set_auto)
         row.addWidget(self.auto_toggle)
         self.profile_choice = QComboBox()
@@ -188,7 +187,7 @@ class MonitorWindow(QWidget):
     def _set_scale(self, scale):
         scaled_font(self, scale)
         self._scale = scale
-        self.setStyleSheet(self.styleSheet() + monitor_style(scale, get_accent_color(), self.controller.settings.transparency, self.controller.settings.background_opacity))
+        self.setStyleSheet(self.styleSheet() + monitor_style(scale, current_accent(), self.controller.settings.transparency, self.controller.settings.background_opacity))
         self._shell_layout.setContentsMargins(round(12 * scale), round(10 * scale), round(12 * scale), round(8 * scale))
         self._shell_layout.setSpacing(round(6 * scale))
         self._profile_layout.setSpacing(round(8 * scale))

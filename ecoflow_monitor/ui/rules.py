@@ -2,22 +2,18 @@ import uuid
 from typing import cast
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationProfile, IntegrationRule
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, profile_tooltip
+from ecoflow_monitor.ui.percent_editor import PercentEditor
 
 
-def optional_percent() -> QDoubleSpinBox:
-    spin = QDoubleSpinBox()
-    spin.setRange(-1, 100)
-    spin.setSpecialValueText(t("unset"))
-    spin.setDecimals(0)
-    spin.setValue(-1)
-    return spin
+def optional_percent(default=0, compact=False) -> PercentEditor:
+    return PercentEditor(optional=True, default=default, compact=compact)
 
 
 class RuleTable(QTableWidget):
@@ -113,7 +109,8 @@ class RulesEditor(QWidget):
         condition.setCurrentIndex(max(0, condition.findData(rule.input_condition)))
         self.table.setCellWidget(row, column, condition)
         for offset, value in ((1, rule.min_soc), (2, rule.max_soc)):
-            spin = optional_percent()
+            spin = optional_percent(0 if offset == 1 else 100, compact=True)
+            spin.setAccessibleName(t("rule_min" if offset == 1 else "rule_max"))
             spin.setValue(-1 if value is None else value)
             self.table.setCellWidget(row, column + offset, spin)
         profile = QComboBox()
@@ -135,8 +132,8 @@ class RulesEditor(QWidget):
             path = self.table.item(row, 1).text().strip() if self.application else ""
             if path and validate_paths:
                 path = local_executable(path)
-            minimum = cast(QDoubleSpinBox, self.table.cellWidget(row, column + 1)).value()
-            maximum = cast(QDoubleSpinBox, self.table.cellWidget(row, column + 2)).value()
+            minimum = cast(PercentEditor, self.table.cellWidget(row, column + 1)).value()
+            maximum = cast(PercentEditor, self.table.cellWidget(row, column + 2)).value()
             rule = IntegrationRule(
                 enabled.property("rule_id"), cast(QComboBox, self.table.cellWidget(row, column + 3)).currentData(),
                 enabled.isChecked(), path, cast(QComboBox, self.table.cellWidget(row, column)).currentData(),

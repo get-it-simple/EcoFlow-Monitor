@@ -11,7 +11,7 @@ from ecoflow_monitor import __version__
 def check_wheel(wheel: Path, root: Path) -> int:
     expected = {
         path.relative_to(root).as_posix(): path.read_bytes()
-        for pattern in ("ecoflow_monitor/**/*.py", "ecoflow_monitor/i18n/*/strings.json", "ecoflow_monitor/ui/assets/*.svg", "ecoflow_monitor/integration_examples/*.json")
+        for pattern in ("ecoflow_monitor/**/*.py", "ecoflow_monitor/i18n/*/strings.json", "ecoflow_monitor/ui/assets/*.svg", "ecoflow_monitor/ui/assets/*.ico", "ecoflow_monitor/integration_examples/*.json")
         for path in root.glob(pattern)
     }
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]

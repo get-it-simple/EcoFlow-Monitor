@@ -1,7 +1,8 @@
 from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
 
 from ecoflow_monitor.i18n import t
@@ -89,19 +90,7 @@ def action(text: str, callback, parent=None) -> QPushButton:
 
 
 def app_icon() -> QIcon:
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor("#75edb7"), 3))
-    painter.setBrush(QColor("#182d28"))
-    painter.drawRoundedRect(QRect(8, 15, 46, 36), 8, 8)
-    painter.fillRect(QRect(54, 27, 4, 12), QColor("#75edb7"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#14d888"))
-    painter.drawRoundedRect(QRect(14, 21, 28, 24), 3, 3)
-    painter.end()
-    return QIcon(pixmap)
+    return QIcon(str(Path(__file__).parent / "assets" / "app.ico"))
 
 
 def effective_scale(window: QWidget, desired: float) -> float:

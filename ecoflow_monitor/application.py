@@ -7,6 +7,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from ecoflow_monitor.adapters.hotkeys import HotkeyManager
+from ecoflow_monitor.adapters.accent import AccentWatcher
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
@@ -23,9 +24,12 @@ class Application(QObject):
         self.native = native
         self.controller = controller if controller is not None else Controller(SettingsStore(settings_path))
         self.app = QApplication.instance()
+        self.accent = AccentWatcher(self, native=native)
+        self.app.ecoflow_accent = self.accent
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setWindowIcon(app_icon())
         self.window = MonitorWindow(self.controller, self.open_settings)
+        self.accent.changed.connect(self.window.apply_appearance)
         self.window.setWindowIcon(app_icon())
         self.mini = MiniWidget(self.controller)
         self.hotkeys = HotkeyManager(self)
@@ -209,6 +213,9 @@ class Application(QObject):
         if self._stopped:
             return
         self._stopped = True
+        self.accent.stop()
+        if getattr(self.app, "ecoflow_accent", None) is self.accent:
+            del self.app.ecoflow_accent
         self.hotkeys.stop()
         self.tray.hide()
         self.window._save_geometry()

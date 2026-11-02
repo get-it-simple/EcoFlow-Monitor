@@ -72,6 +72,7 @@ def main() -> None:
         "--name", "EcoFlowMonitor", "--paths", str(ROOT),
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"), "--version-file", str(version_resource()),
+        "--icon", str(ROOT / "ecoflow_monitor" / "ui" / "assets" / "app.ico"),
         "--collect-data", "ecoflow_monitor.i18n", "--collect-data", "ecoflow_monitor.ui",
         "--collect-data", "ecoflow_monitor.integration_examples",
         str(ROOT / "ecoflow_monitor" / "__main__.py"),

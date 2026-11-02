@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolic
 from ecoflow_monitor.adapters.hotkey_binding import parse_combo
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.reference_style import bordered_input_style, icon_path
+from ecoflow_monitor.ui.theme import accent_text, bind_style
 
 
 MODIFIER_OPTIONS = [
@@ -59,7 +60,7 @@ class HotkeyComboEditor(QFrame):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(56)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setStyleSheet(bordered_input_style("hotkeyComboInput"))
+        bind_style(self, lambda color: bordered_input_style("hotkeyComboInput", color))
 
         self._select_layout = QHBoxLayout(self)
         self._select_layout.setContentsMargins(10, 10, 10, 10)
@@ -137,44 +138,26 @@ class HotkeyComboEditor(QFrame):
         box = QComboBox(self)
         box.setMinimumHeight(32)
         box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        arrow_path = icon_path("dropdown_arrow").replace("\\", "/")
-        box.setStyleSheet(
-            f"""
-            QComboBox {{
-                background: #626071;
-                border: 0;
-                border-radius: 7px;
-                color: #f2f2f5;
-                padding: 5px 20px 5px 9px;
-            }}
-            QComboBox:hover {{
-                background: #716f82;
-            }}
-            QComboBox:focus {{
-                background: #78758a;
-            }}
-            QComboBox::drop-down {{
-                border: 0;
-                width: 18px;
-            }}
-            QComboBox::down-arrow {{
-                image: url({arrow_path});
-                width: 12px;
-                height: 12px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: #2d2d30;
-                border: 1px solid #56565c;
-                color: #f2f2f5;
-                selection-background-color: #626071;
-            }}
-            """
-        )
+        bind_style(box, self._box_style)
         for value, label in options:
             box.addItem(label, value)
         box.currentIndexChanged.connect(self._sync_select_options)
         box.installEventFilter(self)
         return box
+
+    @staticmethod
+    def _box_style(accent):
+        arrow_path = icon_path("dropdown_arrow").replace("\\", "/")
+        return f"""
+        QComboBox {{ background: #383838; border: 1px solid transparent;
+            border-radius: 7px; color: #f2f2f5; padding: 5px 20px 5px 9px; }}
+        QComboBox:hover {{ background: #454545; }}
+        QComboBox:focus {{ border-color: {accent}; }}
+        QComboBox::drop-down {{ border: 0; width: 18px; }}
+        QComboBox::down-arrow {{ image: url({arrow_path}); width: 12px; height: 12px; }}
+        QComboBox QAbstractItemView {{ background: #202020; border: 1px solid #565656;
+            color: #f2f2f5; selection-background-color: {accent}; selection-color: {accent_text(accent)}; }}
+        """
 
     def _options_for_token(self, token: str) -> list[tuple[str, str]]:
         if token in {"ctrl", "alt", "shift", "win"}:

@@ -14,7 +14,8 @@ from ecoflow_monitor.ui.common import action, clamp_window, effective_scale, hin
 from ecoflow_monitor.ui.rules import optional_percent
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
 from ecoflow_monitor.ui.reference_style import toggle_switch_style
-from ecoflow_monitor.ui.theme import SETTINGS_STYLE
+from ecoflow_monitor.ui.theme import bind_style, settings_style
+from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.sections import CollapsibleSection
 
 
@@ -28,7 +29,7 @@ class SettingsWindow(QDialog):
         area = self.screen().availableGeometry()
         scale = min(effective_scale(self, controller.settings.scale), (area.width() - 40) / 850, (area.height() - 60) / 780)
         scaled_font(self, scale)
-        self.setStyleSheet(self.styleSheet() + SETTINGS_STYLE)
+        bind_style(self, settings_style)
         self.resize(round(850 * scale), round(780 * scale))
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -84,7 +85,9 @@ class SettingsWindow(QDialog):
         self.capacity.setRange(1, 1000000)
         self.capacity.setDecimals(0)
         self.minimum = optional_percent()
-        self.maximum = optional_percent()
+        self.maximum = optional_percent(100)
+        self.minimum.setAccessibleName(t("manual_min_label"))
+        self.maximum.setAccessibleName(t("manual_max_label"))
         form3 = QFormLayout()
         form3.addRow(t("capacity_wh"), self.capacity)
         form3.addRow(t("manual_min_label"), self.minimum)
@@ -114,18 +117,14 @@ class SettingsWindow(QDialog):
         form.addRow(t("language"), self.language)
         general.addLayout(form)
         general.addWidget(action(t("language_guide"), lambda: QMessageBox.information(self, t("language_guide"), t("language_guide_text"))))
-        self.scale = QDoubleSpinBox()
-        self.scale.setRange(50, 300)
-        self.scale.setDecimals(0)
+        self.scale = PercentEditor(50, 300)
+        self.scale.setAccessibleName(t("scale"))
         form2 = QFormLayout()
         form2.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form2.addRow(t("scale"), self.scale)
         general.addLayout(form2)
         self.transparency = QCheckBox(t("transparency"))
-        self.background_transparency = QDoubleSpinBox()
-        self.background_transparency.setRange(0, 100)
-        self.background_transparency.setDecimals(2)
-        self.background_transparency.setSuffix(" %")
+        self.background_transparency = PercentEditor(decimals=2)
         self.background_transparency.setAccessibleName(t("main_transparency"))
         self.transparency.toggled.connect(self.background_transparency.setEnabled)
         monitor.addWidget(self.transparency)
@@ -142,12 +141,10 @@ class SettingsWindow(QDialog):
             monitor.addWidget(control)
         for control in (self.mini_enabled, self.mini_above):
             mini.addWidget(control)
-        self.mini_scale = QDoubleSpinBox()
-        self.mini_scale.setRange(50, 300)
-        self.mini_scale.setDecimals(0)
-        self.mini_alpha = QDoubleSpinBox()
-        self.mini_alpha.setRange(0, 100)
-        self.mini_alpha.setDecimals(0)
+        self.mini_scale = PercentEditor(50, 300)
+        self.mini_alpha = PercentEditor()
+        self.mini_scale.setAccessibleName(t("mini_scale"))
+        self.mini_alpha.setAccessibleName(t("mini_transparency"))
         self.dock = QComboBox()
         for key in ("", "left", "right", "top", "bottom"):
             self.dock.addItem(t("dock_" + (key or "free")), key)
@@ -207,7 +204,7 @@ class SettingsWindow(QDialog):
             enabled = QCheckBox()
             enabled.setChecked(binding.enabled)
             enabled.setObjectName("bindingToggle")
-            enabled.setStyleSheet(toggle_switch_style(enabled.objectName()))
+            bind_style(enabled, lambda color, name=enabled.objectName(): toggle_switch_style(name, color))
             editor = HotkeyComboEditor(binding.combo)
             controls.addWidget(enabled)
             controls.addWidget(editor, 1)
