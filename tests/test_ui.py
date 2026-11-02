@@ -45,6 +45,155 @@ def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
     assert "No successful update" in status_tooltip(runtime.controller)
 
 
+@pytest.mark.parametrize("size", [(320, 310), (640, 620), (900, 620), (640, 900), (1280, 1240), (1920, 1860)])
+def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size: tuple[int, int]):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QHelpEvent
+    from PySide6.QtWidgets import QToolTip
+    flow = runtime.window.flow
+    controller = runtime.controller
+    controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90,
+                                     (("usb_c1", 10), ("usb_a1", 5), ("anderson_1", 30)))
+    controller.connection = ConnectionState.STALE
+    flow.setMinimumSize(0, 0)
+    flow.resize(*size)
+    scale = min(size[0] / 640, size[1] / 620)
+    offset = QPointF((size[0] - 640 * scale) / 2, (size[1] - 620 * scale) / 2)
+    for point, field in (((100, 40), "powInSumW"), ((500, 40), "powOutSumW"),
+                         ((130, 116), "powGetAcIn"), ((510, 116), "powGetPv"),
+                         ((130, 530), "powGetAcOut"), ((510, 530), "powGet12v"),
+                         ((320, 300), "cmsBattSoc"), ((180, 427), "cmsMinDsgSoc"),
+                         ((180, 224), "cmsMaxChgSoc"), ((120, 583), "powGetTypec1"),
+                         ((320, 583), "powGetQcusb1"), ((520, 583), "powGet12vList.powGet12vItem")):
+        position = (offset + QPointF(*point) * scale).toPoint()
+        event = QHelpEvent(QEvent.Type.ToolTip, position, flow.mapToGlobal(position))
+        QCoreApplication.sendEvent(flow, event)
+        assert field in QToolTip.text()
+    assert "calculated by this app" in flow.tooltip_at(offset + QPointF(320, 400) * scale)
+    assert flow.tooltip_at(offset + QPointF(10, 450) * scale) == ""
+    QToolTip.hideText()
+
+
+def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp):
+    from PySide6.QtCore import Qt
+    from ecoflow_monitor.settings import METRICS
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, mini_metrics=METRICS, manual_min=10))
+    dialog = SettingsWindow(controller, runtime.window)
+    try:
+        def tips():
+            item = next(dialog.metrics.item(index) for index in range(dialog.metrics.count())
+                        if dialog.metrics.item(index).data(Qt.ItemDataRole.UserRole) == "minimum_discharge_level")
+            return runtime.window.limits.toolTip(), runtime.mini.labels["minimum_discharge_level"].parentWidget().toolTip(), item.toolTip()
+        for tooltip in tips():
+            assert "Source: Manual. Value: 10 %" in tooltip
+            assert "do not change the station" in tooltip
+        controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90)
+        controller.connection = ConnectionState.LIVE
+        controller.changed.emit()
+        for tooltip in tips():
+            assert "Source: EcoFlow API. Value: 20 %" in tooltip
+            assert "do not change the station" not in tooltip
+        controller.telemetry = None
+        controller.apply_settings(replace(controller.settings, manual_min=None))
+        for tooltip in tips():
+            assert "Source: Unknown. Value: —" in tooltip
+        assert "local reference" in dialog.capacity.toolTip()
+        assert "cmsMinDsgSoc" in dialog.minimum.slider.toolTip()
+        assert "do not change the station" in dialog.minimum.toggle.toolTip()
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+def test_friendly_rule_names_and_explanations(runtime, qapp):
+    from ecoflow_monitor.integrations import IntegrationRule
+    from ecoflow_monitor.ui.rules import RulesEditor
+    from ecoflow_monitor.ui.metrics import API_FIELDS, metric_tooltip
+    from ecoflow_monitor.adapters.ecoflow import PORT_KEYS
+    assert i18n.t("rule_min") == "Charge from (%)"
+    assert i18n.t("rule_max") == "Charge to (%)"
+    assert "SOC" not in i18n.t("rule_hint")
+    assert all(API_FIELDS[key] == field for key, field in PORT_KEYS.items())
+    assert "cmsBattSoc" in metric_tooltip("battery_level")
+    assert "not battery health" in " ".join(metric_tooltip("battery_level").split())
+    for key in (*API_FIELDS, "estimated_runtime", "capacity_wh", "anderson_2"):
+        assert "_help" not in metric_tooltip(key)
+    for application in (False, True):
+        editor = RulesEditor(application)
+        try:
+            editor.append(IntegrationRule("test", "example", min_soc=20, max_soc=80))
+            column = 2 if application else 1
+            condition = editor.table.cellWidget(0, column)
+            assert editor.table.horizontalHeaderItem(column).text() == "Input"
+            assert [condition.itemText(index) for index in range(condition.count())] == ["Any", "On", "Off"]
+            explanation = " ".join(condition.toolTip().split())
+            assert "without charging the battery" in explanation
+            assert "does not switch" in explanation
+            for index, value in enumerate(("any", "present", "absent")):
+                condition.setCurrentIndex(index)
+                assert editor.rules()[0].input_condition == value
+            assert "powInSumW" in editor.table.horizontalHeaderItem(column).toolTip()
+            assert "includes this" in editor.table.horizontalHeaderItem(column + 1).toolTip()
+            assert "except 100%" in editor.table.horizontalHeaderItem(column + 2).toolTip()
+            assert "cmsBattSoc" in editor.table.cellWidget(0, column + 1).spin.toolTip()
+            assert "except 100%" in editor.table.cellWidget(0, column + 2).slider.toolTip()
+            assert editor.rules()[0].min_soc == 20
+            assert editor.rules()[0].max_soc == 80
+        finally:
+            editor.deleteLater()
+
+
+def test_power_units_follow_discovered_catalog_and_live_language_changes(runtime, tmp_path, monkeypatch):
+    catalogs = tmp_path / "catalogs"
+    english = catalogs / "en"
+    translated = catalogs / "xx"
+    english.mkdir(parents=True)
+    translated.mkdir()
+    package_file = i18n.__file__
+    assert package_file is not None
+    english_catalog = (Path(package_file).parent / "en" / "strings.json").read_text(encoding="utf-8")
+    (english / "strings.json").write_text(english_catalog, encoding="utf-8")
+    (translated / "strings.json").write_text(json.dumps({"unit_watt": "test-unit"}), encoding="utf-8")
+    monkeypatch.setattr(i18n, "_translator", i18n.Translator(catalogs))
+    controller = runtime.controller
+    controller.telemetry = Telemetry(50, 280, 80, time.time(), time.monotonic())
+    for language, unit in (("en", "W"), ("xx", "test-unit"), ("en", "W")):
+        controller.apply_settings(replace(controller.settings, language=language))
+        assert runtime.mini.labels["input_power"].text() == "50 " + unit
+        assert runtime.mini.labels["output_power"].text() == "280 " + unit
+        assert metric_text(controller, "battery_level") == "80 %"
+    controller.telemetry = None
+    assert metric_text(controller, "input_power") == "—"
+
+
+def test_metric_tooltips_follow_language_changes(runtime, qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QHelpEvent
+    from PySide6.QtWidgets import QToolTip
+    from ecoflow_monitor.ui.metrics import metric_tooltip
+    from ecoflow_monitor.settings import METRICS
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, mini_metrics=METRICS))
+    english = metric_tooltip("battery_level")
+    flow = runtime.window.flow
+    scale = min(flow.width() / 640, flow.height() / 620)
+    position = QPointF((flow.width() - 640 * scale) / 2 + 100 * scale,
+                      (flow.height() - 620 * scale) / 2 + 40 * scale).toPoint()
+    QCoreApplication.sendEvent(flow, QHelpEvent(QEvent.Type.ToolTip, position, flow.mapToGlobal(position)))
+    assert QToolTip.text() == metric_tooltip("input_power")
+    controller.apply_settings(replace(controller.settings, language="uk"))
+    translated = metric_tooltip("battery_level")
+    assert translated != english
+    assert "cmsBattSoc" in translated
+    assert runtime.mini.labels["battery_level"].parentWidget().toolTip() == translated
+    assert QToolTip.text() == metric_tooltip("input_power")
+    controller.apply_settings(replace(controller.settings, language="en"))
+    assert runtime.mini.labels["battery_level"].parentWidget().toolTip() == english
+    assert QToolTip.text() == metric_tooltip("input_power")
+    QToolTip.hideText()
+
+
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
 def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, language, scale):

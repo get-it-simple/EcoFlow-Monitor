@@ -17,6 +17,7 @@ from ecoflow_monitor.ui.reference_style import toggle_switch_style
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.sections import CollapsibleSection
+from ecoflow_monitor.ui.metrics import metric_tooltip
 
 
 class SettingsWindow(QDialog):
@@ -50,6 +51,7 @@ class SettingsWindow(QDialog):
         outer.addLayout(buttons)
         controller.devices_ready.connect(self._devices)
         self.load_draft()
+        controller.changed.connect(self._refresh_metric_tooltips)
 
     def _tab(self, title: str):
         body = QWidget()
@@ -92,6 +94,12 @@ class SettingsWindow(QDialog):
         form3.addRow(t("capacity_wh"), self.capacity)
         form3.addRow(t("manual_min_label"), self.minimum)
         form3.addRow(t("manual_max_label"), self.maximum)
+        for widget, key in ((self.capacity, "capacity_wh"), (self.minimum, "minimum_discharge_level"), (self.maximum, "maximum_charge_level")):
+            tooltip = metric_tooltip(key)
+            if widget is not self.capacity:
+                tooltip += "\n" + t("manual_limit_hint")
+            widget.setToolTip(tooltip)
+            form3.labelForField(widget).setToolTip(tooltip)
         layout.addLayout(form3)
         layout.addWidget(hint(t("capacity_hint")))
         layout.addWidget(hint(t("manual_limit_hint")))
@@ -243,6 +251,7 @@ class SettingsWindow(QDialog):
         self.metrics.clear()
         for key in (*settings.mini_metrics, *(key for key in METRICS if key not in settings.mini_metrics)):
             item = QListWidgetItem(t(key), self.metrics)
+            item.setToolTip(metric_tooltip(key, self.controller))
             item.setData(Qt.ItemDataRole.UserRole, key)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if key in settings.mini_metrics else Qt.CheckState.Unchecked)
@@ -254,6 +263,11 @@ class SettingsWindow(QDialog):
         self.hotkey_sections = {}
         self._refresh_hotkeys()
         return self.hotkey_rows
+
+    def _refresh_metric_tooltips(self):
+        for index in range(self.metrics.count()):
+            item = self.metrics.item(index)
+            item.setToolTip(metric_tooltip(item.data(Qt.ItemDataRole.UserRole), self.controller))
 
     def _clear_hotkeys(self):
         while self.hotkey_layout.count():

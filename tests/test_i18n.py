@@ -28,6 +28,14 @@ def test_packaged_english_content_and_initial_languages():
     assert translator.current_language == "en"
     assert translator.translate("app_title") == "EcoFlow Monitor"
     assert translator.translate("input_power") == "Input"
+    assert translator.translate("output_power") == "Output"
+    assert translator.translate("battery_level") == "Battery"
+    assert translator.translate("ac_input") == "AC"
+    assert translator.translate("ac_output") == "Outlets"
+    assert translator.translate("dc_output") == "12 V"
+    assert translator.translate("estimated_runtime") == "Time remaining"
+    assert translator.translate("automatic_mode") == "Auto"
+    assert translator.translate("reset") == "Revert changes"
     assert translator.translate("last_update").format(timestamp="2026-01-01") == (
         "Last successful update: 2026-01-01"
     )

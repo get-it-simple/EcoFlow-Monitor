@@ -62,6 +62,13 @@ class PercentEditor(QWidget):
         if self.toggle is not None:
             self.toggle.setAccessibleName(name + " — " + t("percent_enabled"))
 
+    def setToolTip(self, text: str) -> None:
+        super().setToolTip(text)
+        self.spin.setToolTip(text)
+        self.slider.setToolTip(text)
+        if self.toggle is not None:
+            self.toggle.setToolTip(t("percent_enabled") + "\n" + text)
+
     def _sync_enabled(self):
         enabled = self.toggle is None or self.toggle.isChecked()
         self.spin.setEnabled(enabled)

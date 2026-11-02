@@ -44,9 +44,9 @@ def metric_text(controller, key: str) -> str:
     if key == "battery_level":
         return number(snapshot.soc_pct if snapshot else None, "%")
     if key == "input_power":
-        return number(snapshot.input_w if snapshot else None, "W")
+        return number(snapshot.input_w if snapshot else None, t("unit_watt"))
     if key == "output_power":
-        return number(snapshot.output_w if snapshot else None, "W")
+        return number(snapshot.output_w if snapshot else None, t("unit_watt"))
     if key == "estimated_runtime":
         return duration(controller.runtime)
     return number(controller.minimum.value if key == "minimum_discharge_level" else controller.maximum.value, "%")

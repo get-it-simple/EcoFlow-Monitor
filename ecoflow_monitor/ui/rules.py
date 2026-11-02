@@ -10,6 +10,7 @@ from ecoflow_monitor.integrations import IntegrationProfile, IntegrationRule
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, profile_tooltip
 from ecoflow_monitor.ui.percent_editor import PercentEditor
+from ecoflow_monitor.ui.metrics import rule_tooltip
 
 
 def optional_percent(default=0, compact=False) -> PercentEditor:
@@ -58,6 +59,11 @@ class RulesEditor(QWidget):
             headings.append(t("rule_application"))
         headings.extend(t(key) for key in ("rule_input", "rule_min", "rule_max", "rule_profile"))
         self.table.setHorizontalHeaderLabels(headings)
+        column = 2 if application else 1
+        for offset, key in enumerate(("rule_input", "rule_min", "rule_max")):
+            heading = QTableWidgetItem(t(key))
+            heading.setToolTip(rule_tooltip(key))
+            self.table.setHorizontalHeaderItem(column + offset, heading)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         if application:
             self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -107,10 +113,12 @@ class RulesEditor(QWidget):
         for value in ("any", "present", "absent"):
             condition.addItem(t("rule_" + value), value)
         condition.setCurrentIndex(max(0, condition.findData(rule.input_condition)))
+        condition.setToolTip(rule_tooltip("rule_input"))
         self.table.setCellWidget(row, column, condition)
         for offset, value in ((1, rule.min_soc), (2, rule.max_soc)):
             spin = optional_percent(0 if offset == 1 else 100, compact=True)
             spin.setAccessibleName(t("rule_min" if offset == 1 else "rule_max"))
+            spin.setToolTip(rule_tooltip("rule_min" if offset == 1 else "rule_max"))
             spin.setValue(-1 if value is None else value)
             self.table.setCellWidget(row, column + offset, spin)
         profile = QComboBox()

@@ -8,6 +8,7 @@ from ecoflow_monitor.ui.theme import SETTINGS_STYLE, bind_style, current_accent,
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, number, profile_tooltip, scaled_font
+from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.flow import FlowWidget
 
 
@@ -224,6 +225,7 @@ class MonitorWindow(QWidget):
         for key, limit in (("minimum_discharge_level", controller.minimum), ("maximum_charge_level", controller.maximum)):
             parts.append(t(key) + ": " + number(limit.value, "%") + " (" + t("source_" + limit.source) + ")")
         self.limits.setText("   ·   ".join(parts))
+        self.limits.setToolTip("\n\n".join(metric_tooltip(key, controller) for key in ("minimum_discharge_level", "maximum_charge_level")))
         modules = tuple(module for module in controller.settings.integrations if module.enabled)
         self.msi_section.setVisible(bool(modules))
         choices = tuple((module.id, module.label) for module in modules)

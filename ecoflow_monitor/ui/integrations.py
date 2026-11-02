@@ -14,6 +14,7 @@ from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_toolti
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.rules import RulesEditor
 from ecoflow_monitor.ui.theme import bind_style, settings_style
+from ecoflow_monitor.ui.metrics import metric_tooltip, rule_tooltip
 
 
 class ExecutableField(QLineEdit):
@@ -177,6 +178,10 @@ class IntegrationsEditor(QWidget):
         self.conditions = {}
         for name, key in (("application", "application_rules"), ("input", "rule_input"), ("soc", "battery_level")):
             control = QCheckBox(t(key))
+            if name == "soc":
+                control.setToolTip(metric_tooltip("battery_level"))
+            elif name == "input":
+                control.setToolTip(rule_tooltip("rule_input"))
             self.conditions[name] = control
             conditions_form.addWidget(control)
         conditions_form.addWidget(hint(t("integration_conditions_hint")))

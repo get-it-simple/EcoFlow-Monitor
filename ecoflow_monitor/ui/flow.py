@@ -1,11 +1,12 @@
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QHelpEvent, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QLabel, QToolTip, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import duration, number, update_status
+from ecoflow_monitor.ui.metrics import metric_label, metric_tooltip
 
 
 class FlowWidget(QWidget):
@@ -13,10 +14,13 @@ class FlowWidget(QWidget):
         super().__init__(parent)
         self.controller = controller
         self.phase = 0.0
+        self._tooltip_position = None
+        self._tooltip_text = ""
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._advance)
         self.setObjectName("flow")
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setMinimumSize(420, 407)
         self.status = QLabel(self)
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -24,6 +28,12 @@ class FlowWidget(QWidget):
     def refresh(self):
         update_status(self.status, self.controller)
         self._position_status()
+        if self._tooltip_position is not None and QToolTip.isVisible() and QToolTip.text() == self._tooltip_text:
+            self._tooltip_text = self.tooltip_at(self._tooltip_position)
+            if self._tooltip_text:
+                QToolTip.showText(self.mapToGlobal(self._tooltip_position.toPoint()), self._tooltip_text, self)
+            else:
+                QToolTip.hideText()
         active = self.isVisible() and self.controller.settings.animations and self.controller.fresh
         telemetry = self.controller.telemetry
         active = active and telemetry is not None and (telemetry.input_w > 0 or telemetry.output_w > 0)
@@ -54,11 +64,63 @@ class FlowWidget(QWidget):
         self._timer.stop()
         super().hideEvent(event)
 
+    def _drawing_transform(self):
+        scale = min(self.width() / 640, self.height() / 620)
+        return scale, QPointF((self.width() - 640 * scale) / 2, (self.height() - 620 * scale) / 2)
+
+    def _usb_cells(self):
+        telemetry = self.controller.telemetry
+        ports = [(key, value) for key, value in telemetry.ports if key.startswith(("usb_", "anderson_"))] if telemetry else []
+        cells = []
+        for start in range(0, len(ports), 4):
+            row = ports[start:start + 4]
+            width = 600 / len(row)
+            for column, (key, value) in enumerate(row):
+                cells.append((QRectF(20 + column * width, 570 + start // 4 * 26, width, 26), key, value))
+        return cells
+
+    def tooltip_at(self, position: QPointF) -> str:
+        scale, offset = self._drawing_transform()
+        if scale <= 0:
+            return ""
+        point = (position - offset) / scale
+        limits = []
+        for key, limit in (("minimum_discharge_level", self.controller.minimum), ("maximum_charge_level", self.controller.maximum)):
+            if limit.value is not None and QRectF(175, 485 - 290 * limit.value / 100 - 5, 290, 10).contains(point):
+                limits.append(metric_tooltip(key, self.controller))
+        if limits:
+            return "\n\n".join(limits)
+        regions = [
+            (QRectF(30, 2, 270, 94), "input_power"),
+            (QRectF(350, 2, 260, 94), "output_power"),
+            (QRectF(35, 89, 190, 89), "ac_input"),
+            (QRectF(415, 89, 190, 89), "pv_input"),
+            (QRectF(35, 487, 190, 75), "ac_output"),
+            (QRectF(415, 487, 190, 75), "dc_output"),
+            (QRectF(185, 364, 270, 68), "estimated_runtime"),
+            (QRectF(190, 238, 260, 112), "battery_level"),
+        ]
+        regions.extend((rect, key) for rect, key, _ in self._usb_cells())
+        return next((metric_tooltip(key, self.controller) for rect, key in regions if rect.contains(point)), "")
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTip and isinstance(event, QHelpEvent):
+            self._tooltip_position = QPointF(event.pos())
+            tooltip = self.tooltip_at(self._tooltip_position)
+            self._tooltip_text = tooltip
+            if tooltip:
+                QToolTip.showText(event.globalPos(), tooltip, self)
+            else:
+                QToolTip.hideText()
+                event.ignore()
+            return True
+        return super().event(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        scale = min(self.width() / 640, self.height() / 620)
-        painter.translate((self.width() - 640 * scale) / 2, (self.height() - 620 * scale) / 2)
+        scale, offset = self._drawing_transform()
+        painter.translate(offset)
         painter.scale(scale, scale)
         telemetry = self.controller.telemetry
         ports = dict(telemetry.ports) if telemetry else {}
@@ -75,8 +137,8 @@ class FlowWidget(QWidget):
 
         text((30, 2, 270, 32), t("input_power"), 21, green, Qt.AlignmentFlag.AlignLeft)
         text((350, 2, 260, 32), t("output_power"), 21, orange, Qt.AlignmentFlag.AlignRight)
-        text((30, 36, 270, 60), number(telemetry.input_w if telemetry else None, "W"), 43, foreground, Qt.AlignmentFlag.AlignLeft)
-        text((350, 36, 260, 60), number(telemetry.output_w if telemetry else None, "W"), 43, foreground, Qt.AlignmentFlag.AlignRight)
+        text((30, 36, 270, 60), number(telemetry.input_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignLeft)
+        text((350, 36, 260, 60), number(telemetry.output_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignRight)
 
         def branch(x, incoming, value, label):
             y = 116 if incoming else 514
@@ -96,13 +158,13 @@ class FlowWidget(QWidget):
             painter.setPen(QPen(QColor("#3c484d"), 1))
             painter.setBrush(QColor(0, 0, 0, 70))
             painter.drawEllipse(QPointF(x, y), 27, 27)
-            text((x - 90, y - 14, 180, 29), label, 16, foreground)
-            text((x - 95, y + 34, 190, 28), number(value, "W"), 21)
+            text((x - 95, y - 24, 190, 48), label, 16, foreground, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
+            text((x - 95, y + 34, 190, 28), number(value, t("unit_watt")), 21)
 
-        branch(130, True, ports.get("ac_input"), "AC")
-        branch(510, True, ports.get("pv_input"), "PV / DC")
-        branch(130, False, ports.get("ac_output"), "AC")
-        branch(510, False, ports.get("dc_output"), "DC")
+        branch(130, True, ports.get("ac_input"), t("ac_input"))
+        branch(510, True, ports.get("pv_input"), t("pv_input"))
+        branch(130, False, ports.get("ac_output"), t("ac_output"))
+        branch(510, False, ports.get("dc_output"), t("dc_output"))
 
         circle = QRectF(175, 195, 290, 290)
         gradient = QLinearGradient(0, 195, 0, 485)
@@ -129,6 +191,7 @@ class FlowWidget(QWidget):
             fill.setColorAt(1, QColor("#00b975" if fresh else "#244f43"))
             painter.fillPath(wave, fill)
             painter.restore()
+        text((190, 238, 260, 28), t("battery_level"), 18)
         text((190, 270, 260, 80), number(telemetry.soc_pct if telemetry else None, "%"), 67)
         text((185, 364, 270, 28), t("estimated_runtime"), 16)
         text((185, 397, 270, 35), duration(self.controller.runtime), 23)
@@ -138,9 +201,6 @@ class FlowWidget(QWidget):
                 y = 485 - 290 * limit.value / 100
                 painter.setPen(QPen(QColor(color), 1, Qt.PenStyle.DotLine))
                 painter.drawLine(QPointF(175, y), QPointF(465, y))
-        usb = [(key, value) for key, value in ports.items() if key.startswith(("usb_", "anderson_"))]
-        if usb:
-            text((20, 570, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[:4]), 14)
-            if len(usb) > 4:
-                text((20, 596, 600, 26), "   ·   ".join((t(key) if not key.startswith("anderson_") else t("anderson")) + " " + number(value, "W") for key, value in usb[4:]), 14)
+        for cell_rect, key, port_power in self._usb_cells():
+            text((cell_rect.x(), cell_rect.y(), cell_rect.width(), cell_rect.height()), metric_label(key) + " " + number(port_power, t("unit_watt")), 14)
         painter.end()

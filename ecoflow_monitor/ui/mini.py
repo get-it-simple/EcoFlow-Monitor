@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QLabel, QVBoxLa
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.i18n import get_current_language, t
 from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, metric_text, scaled_font, update_status
+from ecoflow_monitor.ui.metrics import metric_tooltip
 
 
 class MiniWidget(QFrame):
@@ -67,6 +68,7 @@ class MiniWidget(QFrame):
             for index, key in enumerate(settings.mini_metrics):
                 tile = QFrame(self.body)
                 tile.setObjectName("mini_tile")
+                tile.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
                 tile.setFixedSize(round(148 * scale), round(70 * scale))
                 box = QVBoxLayout(tile)
                 box.setContentsMargins(round(8 * scale), round(6 * scale), round(8 * scale), round(6 * scale))
@@ -87,6 +89,7 @@ class MiniWidget(QFrame):
             self._dock()
         for key, label in self.labels.items():
             label.setText(metric_text(self.controller, key))
+            label.parentWidget().setToolTip(metric_tooltip(key, self.controller))
             label.setEnabled(self.controller.fresh)
         update_status(self.status, self.controller)
         self.status.setMaximumWidth(max(round(148 * scale), self.body.sizeHint().width()))
