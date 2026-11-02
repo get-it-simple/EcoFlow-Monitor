@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.13"
       - name: Detect dependency changes
         id: dependencies
         shell: pwsh
@@ -52,17 +52,13 @@ jobs:
   test-and-package:
     needs: dependency-audit
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -88,10 +84,8 @@ jobs:
       - name: Verify packaged metadata and all language catalogs
         run: python -m scripts.check_package dist/wheels
       - name: Build portable executable
-        if: matrix.python == '3.13'
         run: python build.py
       - name: Smoke the actual executable
-        if: matrix.python == '3.13'
         shell: pwsh
         run: |
           $version = python -c 'from ecoflow_monitor import __version__; print(__version__)'
