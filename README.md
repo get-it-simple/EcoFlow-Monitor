@@ -7,6 +7,8 @@ battery charge. Version **0.7.0**.
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
 
+![img.png](assets/img.png)
+
 ## Install
 
 Extract the portable ZIP to a writable folder and run `EcoFlowMonitor.exe`.
