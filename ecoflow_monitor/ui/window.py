@@ -1,21 +1,25 @@
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizeGrip, QStyle, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor import __version__
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.ui.theme import SETTINGS_STYLE, bind_style, current_accent, monitor_style
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, number, profile_tooltip, scaled_font
-from ecoflow_monitor.ui.metrics import metric_tooltip
+from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, profile_tooltip, scaled_font
 from ecoflow_monitor.ui.flow import FlowWidget
+from ecoflow_monitor.ui.limits import ChargeLimits
+from ecoflow_monitor.ui.notifications import NotificationIndicator
+from ecoflow_monitor.ui.resize import WindowResize
 
 
 STYLE = SETTINGS_STYLE
 
 
 class MonitorWindow(QWidget):
+    visibility_changed = Signal(bool)
+
     def __init__(self, controller, open_settings):
         super().__init__()
         self.controller = controller
@@ -52,6 +56,9 @@ class MonitorWindow(QWidget):
         title_box.addWidget(self.title)
         title_box.addWidget(self.version_label)
         header.addLayout(title_box, 1)
+        self.notifications = NotificationIndicator(self.shell)
+        header.addWidget(self.notifications)
+        self.hotkey_notice = ""
         self.refresh_button = self._tool(QStyle.StandardPixmap.SP_BrowserReload, controller.refresh)
         self.settings_button = self._tool(QStyle.StandardPixmap.SP_FileDialogDetailedView, open_settings)
         self.close_button = self._tool(QStyle.StandardPixmap.SP_TitleBarCloseButton, lambda: self.request_visibility(False))
@@ -60,16 +67,10 @@ class MonitorWindow(QWidget):
         for button in (self.refresh_button, self.settings_button, self.close_button):
             header.addWidget(button)
         layout.addLayout(header)
-        self.notice = QLabel()
-        self.notice.setWordWrap(True)
-        self.notice.setStyleSheet("color: #ffcf8c;")
-        layout.addWidget(self.notice)
         self.flow = FlowWidget(controller)
         self.status = self.flow.status
         layout.addWidget(self.flow, 1)
-        self.limits = QLabel()
-        self.limits.setWordWrap(True)
-        self.limits.setStyleSheet("color: #b7b7bd;")
+        self.limits = ChargeLimits(controller)
         layout.addWidget(self.limits)
         self.msi_section = QFrame(self.shell)
         self.msi_section.setObjectName("monitor_msi")
@@ -80,9 +81,6 @@ class MonitorWindow(QWidget):
         self.integration_selector.setMinimumContentsLength(15)
         self.integration_selector.currentIndexChanged.connect(self.refresh)
         msi.addWidget(self.integration_selector)
-        self.msi_status = QLabel()
-        self.msi_status.setWordWrap(True)
-        msi.addWidget(self.msi_status)
         row = QHBoxLayout()
         self.auto_toggle = QCheckBox()
         self.auto_toggle.setObjectName("autoToggle")
@@ -112,14 +110,8 @@ class MonitorWindow(QWidget):
         profile_scroll.setMaximumHeight(85)
         self.profile_scroll = profile_scroll
         msi.addWidget(profile_scroll)
-        self.profile_status = QLabel()
-        self.profile_status.setWordWrap(True)
-        msi.addWidget(self.profile_status)
         layout.addWidget(self.msi_section)
-        footer = QHBoxLayout()
-        footer.addStretch()
-        footer.addWidget(QSizeGrip(self))
-        layout.addLayout(footer)
+        self.resize_controls = WindowResize(self)
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setSingleShot(True)
         self._geometry_timer.setInterval(500)
@@ -198,7 +190,7 @@ class MonitorWindow(QWidget):
         self._shell_layout.setContentsMargins(round(12 * scale), round(10 * scale), round(12 * scale), round(8 * scale))
         self._shell_layout.setSpacing(round(6 * scale))
         self._profile_layout.setSpacing(round(8 * scale))
-        for button in (self.settings_button, self.refresh_button, self.close_button):
+        for button in (self.notifications, self.settings_button, self.refresh_button, self.close_button):
             button.setFixedSize(round(32 * scale), round(32 * scale))
             button.setIconSize(QSize(round(18 * scale), round(18 * scale)))
         for button in (*self.profile_buttons, self.auto_toggle):
@@ -218,6 +210,8 @@ class MonitorWindow(QWidget):
         self._outer_layout.invalidate()
         self._outer_layout.activate()
         self.profile_scroll.setFixedHeight(max(self.profile_scroll.height(), self._profile_container.minimumSizeHint().height() + 2))
+        self.resize_controls.scale = scale
+        self.resize_controls.layout()
 
     def refresh(self):
         controller = self.controller
@@ -225,13 +219,8 @@ class MonitorWindow(QWidget):
         self.refresh_button.setToolTip(t("refresh"))
         self.settings_button.setToolTip(t("settings"))
         self.close_button.setToolTip(t("hide"))
-        self.notice.setText(t(controller.notice) if controller.notice else "")
-        self.notice.setVisible(bool(controller.notice))
-        parts = []
-        for key, limit in (("minimum_discharge_level", controller.minimum), ("maximum_charge_level", controller.maximum)):
-            parts.append(t(key) + ": " + number(limit.value, "%") + " (" + t("source_" + limit.source) + ")")
-        self.limits.setText("   ·   ".join(parts))
-        self.limits.setToolTip("\n\n".join(metric_tooltip(key, controller) for key in ("minimum_discharge_level", "maximum_charge_level")))
+        self.notifications.refresh(controller, self.hotkey_notice)
+        self.limits.refresh()
         modules = tuple(module for module in controller.settings.integrations if module.enabled)
         self.msi_section.setVisible(bool(modules))
         choices = tuple((module.id, module.label) for module in modules)
@@ -250,7 +239,6 @@ class MonitorWindow(QWidget):
             module = controller.module(integration_id)
             state = controller.integration_states[integration_id]
             observation = state.observation
-            self.msi_status.setText(t(observation.detail or observation.availability))
             self.auto_toggle.blockSignals(True)
             self.auto_toggle.setText(t("automatic_mode"))
             self.auto_toggle.setChecked(module.auto_enabled)
@@ -269,22 +257,8 @@ class MonitorWindow(QWidget):
                 self.profile_choice.setItemData(index, profile_tooltip(profile), Qt.ItemDataRole.ToolTipRole)
             self.profile_choice.setToolTip(self.profile_choice.currentData(Qt.ItemDataRole.ToolTipRole) or "")
             self.apply_profile.setEnabled(observation.ready and not state.busy and bool(module.profiles))
-            requested = next((profile.label for profile in module.profiles if profile.id == state.requested_profile), "")
-            status = t("profile_requested").format(number=requested) if requested else t("integration_no_request")
-            if state.busy:
-                status += " · " + t("integration_busy")
-            elif state.result and state.result.success:
-                status += " · " + t("integration_command_succeeded" if state.result.completed else "integration_no_commands")
-            if state.result and not state.result.success:
-                status += "\n" + t("integration_failure").format(phase=t(state.result.phase) if state.result.phase else "", step=state.result.step, completed=state.result.completed, error=t(state.result.error))
-                if state.result.exit_code is not None:
-                    status += " · " + t("integration_exit_code").format(code=state.result.exit_code)
-                if state.result.winerror is not None:
-                    status += " · " + t("integration_windows_error").format(code=state.result.winerror)
-            self.profile_status.setText(status)
-            self.profile_status.setToolTip(status)
         self.flow.refresh()
-        signature = (choices, self.notice.text(), self.title.text(), self.apply_profile.text())
+        signature = (choices, self.notifications.isHidden(), self.title.text(), self.apply_profile.text())
         if signature != self._layout_signature:
             self._layout_signature = signature
             self._layout_timer.start()
@@ -322,6 +296,11 @@ class MonitorWindow(QWidget):
         self._screen_tracker.watch()
         clamp_window(self)
         self.flow.refresh()
+        self.visibility_changed.emit(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
 
     def closeEvent(self, event):
         if self._quitting:

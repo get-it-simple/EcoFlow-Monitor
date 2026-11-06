@@ -41,10 +41,19 @@ class Application(QObject):
         self._elevation_prompted = {}
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.menu = QMenu()
+        self._helper_actions = {}
+        self._menu_timer = QTimer(self)
+        self._menu_timer.setInterval(500)
+        self._menu_timer.timeout.connect(self._sync_menu)
+        self.menu.aboutToShow.connect(self._sync_menu)
+        self.menu.aboutToShow.connect(self._menu_timer.start)
+        self.menu.aboutToHide.connect(self._menu_timer.stop)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
         self.controller.preferences_changed.connect(self.preferences)
         self.controller.changed.connect(self._check_elevation)
+        self.controller.changed.connect(self._sync_menu)
+        self.window.visibility_changed.connect(self._sync_menu)
         self.controller.elevation_needed.connect(self._queue_elevation)
         self.app.aboutToQuit.connect(self.stop)
         self.preferences()
@@ -66,14 +75,21 @@ class Application(QObject):
         self._elevation_prompted = {identity: module for identity, module in self._elevation_prompted.items()
                                    if enabled.get(identity) == module}
         self.menu.clear()
-        self.menu.addAction(t("show_monitor"), lambda: self.window.request_visibility(True))
-        self.menu.addAction(t("toggle_mini"), lambda: self.hotkey("toggle_mini"))
+        self.monitor_action = self.menu.addAction(t("monitor_widget"))
+        self.monitor_action.setCheckable(True)
+        self.monitor_action.triggered.connect(self.window.request_visibility)
+        self.mini_action = self.menu.addAction(t("toggle_mini"))
+        self.mini_action.setCheckable(True)
+        self.mini_action.triggered.connect(lambda checked: self.controller.update_preferences(mini_enabled=checked))
         self.menu.addAction(t("settings"), self.open_settings)
+        self._helper_actions = {}
         if self.native:
             for module in self.controller.settings.integrations:
                 if module.enabled:
-                    self.menu.addAction(t("integration_helper_start").format(name=module.label),
-                                        lambda checked=False, identity=module.id: self._offer_elevation(identity))
+                    action = self.menu.addAction(t("integration_helper_start").format(name=module.label),
+                                                 lambda checked=False, identity=module.id: self._offer_elevation(identity))
+                    action.setCheckable(True)
+                    self._helper_actions[module.id] = action
         self.menu.addSeparator()
         self.menu.addAction(t("exit"), self.app.quit)
         self.tray.setToolTip(t("app_title"))
@@ -86,15 +102,23 @@ class Application(QObject):
         if self.native and signature != self._hotkey_signature:
             self._hotkey_signature = signature
             failures = self.hotkeys.configure(self.controller.settings.hotkeys, enabled_actions)
-            if failures:
-                self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(hotkey_label(action, self.controller.settings.integrations) for action in failures))
-                self.controller.notice = self._hotkey_notice
-                self.controller.changed.emit()
-            elif self._hotkey_notice and self.controller.notice == self._hotkey_notice:
-                self.controller.notice = ""
-                self._hotkey_notice = ""
-                self.controller.changed.emit()
+            self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(hotkey_label(action, self.controller.settings.integrations) for action in failures)) if failures else ""
+        self.window.hotkey_notice = self._hotkey_notice
+        self.window.refresh()
         self.mini.refresh()
+        self._sync_menu()
+
+    def _sync_menu(self, *args):
+        if self._stopped or not hasattr(self, "monitor_action"):
+            return
+        self.monitor_action.setChecked(self.window.isVisible())
+        self.mini_action.setChecked(self.mini.isVisible())
+        for module in self.controller.settings.integrations:
+            action = self._helper_actions.get(module.id)
+            if action is not None:
+                ready = self.controller.integration_adapter.helper_ready(module)
+                action.setChecked(ready)
+                action.setEnabled(not ready and "elevate:" + module.id not in self.controller._active)
 
     def _check_elevation(self):
         if not self.native or self._stopped:
@@ -124,6 +148,8 @@ class Application(QObject):
         module = next((item for item in self.controller.settings.integrations if item.id == identity and item.enabled), None)
         if module is None:
             return
+        if self.controller.integration_adapter.helper_ready(module):
+            return
         module = replace(module, auto_enabled=False)
         if automatic and self._elevation_prompted.get(identity) == module:
             return
@@ -139,6 +165,7 @@ class Application(QObject):
         if (answer == QMessageBox.StandardButton.Yes and not self._stopped and current is not None
                 and replace(current, auto_enabled=False) == module):
             self.controller._submit("elevate:" + identity, lambda: self.controller.integration_adapter.start_elevated(module))
+            self._sync_menu()
 
     def start(self):
         if self.native and QSystemTrayIcon.isSystemTrayAvailable():
@@ -186,6 +213,7 @@ class Application(QObject):
         if self._stopped:
             return
         self._stopped = True
+        self._menu_timer.stop()
         self.accent.stop()
         if getattr(self.app, "ecoflow_accent", None) is self.accent:
             del self.app.ecoflow_accent

@@ -74,6 +74,10 @@ class IntegrationAdapter:
             previous.close()
         self.sessions[module.id] = session
 
+    def helper_ready(self, module: IntegrationDefinition) -> bool:
+        session = self.sessions.get(module.id)
+        return bool(module.enabled and session is not None and session.matches(module) and session.ready)
+
     def retain_sessions(self, modules):
         definitions = {module.id: module for module in modules if module.enabled}
         for identity, session in tuple(self.sessions.items()):

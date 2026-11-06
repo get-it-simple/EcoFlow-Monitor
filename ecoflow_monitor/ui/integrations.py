@@ -15,6 +15,7 @@ from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.rules import RulesEditor
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.metrics import metric_tooltip, rule_tooltip
+from ecoflow_monitor.ui.scrollbar import install_scrollbars
 
 
 class ExecutableField(QLineEdit):
@@ -112,6 +113,7 @@ class ProfileDialog(QDialog):
         buttons.addWidget(save_button)
         outer.addLayout(buttons)
         self.profile: IntegrationProfile | None = profile
+        install_scrollbars(self)
 
     def showEvent(self, event):
         super().showEvent(event)

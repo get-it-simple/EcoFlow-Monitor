@@ -18,6 +18,7 @@ from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.metrics import metric_tooltip
+from ecoflow_monitor.ui.scrollbar import install_scrollbars
 
 
 class SettingsWindow(QDialog):
@@ -52,6 +53,7 @@ class SettingsWindow(QDialog):
         controller.devices_ready.connect(self._devices)
         self.load_draft()
         controller.changed.connect(self._refresh_metric_tooltips)
+        install_scrollbars(self)
 
     def _tab(self, title: str):
         body = QWidget()
@@ -116,6 +118,7 @@ class SettingsWindow(QDialog):
         monitor = self.appearance_sections["appearance_monitor"].content
         mini = self.appearance_sections["appearance_mini"].content
         metrics = self.appearance_sections["appearance_metrics"].content
+        self.appearance_sections["appearance_general"].set_expanded(True)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.language = QComboBox()
@@ -143,9 +146,11 @@ class SettingsWindow(QDialog):
         monitor.addWidget(hint(t("main_transparency_hint")))
         self.animations = QCheckBox(t("animations"))
         self.visible_on_start = QCheckBox(t("visible_on_start"))
+        self.monitor_labels_visible = QCheckBox(t("monitor_labels_visible"))
+        self.monitor_values_on_hover = QCheckBox(t("monitor_values_on_hover"))
         self.mini_enabled = QCheckBox(t("mini_widget"))
         self.mini_above = QCheckBox(t("mini_above_taskbar"))
-        for control in (self.animations, self.visible_on_start):
+        for control in (self.animations, self.visible_on_start, self.monitor_labels_visible, self.monitor_values_on_hover):
             monitor.addWidget(control)
         for control in (self.mini_enabled, self.mini_above):
             mini.addWidget(control)
@@ -193,10 +198,10 @@ class SettingsWindow(QDialog):
         self.hotkey_sections = {}
         enabled_modules = {module.id for module in modules if module.enabled}
         for module in modules:
-            section = CollapsibleSection(module.label)
+            section = CollapsibleSection(module.label, self.hotkey_body)
+            self.hotkey_layout.addWidget(section)
             section.set_expanded(expanded.get(module.id, False))
             section.setVisible(module.id in enabled_modules)
-            self.hotkey_layout.addWidget(section)
             self.hotkey_sections[module.id] = section
         for name in hotkey_actions(modules):
             binding = values.get(name, HotkeyBinding(name))
@@ -243,6 +248,8 @@ class SettingsWindow(QDialog):
         self.background_transparency.setEnabled(settings.transparency)
         self.animations.setChecked(settings.animations)
         self.visible_on_start.setChecked(settings.monitor_visible)
+        self.monitor_labels_visible.setChecked(settings.monitor_labels_visible)
+        self.monitor_values_on_hover.setChecked(settings.monitor_values_on_hover)
         self.mini_enabled.setChecked(settings.mini_enabled)
         self.mini_above.setChecked(settings.mini_above_taskbar)
         self.mini_scale.setValue(settings.mini_scale * 100)
@@ -327,6 +334,8 @@ class SettingsWindow(QDialog):
             transparency=self.transparency.isChecked(), animations=self.animations.isChecked(),
             background_opacity=self._baseline.background_opacity if self.background_transparency.value() == round((1 - self._baseline.background_opacity) * 100, 2) else 1 - self.background_transparency.value() / 100,
             monitor_visible=self.visible_on_start.isChecked(), mini_enabled=self.mini_enabled.isChecked(),
+            monitor_labels_visible=self.monitor_labels_visible.isChecked(),
+            monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
             mini_above_taskbar=self.mini_above.isChecked(), mini_scale=self.mini_scale.value() / 100,
             mini_transparency=self.mini_alpha.value() / 100, mini_dock=self.dock.currentData(),
             mini_metrics=tuple(self.metrics.item(index).data(Qt.ItemDataRole.UserRole) for index in range(self.metrics.count()) if self.metrics.item(index).checkState() == Qt.CheckState.Checked),

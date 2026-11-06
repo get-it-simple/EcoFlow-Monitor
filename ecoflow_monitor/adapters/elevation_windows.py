@@ -30,6 +30,13 @@ def close_handle(handle):
     api.CloseHandle(handle)
 
 
+def process_running(handle) -> bool:
+    api = kernel32()
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.WaitForSingleObject.restype = wintypes.DWORD
+    return api.WaitForSingleObject(handle, 0) == 0x102
+
+
 def pipe_peer(connection, server: bool) -> int:
     function = getattr(kernel32(), "GetNamedPipeServerProcessId" if server else "GetNamedPipeClientProcessId")
     function.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]

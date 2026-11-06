@@ -16,11 +16,14 @@ class FlowWidget(QWidget):
         self.phase = 0.0
         self._tooltip_position = None
         self._tooltip_text = ""
+        self._hovered_metric = ""
+        self._hover_position = None
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._advance)
         self.setObjectName("flow")
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
+        self.setMouseTracking(True)
         self.setMinimumSize(420, 407)
         self.status = QLabel(self)
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -28,6 +31,8 @@ class FlowWidget(QWidget):
     def refresh(self):
         update_status(self.status, self.controller)
         self._position_status()
+        if self._hover_position is not None:
+            self._hovered_metric = self.metric_at(self._hover_position)
         if self._tooltip_position is not None and QToolTip.isVisible() and QToolTip.text() == self._tooltip_text:
             self._tooltip_text = self.tooltip_at(self._tooltip_position)
             if self._tooltip_text:
@@ -50,6 +55,8 @@ class FlowWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_status()
+        if self._hover_position is not None:
+            self._hovered_metric = self.metric_at(self._hover_position)
 
     def _position_status(self):
         scale = min(self.width() / 640, self.height() / 620)
@@ -62,6 +69,8 @@ class FlowWidget(QWidget):
 
     def hideEvent(self, event):
         self._timer.stop()
+        self._hovered_metric = ""
+        self._hover_position = None
         super().hideEvent(event)
 
     def _drawing_transform(self):
@@ -79,17 +88,7 @@ class FlowWidget(QWidget):
                 cells.append((QRectF(20 + column * width, 570 + start // 4 * 26, width, 26), key, value))
         return cells
 
-    def tooltip_at(self, position: QPointF) -> str:
-        scale, offset = self._drawing_transform()
-        if scale <= 0:
-            return ""
-        point = (position - offset) / scale
-        limits = []
-        for key, limit in (("minimum_discharge_level", self.controller.minimum), ("maximum_charge_level", self.controller.maximum)):
-            if limit.value is not None and QRectF(175, 485 - 290 * limit.value / 100 - 5, 290, 10).contains(point):
-                limits.append(metric_tooltip(key, self.controller))
-        if limits:
-            return "\n\n".join(limits)
+    def _metric_regions(self):
         regions = [
             (QRectF(30, 2, 270, 94), "input_power"),
             (QRectF(350, 2, 260, 94), "output_power"),
@@ -101,7 +100,45 @@ class FlowWidget(QWidget):
             (QRectF(190, 238, 260, 112), "battery_level"),
         ]
         regions.extend((rect, key) for rect, key, _ in self._usb_cells())
-        return next((metric_tooltip(key, self.controller) for rect, key in regions if rect.contains(point)), "")
+        return regions
+
+    def metric_at(self, position: QPointF) -> str:
+        scale, offset = self._drawing_transform()
+        if scale <= 0:
+            return ""
+        point = (position - offset) / scale
+        return next((key for rect, key in self._metric_regions() if rect.contains(point)), "")
+
+    def value_visible(self, key: str) -> bool:
+        return not self.controller.settings.monitor_values_on_hover or self._hovered_metric == key
+
+    def mouseMoveEvent(self, event):
+        self._hover_position = event.position()
+        key = self.metric_at(self._hover_position)
+        if key != self._hovered_metric:
+            self._hovered_metric = key
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover_position = None
+        self._hovered_metric = ""
+        self.update()
+        super().leaveEvent(event)
+
+    def tooltip_at(self, position: QPointF) -> str:
+        scale, offset = self._drawing_transform()
+        if scale <= 0:
+            return ""
+        point = (position - offset) / scale
+        limits = []
+        for key, limit in (("minimum_discharge_level", self.controller.minimum), ("maximum_charge_level", self.controller.maximum)):
+            if limit.value is not None and QRectF(175, 485 - 290 * limit.value / 100 - 5, 290, 10).contains(point):
+                limits.append(metric_tooltip(key, self.controller))
+        if limits:
+            return "\n\n".join(limits)
+        key = self.metric_at(position)
+        return metric_tooltip(key, self.controller) if key else ""
 
     def event(self, event):
         if event.type() == QEvent.Type.ToolTip and isinstance(event, QHelpEvent):
@@ -128,19 +165,23 @@ class FlowWidget(QWidget):
         foreground = "#f4f7f8" if fresh else "#96a3a9"
         green, orange = "#50e9a2", "#ffc16c"
 
-        def text(rect, value, size=18, color=foreground, alignment=Qt.AlignmentFlag.AlignCenter):
+        def text(rect, value, size=18, color=foreground, alignment=Qt.AlignmentFlag.AlignCenter, metric="", label=False):
+            if label and not self.controller.settings.monitor_labels_visible:
+                return
+            if metric and not self.value_visible(metric):
+                return
             font = QFont("Segoe UI")
             font.setPixelSize(size)
             painter.setFont(font)
             painter.setPen(QColor(color))
             painter.drawText(QRectF(*rect), alignment, value)
 
-        text((30, 2, 270, 32), t("input_power"), 21, green, Qt.AlignmentFlag.AlignLeft)
-        text((350, 2, 260, 32), t("output_power"), 21, orange, Qt.AlignmentFlag.AlignRight)
-        text((30, 36, 270, 60), number(telemetry.input_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignLeft)
-        text((350, 36, 260, 60), number(telemetry.output_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignRight)
+        text((30, 2, 270, 32), t("input_power"), 21, green, Qt.AlignmentFlag.AlignLeft, label=True)
+        text((350, 2, 260, 32), t("output_power"), 21, orange, Qt.AlignmentFlag.AlignRight, label=True)
+        text((30, 36, 270, 60), number(telemetry.input_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignLeft, metric="input_power")
+        text((350, 36, 260, 60), number(telemetry.output_w if telemetry else None, t("unit_watt")), 43, foreground, Qt.AlignmentFlag.AlignRight, metric="output_power")
 
-        def branch(x, incoming, value, label):
+        def branch(x, incoming, value, key):
             y = 116 if incoming else 514
             path = QPainterPath(QPointF(x, y + (24 if incoming else -24)))
             path.cubicTo(x, 189 if incoming else 440, 320, 168 if incoming else 462, 320, 194 if incoming else 428)
@@ -158,13 +199,13 @@ class FlowWidget(QWidget):
             painter.setPen(QPen(QColor("#3c484d"), 1))
             painter.setBrush(QColor(0, 0, 0, 70))
             painter.drawEllipse(QPointF(x, y), 27, 27)
-            text((x - 95, y - 24, 190, 48), label, 16, foreground, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap)
-            text((x - 95, y + 34, 190, 28), number(value, t("unit_watt")), 21)
+            text((x - 95, y - 24, 190, 48), t(key), 16, foreground, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, label=True)
+            text((x - 95, y + 34, 190, 28), number(value, t("unit_watt")), 21, metric=key)
 
-        branch(130, True, ports.get("ac_input"), t("ac_input"))
-        branch(510, True, ports.get("pv_input"), t("pv_input"))
-        branch(130, False, ports.get("ac_output"), t("ac_output"))
-        branch(510, False, ports.get("dc_output"), t("dc_output"))
+        branch(130, True, ports.get("ac_input"), "ac_input")
+        branch(510, True, ports.get("pv_input"), "pv_input")
+        branch(130, False, ports.get("ac_output"), "ac_output")
+        branch(510, False, ports.get("dc_output"), "dc_output")
 
         circle = QRectF(175, 195, 290, 290)
         gradient = QLinearGradient(0, 195, 0, 485)
@@ -191,10 +232,10 @@ class FlowWidget(QWidget):
             fill.setColorAt(1, QColor("#00b975" if fresh else "#244f43"))
             painter.fillPath(wave, fill)
             painter.restore()
-        text((190, 238, 260, 28), t("battery_level"), 18)
-        text((190, 270, 260, 80), number(telemetry.soc_pct if telemetry else None, "%"), 67)
-        text((185, 364, 270, 28), t("estimated_runtime"), 16)
-        text((185, 397, 270, 35), duration(self.controller.runtime), 23)
+        text((190, 238, 260, 28), t("battery_level"), 18, label=True)
+        text((190, 270, 260, 80), number(telemetry.soc_pct if telemetry else None, "%"), 67, metric="battery_level")
+        text((185, 364, 270, 28), t("estimated_runtime"), 16, label=True)
+        text((185, 397, 270, 35), duration(self.controller.runtime), 23, metric="estimated_runtime")
 
         for limit, color in ((self.controller.maximum, green), (self.controller.minimum, orange)):
             if limit.value is not None:
@@ -202,5 +243,8 @@ class FlowWidget(QWidget):
                 painter.setPen(QPen(QColor(color), 1, Qt.PenStyle.DotLine))
                 painter.drawLine(QPointF(175, y), QPointF(465, y))
         for cell_rect, key, port_power in self._usb_cells():
-            text((cell_rect.x(), cell_rect.y(), cell_rect.width(), cell_rect.height()), metric_label(key) + " " + number(port_power, t("unit_watt")), 14)
+            parts = [metric_label(key)] if self.controller.settings.monitor_labels_visible else []
+            if self.value_visible(key):
+                parts.append(number(port_power, t("unit_watt")))
+            text((cell_rect.x(), cell_rect.y(), cell_rect.width(), cell_rect.height()), " ".join(parts), 14)
         painter.end()

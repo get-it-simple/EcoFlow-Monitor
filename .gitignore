@@ -15,6 +15,7 @@ venv/
 *.iws
 .run/*
 !.run/Tests (pytest).run.xml
+!.run/Tests (serial).run.xml
 /docs/
 settings.json
 settings.json.bak

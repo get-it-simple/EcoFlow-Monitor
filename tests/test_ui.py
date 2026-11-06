@@ -40,7 +40,7 @@ def runtime(tmp_path, qapp):
 
 def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
     assert runtime.window.msi_section.isHidden()
-    assert "—" in runtime.window.limits.text()
+    assert all("—" in readout.display_text() for readout in runtime.window.limits.readouts)
     assert metric_text(runtime.controller, "input_power") == "—"
     assert "No successful update" in status_tooltip(runtime.controller)
 
@@ -242,9 +242,10 @@ def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, langua
         dialog.show()
         dialog.tabs.setCurrentIndex(2)
         qapp.processEvents()
-        for section in dialog.appearance_sections.values():
-            assert section.body.isHidden()
-            QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
+        for index, section in enumerate(dialog.appearance_sections.values()):
+            assert section.body.isHidden() == (index != 0)
+            if index:
+                QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
         qapp.processEvents()
         sections = list(dialog.appearance_sections.values())
         for above, below in zip(sections, sections[1:]):
@@ -433,8 +434,8 @@ def test_requested_profile_is_not_shown_as_confirmed(runtime):
     controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
     controller.integration_states["afterburner"].requested_profile = "profile_3"
     runtime.window.refresh()
-    assert "Requested profile: Profile 3" in runtime.window.profile_status.text()
-    assert "Current profile" not in runtime.window.profile_status.text()
+    assert "Requested profile: Profile 3" in runtime.window.notifications.toolTip()
+    assert "Current profile" not in runtime.window.notifications.toolTip()
 
 
 @pytest.mark.parametrize("result,expected", [
@@ -450,10 +451,10 @@ def test_cli_result_is_shown_without_claiming_observed_gpu_state(runtime, result
     state.requested_profile = "profile_5"
     state.result = result
     runtime.window.refresh()
-    text = runtime.window.profile_status.text()
+    text = runtime.window.notifications.toolTip()
     assert expected in text and "Requested profile: Profile 5" in text
     assert "Current profile" not in text and "unknown" not in text
-    assert runtime.window.profile_status.toolTip() == text
+    assert not runtime.window.notifications.isHidden()
 
 
 def test_every_literal_translation_key_exists_in_english():

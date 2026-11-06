@@ -8,7 +8,7 @@ import subprocess
 import threading
 import uuid
 
-from ecoflow_monitor.adapters.elevation_windows import close_handle, connect_pipe, is_helper_process, launch_helper, pipe_peer
+from ecoflow_monitor.adapters.elevation_windows import close_handle, connect_pipe, is_helper_process, launch_helper, pipe_peer, process_running
 
 
 MAX_MESSAGE = 1048576
@@ -50,6 +50,10 @@ class ElevatedSession:
 
     def matches(self, module):
         return self.module == replace(module, auto_enabled=False)
+
+    @property
+    def ready(self) -> bool:
+        return not self._closed.is_set() and self.connection is not None and self.handle is not None and process_running(self.handle)
 
     def start(self):
         address = "\\\\.\\pipe\\EcoFlowMonitor-" + uuid.uuid4().hex
