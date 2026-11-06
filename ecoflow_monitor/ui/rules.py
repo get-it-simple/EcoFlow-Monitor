@@ -24,6 +24,8 @@ class RuleTable(QTableWidget):
         self.setAcceptDrops(editor.application)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.horizontalHeader().setHighlightSections(False)
+        self.verticalHeader().setHighlightSections(False)
 
     def dragEnterEvent(self, event):
         if self.editor.application and event.mimeData().hasUrls():

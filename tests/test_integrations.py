@@ -391,6 +391,55 @@ def test_editor_referenced_items_cannot_be_removed(qapp, monkeypatch):
         editor.deleteLater()
 
 
+@pytest.mark.parametrize("table_name", ["mapping", "application_rules", "system_rules"])
+@pytest.mark.parametrize("styled", [False, True])
+def test_table_headers_keep_their_appearance_when_rows_are_selected(qapp, table_name, styled):
+    from ecoflow_monitor.ui.theme import settings_style
+
+    rules = (IntegrationRule("first", "a"), IntegrationRule("second", "b"))
+    editor = IntegrationsEditor()
+    editor.load((module_example(application_rules=rules, system_rules=rules),))
+    if styled:
+        editor.setStyleSheet(settings_style("#3a96dd"))
+    table = editor.mapping if table_name == "mapping" else getattr(editor, table_name).table
+    editor.body.setCurrentIndex(1 if table_name == "mapping" else 3)
+    editor.resize(1200, 1000)
+    editor.show()
+    try:
+        table.setFocus()
+        table.clearSelection()
+        qapp.processEvents()
+        headers = [table.horizontalHeader()]
+        if table.verticalHeader().isVisible():
+            headers.append(table.verticalHeader())
+        assert not table.horizontalHeader().highlightSections()
+        assert not table.verticalHeader().highlightSections()
+        before = [header.grab().toImage() for header in headers]
+        assert all(not image.isNull() for image in before)
+        for row in (0, 1):
+            table.selectRow(row)
+            qapp.processEvents()
+            assert [index.row() for index in table.selectionModel().selectedRows()] == [row]
+            assert [header.grab().toImage() for header in headers] == before
+        table.selectAll()
+        qapp.processEvents()
+        assert [index.row() for index in table.selectionModel().selectedRows()] == [0, 1]
+        assert [header.grab().toImage() for header in headers] == before
+        table.clearSelection()
+        qapp.processEvents()
+        assert not table.selectionModel().hasSelection()
+        assert [header.grab().toImage() for header in headers] == before
+        if table_name == "mapping":
+            table.item(0, 1).setText("Renamed")
+            assert editor.modules()[0].mapping[0].label == "Renamed"
+        else:
+            table.cellWidget(0, 0).setChecked(False)
+            assert not getattr(editor.modules()[0], table_name)[0].enabled
+    finally:
+        editor.close()
+        editor.deleteLater()
+
+
 def test_import_export_and_rejected_import_preserve_modules(tmp_path, qapp, monkeypatch):
     module = module_example(auto_enabled=True)
     source = tmp_path / "import.json"

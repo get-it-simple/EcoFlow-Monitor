@@ -195,6 +195,8 @@ class IntegrationsEditor(QWidget):
         mapping_layout = QVBoxLayout(mapping_body)
         self.mapping = QTableWidget(0, 3)
         self.mapping.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.mapping.horizontalHeader().setHighlightSections(False)
+        self.mapping.verticalHeader().setHighlightSections(False)
         self.mapping.setAlternatingRowColors(True)
         self.mapping.verticalHeader().hide()
         self.mapping.setAccessibleName(t("integration_mapping"))
