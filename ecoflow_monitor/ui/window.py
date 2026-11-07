@@ -12,6 +12,7 @@ from ecoflow_monitor.ui.flow import FlowWidget
 from ecoflow_monitor.ui.limits import ChargeLimits
 from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.resize import WindowResize
+from ecoflow_monitor.ui.sections import CollapsibleSection
 
 
 STYLE = SETTINGS_STYLE
@@ -72,9 +73,9 @@ class MonitorWindow(QWidget):
         layout.addWidget(self.flow, 1)
         self.limits = ChargeLimits(controller)
         layout.addWidget(self.limits)
-        self.msi_section = QFrame(self.shell)
+        self.msi_section = CollapsibleSection(t("integrations"), self.shell)
         self.msi_section.setObjectName("monitor_msi")
-        msi = QVBoxLayout(self.msi_section)
+        msi = self.msi_section.content
         msi.setContentsMargins(0, 6, 0, 0)
         self.integration_selector = QComboBox()
         self.integration_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -111,6 +112,7 @@ class MonitorWindow(QWidget):
         self.profile_scroll = profile_scroll
         msi.addWidget(profile_scroll)
         layout.addWidget(self.msi_section)
+        self.msi_section.header.toggled.connect(lambda: self._layout_timer.start())
         self.resize_controls = WindowResize(self)
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setSingleShot(True)
@@ -222,6 +224,10 @@ class MonitorWindow(QWidget):
         self.notifications.refresh(controller, self.hotkey_notice)
         self.limits.refresh()
         modules = tuple(module for module in controller.settings.integrations if module.enabled)
+        self.msi_section.header.setText(t("integrations"))
+        self.msi_section.header.setToolTip(t("integrations"))
+        if not modules:
+            self.msi_section.set_expanded(False)
         self.msi_section.setVisible(bool(modules))
         choices = tuple((module.id, module.label) for module in modules)
         current_choices = tuple((self.integration_selector.itemData(index), self.integration_selector.itemText(index)) for index in range(self.integration_selector.count()))
@@ -300,6 +306,7 @@ class MonitorWindow(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self.msi_section.set_expanded(False)
         self.visibility_changed.emit(False)
 
     def closeEvent(self, event):

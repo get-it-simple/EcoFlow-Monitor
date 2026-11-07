@@ -56,9 +56,11 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Settings > Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
-- Enable the mini widget in Appearance and choose or reorder its metrics. Drag it
-  to move it; screen-edge docking and placement above the taskbar are optional.
-- Select an enabled integration and profile in the monitor, then click
+- Enable the mini widget in Appearance and choose which metrics stay visible,
+  appear after expanding the arrow, or remain off. Drag to reorder metrics or move
+  the widget; screen-edge docking and placement above the taskbar are optional.
+- Expand **Integrations** in Settings to manage modules, or in the monitor to
+  select an enabled integration and profile, then click
   **Apply profile**. Manual selection turns off Auto for that integration only.
 
 ## Features

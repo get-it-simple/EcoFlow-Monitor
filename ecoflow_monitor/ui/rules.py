@@ -69,6 +69,9 @@ class RulesEditor(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         if application:
             self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        else:
+            for index in range(1, self.table.columnCount()):
+                self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
         self.table.setMinimumHeight(180)
         layout.addWidget(self.table)
         buttons = QHBoxLayout()

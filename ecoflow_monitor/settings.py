@@ -46,6 +46,7 @@ class AppSettings:
     monitor_geometry: tuple[int, int, int, int] = (-1, -1, 660, 820)
     mini_enabled: bool = False
     mini_metrics: tuple[str, ...] = ("battery_level", "input_power", "output_power")
+    mini_hidden_metrics: tuple[str, ...] = ()
     mini_scale: float = 1
     mini_transparency: float = 0.8
     mini_position: tuple[int, int] = (-1, -1)
@@ -69,7 +70,8 @@ class AppSettings:
             raise ValueError("Invalid credential reference or language")
         if self.mini_dock not in {"", "left", "right", "top", "bottom"}:
             raise ValueError("Invalid docking edge")
-        if not self.mini_metrics or len(set(self.mini_metrics)) != len(self.mini_metrics) or any(value not in METRICS for value in self.mini_metrics):
+        mini_metrics = self.mini_metrics + self.mini_hidden_metrics
+        if not mini_metrics or len(set(mini_metrics)) != len(mini_metrics) or any(value not in METRICS for value in mini_metrics):
             raise ValueError("Invalid mini widget metrics")
         ids = set()
         for module in self.integrations:
@@ -97,7 +99,7 @@ class AppSettings:
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
             "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover},
-            "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
+            "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "hidden_metrics": list(self.mini_hidden_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
 
     @classmethod
@@ -137,6 +139,7 @@ class AppSettings:
             monitor_labels_visible=boolean(appearance, "monitor_labels_visible", True),
             monitor_values_on_hover=boolean(appearance, "monitor_values_on_hover", False),
             mini_enabled=boolean(mini, "enabled", False), mini_metrics=tuple(mini.get("metrics", defaults.mini_metrics)),
+            mini_hidden_metrics=tuple(mini.get("hidden_metrics", ())),
             mini_scale=mini.get("scale", 1), mini_transparency=mini.get("transparency", 0.8),
             mini_position=tuple(mini.get("position", defaults.mini_position)), mini_dock=string(mini, "dock"),
             mini_above_taskbar=boolean(mini, "above_taskbar", False),

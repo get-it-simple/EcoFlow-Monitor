@@ -37,6 +37,7 @@ def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, langu
     window = runtime.window
     controller.apply_settings(replace(controller.settings, language=language, integrations=(replace(controller.settings.integrations[0], enabled=msi),)))
     window.show()
+    window.msi_section.set_expanded(msi)
     for scale in (0.5, 1, 2, 3, 0.5, 3, 1):
         controller.apply_settings(replace(controller.settings, scale=scale))
         qapp.processEvents()

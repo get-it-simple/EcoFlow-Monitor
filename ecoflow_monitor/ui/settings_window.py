@@ -1,7 +1,7 @@
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.credentials import CredentialError
@@ -10,7 +10,7 @@ from ecoflow_monitor.integrations import hotkey_actions, hotkey_label
 from ecoflow_monitor.ui.integrations import IntegrationsEditor
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import METRICS, HotkeyBinding, SettingsError
-from ecoflow_monitor.ui.common import action, clamp_window, effective_scale, hint, scaled_font
+from ecoflow_monitor.ui.common import action, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import optional_percent
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
 from ecoflow_monitor.ui.reference_style import toggle_switch_style
@@ -37,8 +37,11 @@ class SettingsWindow(QDialog):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs)
         self._build_connection()
-        self.integrations_editor = IntegrationsEditor()
-        self._tab(t("integrations")).addWidget(self.integrations_editor)
+        integrations = self._tab(t("integrations"))
+        self.integrations_section = CollapsibleSection(t("integrations"))
+        integrations.addWidget(self.integrations_section)
+        self.integrations_editor = IntegrationsEditor(self.integrations_section.body)
+        self.integrations_section.content.addWidget(self.integrations_editor)
         self._build_appearance()
         self._build_hotkeys()
         self.integrations_editor.changed.connect(self._refresh_hotkeys)
@@ -256,12 +259,27 @@ class SettingsWindow(QDialog):
         self.mini_alpha.setValue(settings.mini_transparency * 100)
         self.dock.setCurrentIndex(max(0, self.dock.findData(settings.mini_dock)))
         self.metrics.clear()
-        for key in (*settings.mini_metrics, *(key for key in METRICS if key not in settings.mini_metrics)):
-            item = QListWidgetItem(t(key), self.metrics)
+        selected_metrics = settings.mini_metrics + settings.mini_hidden_metrics
+        for key in (*selected_metrics, *(key for key in METRICS if key not in selected_metrics)):
+            item = QListWidgetItem(self.metrics)
             item.setToolTip(metric_tooltip(key, self.controller))
             item.setData(Qt.ItemDataRole.UserRole, key)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if key in settings.mini_metrics else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, t(key))
+            row = QWidget()
+            row.setToolTip(item.toolTip())
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(QLabel(t(key)), 1)
+            mode = QComboBox()
+            mode.setAccessibleName(t(key))
+            for name in ("always", "expanded", "off"):
+                mode.addItem(t("metric_mode_" + name), name)
+            mode.setCurrentIndex(0 if key in settings.mini_metrics else 1 if key in settings.mini_hidden_metrics else 2)
+            item.setData(Qt.ItemDataRole.UserRole + 1, mode.currentData())
+            mode.currentIndexChanged.connect(lambda index, entry=item, choice=mode: entry.setData(Qt.ItemDataRole.UserRole + 1, choice.itemData(index)))
+            row_layout.addWidget(mode)
+            item.setSizeHint(row.sizeHint())
+            self.metrics.setItemWidget(item, row)
         self.hotkey_rows = self._reset_hotkeys()
 
     def _reset_hotkeys(self):
@@ -275,6 +293,7 @@ class SettingsWindow(QDialog):
         for index in range(self.metrics.count()):
             item = self.metrics.item(index)
             item.setToolTip(metric_tooltip(item.data(Qt.ItemDataRole.UserRole), self.controller))
+            self.metrics.itemWidget(item).setToolTip(item.toolTip())
 
     def _clear_hotkeys(self):
         while self.hotkey_layout.count():
@@ -338,10 +357,16 @@ class SettingsWindow(QDialog):
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
             mini_above_taskbar=self.mini_above.isChecked(), mini_scale=self.mini_scale.value() / 100,
             mini_transparency=self.mini_alpha.value() / 100, mini_dock=self.dock.currentData(),
-            mini_metrics=tuple(self.metrics.item(index).data(Qt.ItemDataRole.UserRole) for index in range(self.metrics.count()) if self.metrics.item(index).checkState() == Qt.CheckState.Checked),
+            mini_metrics=self._metric_group("always"),
+            mini_hidden_metrics=self._metric_group("expanded"),
         )
         changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(self._baseline, name)}
         return replace(current, **changes)
+
+    def _metric_group(self, mode):
+        return tuple(self.metrics.item(index).data(Qt.ItemDataRole.UserRole)
+                     for index in range(self.metrics.count())
+                     if self.metrics.item(index).data(Qt.ItemDataRole.UserRole + 1) == mode)
 
     def save(self):
         try:
@@ -354,4 +379,30 @@ class SettingsWindow(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        clamp_window(self)
+        self.integrations_section.set_expanded(False)
+        self._fit_content()
+
+    def _fit_content(self):
+        area = self.screen().availableGeometry()
+        frame = self.frameGeometry().size() - self.size()
+        available = area.size() - frame
+        self.ensurePolished()
+        self.layout().activate()
+        page = self.tabs.currentWidget()
+        chrome = self.size() - page.viewport().size()
+        bodies = [self.tabs.widget(index).widget() for index in range(self.tabs.count())]
+        for body in bodies:
+            body.ensurePolished()
+            body.layout().activate()
+        width = min(available.width(), max(self.width(), max(body.minimumSizeHint().width() for body in bodies) + chrome.width()))
+        content_width = max(1, width - chrome.width())
+        height = 0
+        for body in bodies:
+            layout = body.layout()
+            preferred = layout.totalHeightForWidth(content_width) if layout.hasHeightForWidth() else layout.totalSizeHint().height()
+            height = max(height, preferred, body.minimumSizeHint().height())
+        self.resize(QSize(width, max(self.height(), height + chrome.height())).boundedTo(available))
+        bounds = self.frameGeometry()
+        x = min(max(bounds.left(), area.left()), area.right() - bounds.width() + 1)
+        y = min(max(bounds.top(), area.top()), area.bottom() - bounds.height() + 1)
+        self.move(self.pos() + QPoint(x - bounds.left(), y - bounds.top()))

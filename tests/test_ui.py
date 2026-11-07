@@ -25,6 +25,73 @@ class NoCredentials:
         raise AssertionError("UI tests must not access credentials")
 
 
+@pytest.mark.parametrize("conditions", [("input", "soc"), ("soc",), ("input",), ()])
+def test_system_rule_fields_fill_available_table_width(qapp, conditions):
+    from ecoflow_monitor.integrations import IntegrationRule, afterburner_example
+    from ecoflow_monitor.ui.rules import RulesEditor
+    editor = RulesEditor(False)
+    profiles = afterburner_example().profiles
+    editor.configure(profiles, conditions)
+    editor.append(IntegrationRule("example", profiles[0].id, min_soc=20, max_soc=80))
+    expected = editor.rules()
+    try:
+        editor.resize(1000, 300)
+        editor.show()
+        qapp.processEvents()
+        table = editor.table
+        visible = [column for column in range(table.columnCount()) if not table.isColumnHidden(column)]
+        widths = {column: table.columnWidth(column) for column in visible}
+        assert abs(sum(widths.values()) - table.viewport().width()) <= 1
+        editor.resize(1400, 300)
+        qapp.processEvents()
+        assert abs(sum(table.columnWidth(column) for column in visible) - table.viewport().width()) <= 1
+        assert all(table.columnWidth(column) > widths[column] for column in visible if column)
+        assert editor.rules() == expected
+    finally:
+        editor.close()
+        editor.deleteLater()
+
+
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("work_size", [(1920, 1800), (640, 480)])
+@pytest.mark.parametrize("scale", [0.5, 1, 3])
+def test_settings_initial_size_fits_content_or_scrolls(runtime, qapp, language, work_size, scale):
+    from types import SimpleNamespace
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QLabel
+    area = QRect(40, 30, *work_size)
+
+    class ScreenConstrainedSettings(SettingsWindow):
+        def screen(self):
+            return SimpleNamespace(availableGeometry=lambda: area)
+
+    runtime.controller.apply_settings(replace(runtime.controller.settings, language=language, scale=scale))
+    dialog = ScreenConstrainedSettings(runtime.controller, runtime.window)
+    scroller = dialog.tabs.widget(0)
+    extra = QLabel("Additional settings content")
+    extra.setMinimumHeight(650)
+    scroller.widget().layout().insertWidget(0, extra)
+    try:
+        dialog.show()
+        qapp.processEvents()
+        assert area.contains(dialog.frameGeometry())
+        if work_size[1] > 1000:
+            for index in range(dialog.tabs.count()):
+                dialog.tabs.setCurrentIndex(index)
+                qapp.processEvents()
+                page = dialog.tabs.currentWidget()
+                assert page.verticalScrollBar().maximum() == 0
+                assert page.horizontalScrollBar().maximum() == 0
+        else:
+            assert scroller.verticalScrollBar().maximum() > 0
+            scroller.verticalScrollBar().setValue(scroller.verticalScrollBar().maximum())
+            assert scroller.verticalScrollBar().value() > 0
+        assert runtime.controller.settings.scale == scale
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
 @pytest.fixture
 def runtime(tmp_path, qapp):
     controller = Controller(SettingsStore(tmp_path / "settings.json"), NoCredentials())
@@ -539,8 +606,10 @@ def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime
     window.show()
     qapp.processEvents()
     assert window.windowOpacity() == 1
+    window.msi_section.set_expanded(True)
+    qapp.processEvents()
     image = window.grab().toImage()
-    for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.flow, QPoint(2, 2)), (window.msi_section, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
+    for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.flow, QPoint(2, 2)), (window.msi_section.body, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
         position = widget.mapTo(window, point)
         assert image.pixelColor(position).alpha() == alpha, widget.objectName()
     assert image.pixelColor(0, 0).alpha() == 0
