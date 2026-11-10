@@ -13,7 +13,7 @@ def test_settings_roundtrip_preserves_order_and_does_not_contain_credentials(tmp
     store.save(settings)
     assert store.load() == settings
     payload = json.loads(store.path.read_text(encoding="utf-8"))
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["integrations"][0]["system_rules"][0]["id"] == "b"
     assert set(payload["ecoflow"]) == {"serial", "credential_ref", "credential_source", "onepassword", "capacity_wh", "manual_min", "manual_max"}
 
@@ -47,11 +47,12 @@ def test_failed_atomic_publish_preserves_previous_file(tmp_path, monkeypatch):
 def test_version_zero_migrates_without_erasing_values():
     settings = AppSettings.from_dict({"language": "uk", "ui_scale": 1.5})
     assert settings.language == "uk" and settings.scale == 1.5
-    assert settings.to_dict()["version"] == 2
+    assert settings.to_dict()["version"] == 3
 
 
 def test_background_opacity_defaults_for_existing_settings():
     payload = AppSettings().to_dict()
+    payload["version"] = 2
     del payload["appearance"]["background_opacity"]
     assert AppSettings.from_dict(payload).background_opacity == 140 / 255
 

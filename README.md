@@ -2,12 +2,12 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.11.0**.
+battery charge. Version **0.12.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
 
-![img.png](assets/img.png)
+![EcoFlow Monitor dashboard](assets/interface.png)
 
 ## Install
 
@@ -22,7 +22,7 @@ portable copies use their own folder when writable. Updates and uninstall preser
 settings, logs and developer keys. Updates close the installed application safely;
 close copies running in other Windows sessions before updating.
 
-Open Settings, enter your official EcoFlow developer access/secret keys, and click
+Open **Connection** in the dashboard, enter your official EcoFlow developer access/secret keys, and click
 **Load my devices**. Select your DELTA 3 Max and save. The list contains your bound
 devices; telemetry mapping supports DELTA 3 Max only. Developer keys are different
 from an EcoFlow mobile-app email/password.
@@ -49,39 +49,45 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 
 ## Everyday controls
 
-- Open Settings from the top-right button or system tray. Closing the main window
+- The dashboard opens on startup. Use its sidebar for monitoring and settings,
+  and open the independent main or mini widget when needed. Closing a window
   hides it; use the tray menu to exit.
-- Launching the application again restores and focuses the existing window.
+- Launching the application again restores and focuses the dashboard.
   Only one instance runs per user in a Windows session, even from another folder.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
-  assign other actions in **Settings > Hotkeys**. A shortcut owned by another
+  assign other actions in **Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
 - Enable the mini widget in Appearance and choose which metrics stay visible,
-  appear after expanding the arrow, or remain off. Drag to reorder metrics or move
-  the widget; screen-edge docking and placement above the taskbar are optional.
+  appear after expanding, or remain off. Reorder metrics by dragging or using
+  Move up/Move down. Drag widgets by their heading; docking and taskbar overlap
+  are optional.
+- Pin, position lock and click-through are independent. Click-through requires
+  the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
+  controls; the tray offers the same action.
 - Expand **Integrations** in Settings to manage modules, or in the monitor to
   select an enabled integration and profile, then click
   **Apply profile**. Manual selection turns off Auto for that integration only.
 
 ## Features
 
-- Battery flow diagram with input/output power, charge, separate limits, port
+- Monitoring cards with input/output power, charge, separate limits, port
   loads, and approximate runtime without input power.
 - Optional CLI integrations with their own profiles, activation/deactivation
   actions, ordered rules, and global hotkeys.
 - Automatic profile selection using running applications, input power, and
   battery charge, with independent Auto controls for each integration.
-- Adjustable interface scale, mini-widget metrics, and background transparency.
-- Dark settings dialogs that follow the Windows accent color live. Percentage
+- Independent widget scale, mini-widget metrics, and background opacity.
+- Graphite surfaces, mint actions and shared controls across windows. Percentage
   settings provide both numeric input and a slider.
 - Saved preferences, window placement, and English/Ukrainian interface languages.
 
 ### Appearance and monitoring status
 
-Toggle **Transparent background** in Appearance for a translucent or solid main
-background. **Main background transparency** ranges from 0% (solid) to 100%
-(invisible background). Text and icons remain visible; Save applies the change
-without restarting.
+Choose Panel, Overlay or Clear in Appearance. **Background opacity** ranges from
+0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain
+opaque. Clear outlines text and offers a protective background if needed.
+Appearance changes preview temporarily; Save keeps them and Cancel restores the
+saved appearance. Drafts remain available when switching dashboard pages.
 
 Enable an optional charge limit with **Set value**, or disable it to leave the
 limit unset. Manual limits are local fallback values and never change the station.

@@ -2,18 +2,21 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from ecoflow_monitor.adapters.hotkeys import HotkeyManager
 from ecoflow_monitor.adapters.accent import AccentWatcher
+from ecoflow_monitor.adapters.motion import MotionPreference
 from ecoflow_monitor.adapters.windows import activate_window
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.integrations import hotkey_label
-from ecoflow_monitor.ui.common import app_icon, elevation_prompt
+from ecoflow_monitor.ui.common import app_icon, elevation_prompt, font_family
 from ecoflow_monitor.ui.mini import MiniWidget
-from ecoflow_monitor.ui.settings_window import SettingsWindow
+from ecoflow_monitor.ui.dashboard import Dashboard
+from ecoflow_monitor.ui.theme import menu_style
 from ecoflow_monitor.ui.window import MonitorWindow
 
 
@@ -23,24 +26,34 @@ class Application(QObject):
         self.native = native
         self.controller = controller if controller is not None else Controller(SettingsStore(settings_path))
         self.app = QApplication.instance()
+        font = QFont(font_family())
+        font.setPixelSize(14)
+        self.app.setFont(font)
         self.accent = AccentWatcher(self, native=native)
         self.app.ecoflow_accent = self.accent
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setWindowIcon(app_icon())
         self.window = MonitorWindow(self.controller, self.open_settings)
+        self.motion = MotionPreference(self, native)
+        self.motion.changed.connect(self.controller.changed)
         self.accent.changed.connect(self.window.apply_appearance)
         self.window.setWindowIcon(app_icon())
         self.mini = MiniWidget(self.controller)
+        self.window.overlay.request = self.set_overlay
+        self.mini.overlay.request = self.set_overlay
+        self.dashboard = None
         self.hotkeys = HotkeyManager(self)
         self.hotkeys.triggered.connect(self.hotkey)
         self._dialog = None
         self._stopped = False
+        self._started = False
         self._hotkey_notice = ""
         self._hotkey_signature = None
         self._elevation_checked = {}
         self._elevation_prompted = {}
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.menu = QMenu()
+        self.menu.setStyleSheet(menu_style())
         self._helper_actions = {}
         self._menu_timer = QTimer(self)
         self._menu_timer.setInterval(500)
@@ -61,9 +74,9 @@ class Application(QObject):
     def activate_existing_window(self):
         if self._stopped:
             return
-        self.window.restore_for_activation()
-        target = QApplication.activeModalWidget() or self._dialog or self.window
-        if target is not self.window:
+        self.open_dashboard()
+        target = QApplication.activeModalWidget() or self.dashboard
+        if target is not None:
             target.setWindowState(target.windowState() & ~Qt.WindowState.WindowMinimized)
             target.show()
         activate_window(target)
@@ -75,6 +88,7 @@ class Application(QObject):
         self._elevation_prompted = {identity: module for identity, module in self._elevation_prompted.items()
                                    if enabled.get(identity) == module}
         self.menu.clear()
+        self.menu.addAction(t("open_dashboard"), self.open_dashboard)
         self.monitor_action = self.menu.addAction(t("monitor_widget"))
         self.monitor_action.setCheckable(True)
         self.monitor_action.triggered.connect(self.window.request_visibility)
@@ -82,6 +96,14 @@ class Application(QObject):
         self.mini_action.setCheckable(True)
         self.mini_action.triggered.connect(lambda checked: self.controller.update_preferences(mini_enabled=checked))
         self.menu.addAction(t("settings"), self.open_settings)
+        self.menu.addAction(t("recover_widgets"), self.recover_widgets)
+        for kind, overlay in (("main", self.window.overlay), ("mini", self.mini.overlay)):
+            submenu = self.menu.addMenu(t("open_main_widget" if kind == "main" else "open_mini_widget"))
+            for key, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
+                control = submenu.addAction(t(label))
+                control.setCheckable(True)
+                control.setChecked(getattr(overlay.preferences, key))
+                control.triggered.connect(lambda checked, target=overlay, name=key: target.change(**{name: checked}))
         self._helper_actions = {}
         if self.native:
             for module in self.controller.settings.integrations:
@@ -93,7 +115,7 @@ class Application(QObject):
         self.menu.addSeparator()
         self.menu.addAction(t("exit"), self.app.quit)
         self.tray.setToolTip(t("app_title"))
-        enabled_actions = {"toggle_monitor", "toggle_mini"}
+        enabled_actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
         for module in self.controller.settings.integrations:
             if module.enabled:
                 enabled_actions.add("auto:" + module.id)
@@ -103,9 +125,19 @@ class Application(QObject):
             self._hotkey_signature = signature
             failures = self.hotkeys.configure(self.controller.settings.hotkeys, enabled_actions)
             self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(hotkey_label(action, self.controller.settings.integrations) for action in failures)) if failures else ""
+        recovery = next((binding for binding in self.controller.settings.hotkeys if binding.action == "recover_widgets"), None)
+        ready = self.native and self.tray.isVisible() and recovery is not None and recovery.enabled and bool(recovery.combo) and "recover_widgets" in self.hotkeys._bindings.values()
+        if self._started and not ready and (self.controller.settings.main_overlay.click_through or self.controller.settings.mini_overlay.click_through):
+            self.recover_widgets()
+            self._hotkey_notice = t("click_through_unavailable")
+        for overlay in (self.window.overlay, self.mini.overlay):
+            overlay.recovery_ready = ready
+            overlay.apply()
         self.window.hotkey_notice = self._hotkey_notice
         self.window.refresh()
         self.mini.refresh()
+        if self.dashboard is not None:
+            self.dashboard.sync_runtime_overlays()
         self._sync_menu()
 
     def _sync_menu(self, *args):
@@ -175,11 +207,18 @@ class Application(QObject):
             self.window._desired_visible = True
         self.window.startup()
         self.mini.refresh()
+        self._started = True
+        self.preferences()
+        self.open_dashboard()
         if self.native:
             self.controller.start()
 
     def hotkey(self, action: str):
-        if action == "toggle_monitor":
+        if action == "open_dashboard":
+            self.open_dashboard()
+        elif action == "recover_widgets":
+            self.recover_widgets()
+        elif action == "toggle_monitor":
             self.window.request_visibility(not self.window._desired_visible)
         elif action == "toggle_mini":
             self.controller.update_preferences(mini_enabled=not self.controller.settings.mini_enabled)
@@ -196,27 +235,92 @@ class Application(QObject):
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.hotkey("toggle_monitor")
+            self.open_dashboard()
 
     def open_settings(self):
-        if self._dialog is not None:
-            self._dialog.raise_()
-            self._dialog.activateWindow()
+        self.open_dashboard(1)
+
+    def open_dashboard(self, page=None):
+        if self._stopped:
             return
-        dialog = SettingsWindow(self.controller, self.window)
-        self._dialog = dialog
-        dialog.exec()
-        self._dialog = None
-        dialog.deleteLater()
+        if self.dashboard is None:
+            self.dashboard = Dashboard(self.controller, lambda: self.window.request_visibility(True), lambda: self.controller.update_preferences(mini_enabled=True))
+            self.dashboard.preflight = self.preflight_settings
+            self.dashboard.preview_changed.connect(self.preview)
+            self._dialog = self.dashboard
+        if page is not None:
+            self.dashboard.navigation.setCurrentRow(page)
+        self.dashboard.show()
+        self.dashboard.raise_()
+        self.dashboard.activateWindow()
+
+    def preview(self, settings):
+        if self._stopped:
+            return
+        self.controller.preview = settings
+        self.window.apply_appearance()
+        self.mini.refresh()
+
+    def preflight_settings(self, settings):
+        previous = self.controller.settings
+        actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
+        for module in settings.integrations:
+            if module.enabled:
+                actions.add("auto:" + module.id)
+                actions.update("profile:" + module.id + ":" + profile.id for profile in module.profiles)
+        wants_passthrough = settings.main_overlay.click_through or settings.mini_overlay.click_through
+        if wants_passthrough and (not self.native or not self.tray.isVisible()):
+            raise ValueError("click_through_unavailable")
+        binding = next((item for item in settings.hotkeys if item.action == "recover_widgets"), None)
+        if wants_passthrough and (binding is None or not binding.enabled or not binding.combo):
+            raise ValueError("click_through_unavailable")
+        if self.native:
+            failures = self.hotkeys.configure(settings.hotkeys, actions)
+            if failures:
+                raise ValueError("hotkey_conflict")
+        def rollback():
+            if self.native:
+                from ecoflow_monitor.integrations import hotkey_actions
+                self.hotkeys.configure(previous.hotkeys, set(hotkey_actions(previous.integrations)))
+        return rollback
+
+    def set_overlay(self, kind, preferences):
+        settings = replace(self.controller.settings, **{kind + "_overlay": preferences})
+        try:
+            rollback = self.preflight_settings(settings)
+            try:
+                self.controller.update_preferences(**{kind + "_overlay": preferences})
+            except OSError:
+                rollback()
+                raise
+        except (ValueError, OSError) as error:
+            self._hotkey_notice = t(str(error))
+            self.window.hotkey_notice = self._hotkey_notice
+            self.window.refresh()
+            self.window.overlay.apply()
+            self.mini.overlay.apply()
+            return False
+        return True
+
+    def recover_widgets(self):
+        self.controller.update_preferences(main_overlay=replace(self.controller.settings.main_overlay, click_through=False), mini_overlay=replace(self.controller.settings.mini_overlay, click_through=False))
 
     def stop(self):
         if self._stopped:
             return
         self._stopped = True
-        if self._dialog is not None:
+        if self.dashboard is not None:
+            self.dashboard._draft_timer.stop()
+            self.dashboard._geometry_timer.stop()
+            self.dashboard._close_credentials()
+            self.dashboard.hide()
+            self.dashboard.deleteLater()
+        if self._dialog is not None and self._dialog is not self.dashboard:
             self._dialog.reject()
+        self.controller.preview = None
         self._menu_timer.stop()
         self.accent.stop()
+        self.motion.stop()
         if getattr(self.app, "ecoflow_accent", None) is self.accent:
             del self.app.ecoflow_accent
         self.hotkeys.stop()

@@ -1,0 +1,138 @@
+{
+  "version": "1.1.0",
+  "color": {
+    "canvas": {
+      "$type": "color",
+      "$value": "#0C1013"
+    },
+    "surface": {
+      "$type": "color",
+      "$value": "#151B20"
+    },
+    "raised": {
+      "$type": "color",
+      "$value": "#1D262D"
+    },
+    "border": {
+      "$type": "color",
+      "$value": "#36434D"
+    },
+    "text": {
+      "$type": "color",
+      "$value": "#F1F5F6"
+    },
+    "muted": {
+      "$type": "color",
+      "$value": "#A8B7C2"
+    },
+    "subtle": {
+      "$type": "color",
+      "$value": "#7B8D9B"
+    },
+    "accent": {
+      "$type": "color",
+      "$value": "#74E3BD"
+    },
+    "accentHover": {
+      "$type": "color",
+      "$value": "#94EDCF"
+    },
+    "accentPressed": {
+      "$type": "color",
+      "$value": "#50CFA4"
+    },
+    "onAccent": {
+      "$type": "color",
+      "$value": "#10281E"
+    },
+    "input": {
+      "$type": "color",
+      "$value": "#84D5FF"
+    },
+    "output": {
+      "$type": "color",
+      "$value": "#FFC884"
+    },
+    "danger": {
+      "$type": "color",
+      "$value": "#FF9B9B"
+    },
+    "dangerSurface": {
+      "$type": "color",
+      "$value": "#382427"
+    },
+    "focus": {
+      "$type": "color",
+      "$value": "#B3DFFF"
+    },
+    "successSurface": {
+      "$type": "color",
+      "$value": "#1B342B"
+    }
+  },
+  "space": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48
+  ],
+  "radius": {
+    "control": 10,
+    "card": 14,
+    "window": 20
+  },
+  "type": {
+    "fontFamily": "Inter",
+    "sizes": [
+      11,
+      12,
+      14,
+      16,
+      20,
+      26,
+      28,
+      36,
+      56
+    ]
+  },
+  "materials": {
+    "Panel": {
+      "surfaceAlpha": 1
+    },
+    "Overlay": {
+      "surfaceAlpha": 0.82
+    },
+    "Clear": {
+      "surfaceAlpha": 0
+    }
+  },
+  "contentOpacity": 1,
+  "focus": {
+    "width": 2,
+    "offset": 2,
+    "color": "#B3DFFF"
+  },
+  "motion": {
+    "microMs": 120,
+    "panelMs": 180,
+    "reducedMotionMs": 0
+  },
+  "menu": {
+    "itemHeight": 40,
+    "padding": 8,
+    "radius": 12
+  },
+  "textArea": {
+    "referenceHeight": 88,
+    "padding": 14
+  },
+  "dialog": {
+    "referenceWidth": 620,
+    "padding": 24,
+    "radius": 20
+  }
+}
+

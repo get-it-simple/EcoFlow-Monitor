@@ -24,7 +24,8 @@ def raise_without_focus(window: QWidget) -> None:
     if sys.platform == "win32":
         user = ctypes.WinDLL("user32")
         user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
-        user.SetWindowPos(int(window.winId()), wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+        order = -1 if window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint else -2
+        user.SetWindowPos(int(window.winId()), wintypes.HWND(order), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
 
 
 def allow_foreground(process_id: int) -> bool:

@@ -34,6 +34,7 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         QObject.__init__(self, parent)
         QAbstractNativeEventFilter.__init__(self)
         self._bindings = {}
+        self._combos = {}
         self._next_id = 1
         self._installed = False
 
@@ -45,13 +46,13 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
             for identifier in self._bindings:
                 user.UnregisterHotKey(None, identifier)
         self._bindings.clear()
+        self._combos.clear()
         app = QApplication.instance()
         if app is not None and self._installed:
             app.removeNativeEventFilter(self)
         self._installed = False
 
     def configure(self, bindings: tuple[HotkeyBinding, ...], enabled_actions: set[str]) -> tuple[str, ...]:
-        self.stop()
         if sys.platform != "win32":
             return ("hotkeys_unavailable",)
         user = ctypes.WinDLL("user32")
@@ -59,6 +60,7 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         user.RegisterHotKey.restype = wintypes.BOOL
         failures = []
         used = set()
+        requested = []
         for binding in bindings:
             if not binding.enabled or not binding.combo or binding.action not in enabled_actions:
                 continue
@@ -70,14 +72,37 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
                 failures.append(binding.action)
                 continue
             used.add((modifiers, key))
-            identifier = self._next_id
-            self._next_id += 1
-            if user.RegisterHotKey(None, identifier, modifiers | MOD_NOREPEAT, key):
-                self._bindings[identifier] = binding.action
-            else:
-                failures.append(binding.action)
+            requested.append((binding.action, modifiers, key))
+        if failures:
+            return tuple(failures)
+        existing = {combo: identifier for identifier, combo in self._combos.items()}
+        registered = {}
+        bindings_by_id = {}
+        combos_by_id = {}
+        for action, modifiers, key in requested:
+            combo = (modifiers, key)
+            identifier = existing.get(combo)
+            if identifier is None:
+                identifier = self._next_id
+                self._next_id += 1
+                if not user.RegisterHotKey(None, identifier, modifiers | MOD_NOREPEAT, key):
+                    failures.append(action)
+                    break
+                registered[identifier] = combo
+            bindings_by_id[identifier] = action
+            combos_by_id[identifier] = combo
+        user.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.UnregisterHotKey.restype = wintypes.BOOL
+        if failures:
+            for identifier in registered:
+                user.UnregisterHotKey(None, identifier)
+            return tuple(failures)
+        for identifier in self._bindings.keys() - bindings_by_id.keys():
+            user.UnregisterHotKey(None, identifier)
+        self._bindings = bindings_by_id
+        self._combos = combos_by_id
         app = QApplication.instance()
-        if app is not None and self._bindings:
+        if app is not None and self._bindings and not self._installed:
             app.installNativeEventFilter(self)
             self._installed = True
         return tuple(failures)

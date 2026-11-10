@@ -86,7 +86,8 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         qapp.processEvents()
         assert spy.count() == 1
         for widget in (dialog, profile, runtime.window, runtime.window.auto_toggle, editor._select_boxes[0]):
-            assert "#edb820" in widget.styleSheet()
+            assert "#74E3BD" in widget.styleSheet()
+            assert "#edb820" not in widget.styleSheet()
         assert dialog.gather() == before
         assert dialog.tabs.currentIndex() == 2 and section.header.isChecked()
         assert profile.label.text() == "Unsaved profile"
@@ -95,7 +96,7 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         assert spy.count() == 1
         dialog.show()
         qapp.processEvents()
-        assert dialog.grab().toImage().pixelColor(4, 4).name() == "#202020"
+        assert dialog.grab().toImage().pixelColor(4, 4).name() == "#151b20"
         runtime.stop()
         monkeypatch.setattr(reference_effects, "get_accent_color", lambda: "#aa33dd")
         qapp.paletteChanged.emit(qapp.palette())
@@ -129,7 +130,7 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         assert rules.rules()[0].min_soc == 15 and rules.rules()[0].max_soc == 85
         dialog.save()
         stored = runtime.controller.store.load()
-        assert (stored.scale, stored.mini_scale, stored.mini_transparency, stored.background_opacity) == (1.5, 1.25, 0.35, 0.25)
+        assert (stored.scale, stored.mini_scale, stored.mini_transparency, stored.background_opacity) == (1.5, 1.25, 0.65, 0.75)
         assert (stored.manual_min, stored.manual_max) == (10, 90)
         dialog.scale.slider.setValue(250)
         dialog.load_draft()

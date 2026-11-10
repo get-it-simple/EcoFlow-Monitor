@@ -1,13 +1,16 @@
 from datetime import datetime
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.domain import ConnectionState
 from ecoflow_monitor.integrations import IntegrationProfile
+from ecoflow_monitor.ui.tokens import COLORS, TOKENS
+from ecoflow_monitor.ui.typography import ValueLabel
 
 
 def profile_tooltip(profile: IntegrationProfile) -> str:
@@ -36,7 +39,7 @@ def duration(hours: float | None) -> str:
 def number(value: float | None, unit: str = "") -> str:
     if value is None:
         return "—"
-    return f"{value:.0f}" + (" " + unit if unit else "")
+    return f"{value:.0f}" + ("\u00a0" + unit if unit else "")
 
 
 def metric_text(controller, key: str) -> str:
@@ -49,7 +52,9 @@ def metric_text(controller, key: str) -> str:
         return number(snapshot.output_w if snapshot else None, t("unit_watt"))
     if key == "estimated_runtime":
         return duration(controller.runtime)
-    return number(controller.minimum.value if key == "minimum_discharge_level" else controller.maximum.value, "%")
+    if key in {"minimum_discharge_level", "maximum_charge_level"}:
+        return number(controller.minimum.value if key == "minimum_discharge_level" else controller.maximum.value, "%")
+    return number(dict(snapshot.ports).get(key) if snapshot else None, t("unit_watt"))
 
 
 def status_tooltip(controller) -> str:
@@ -63,17 +68,24 @@ def status_tooltip(controller) -> str:
 
 def status_color(controller) -> str:
     if controller.fresh:
-        return "#50e9a2"
+        return COLORS["accent"]
     if controller.connection in {ConnectionState.UNCONFIGURED, ConnectionState.CONNECTING}:
-        return "#ffc16c"
-    return "#ff6060"
+        return COLORS["output"]
+    return COLORS["danger"]
 
 
 def update_status(label: QLabel, controller) -> None:
-    label.setText("●")
+    label.setText(status_text(controller))
     label.setStyleSheet(f"color: {status_color(controller)}; background: transparent;")
     label.setToolTip(status_tooltip(controller))
     label.setAccessibleName(status_tooltip(controller))
+
+
+def status_text(controller):
+    text = t(controller.connection.value)
+    if controller.telemetry is not None and not controller.fresh:
+        text += " · " + datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%H:%M")
+    return text
 
 
 def hint(text: str) -> QLabel:
@@ -110,18 +122,32 @@ def clamp_window(window: QWidget, above_taskbar: bool = False) -> None:
     window.move(QPoint(x, y))
 
 
-class DragHeader(QLabel):
+class DragHeader(ValueLabel):
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.window().windowHandle() is not None:
+        if event.button() == Qt.MouseButton.LeftButton and not self.window().property("position_locked") and self.window().windowHandle() is not None:
             self.window().windowHandle().startSystemMove()
         super().mousePressEvent(event)
 
 
+def font_family():
+    family = TOKENS["type"]["fontFamily"]
+    if QFontDatabase.hasFamily(family):
+        return family
+    if not QFontDatabase.hasFamily("Segoe UI"):
+        system = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+        if system:
+            for filename in ("segoeui.ttf", "seguisb.ttf", "segoeuib.ttf"):
+                path = Path(system) / "Fonts" / filename
+                if path.is_file():
+                    QFontDatabase.addApplicationFont(str(path))
+    return "Segoe UI" if QFontDatabase.hasFamily("Segoe UI") else QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+
+
 def scaled_font(window: QWidget, scale: float) -> None:
-    font = QFont("Segoe UI")
-    font.setPixelSize(round(13 * scale))
+    font = QFont(font_family())
+    font.setPixelSize(round(14 * scale))
     window.setFont(font)
-    window.setStyleSheet(f"QWidget {{ font-size: {round(13 * scale)}px; }} QCheckBox::indicator {{ width: {round(17 * scale)}px; height: {round(17 * scale)}px; }}")
+    window.setStyleSheet(f"QWidget {{ font-size: {round(14 * scale)}px; }} QCheckBox::indicator {{ width: {round(20 * scale)}px; height: {round(20 * scale)}px; }}")
 
 
 class ScreenTracker(QObject):

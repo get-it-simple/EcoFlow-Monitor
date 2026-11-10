@@ -74,6 +74,9 @@ def run_application(app, args, settings_path, guard) -> int:
     if args.smoke_test:
         def finish():
             result = {"version": __version__, "state": runtime.controller.connection.value, "languages": list(i18n.get_available_languages()), "main_visible": runtime.window.isVisible(), "msi_hidden": runtime.window.msi_section.isHidden()}
+            from ecoflow_monitor.ui.tokens import TOKENS
+            result["dashboard_visible"] = runtime.dashboard is not None and runtime.dashboard.isVisible()
+            result["design_tokens"] = TOKENS["version"] == "1.1.0"
             example = runtime.controller.settings.integrations[0]
             result["integration_example"] = example.driver == "afterburner" and len(example.profiles) == 5
             sample = IntegrationDefinition("smoke", "Synthetic integration", enabled=True, profiles=(IntegrationProfile("sample", "Sample"),))
@@ -90,7 +93,7 @@ def run_application(app, args, settings_path, guard) -> int:
                 args.smoke_output.parent.mkdir(parents=True, exist_ok=True)
                 args.smoke_output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             runtime.stop()
-            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip")) else 1)
+            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens")) else 1)
         QTimer.singleShot(750, finish)
     try:
         runtime.start()

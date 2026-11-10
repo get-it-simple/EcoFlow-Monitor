@@ -71,6 +71,7 @@ class Controller(QObject):
         self.client_factory = client_factory if client_factory is not None else EcoFlowClient
         self.clock = clock
         self.notice = ""
+        self.preview = None
         try:
             self.settings = store.load()
         except SettingsError as error:
@@ -94,6 +95,10 @@ class Controller(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(250)
         self._timer.timeout.connect(self.tick)
+
+    @property
+    def ui_settings(self):
+        return self.preview if self.preview is not None else self.settings
 
     @property
     def fresh(self) -> bool:

@@ -1,6 +1,8 @@
+from dataclasses import replace
+
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStyle, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor import __version__
 from ecoflow_monitor.adapters.windows import raise_without_focus
@@ -8,11 +10,13 @@ from ecoflow_monitor.ui.theme import SETTINGS_STYLE, bind_style, current_accent,
 from ecoflow_monitor.ui.reference_style import icon_path, toggle_switch_style
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, profile_tooltip, scaled_font
-from ecoflow_monitor.ui.flow import FlowWidget
+from ecoflow_monitor.ui.readings import MainReadings
+from ecoflow_monitor.ui.overlay import OverlayControls
 from ecoflow_monitor.ui.limits import ChargeLimits
 from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.resize import WindowResize
 from ecoflow_monitor.ui.sections import CollapsibleSection
+from ecoflow_monitor.ui.focus import FocusBinding
 
 
 STYLE = SETTINGS_STYLE
@@ -68,7 +72,10 @@ class MonitorWindow(QWidget):
         for button in (self.refresh_button, self.settings_button, self.close_button):
             header.addWidget(button)
         layout.addLayout(header)
-        self.flow = FlowWidget(controller)
+        self.overlay = OverlayControls(self, controller, "main")
+        header.insertWidget(1, self.overlay.pin)
+        header.insertWidget(2, self.overlay.menu_button)
+        self.flow = MainReadings(controller)
         self.status = self.flow.status
         layout.addWidget(self.flow, 1)
         self.limits = ChargeLimits(controller)
@@ -119,6 +126,9 @@ class MonitorWindow(QWidget):
         self._geometry_timer.setInterval(500)
         self._geometry_timer.timeout.connect(self._save_geometry)
         x, y, width, height = controller.settings.monitor_geometry
+        target = next((screen for screen in QApplication.screens() if screen.name() == controller.settings.main_overlay.screen), None)
+        if target is not None:
+            self.setScreen(target)
         self.resize(width, height)
         if x != -1 or y != -1:
             self.move(x, y)
@@ -129,6 +139,7 @@ class MonitorWindow(QWidget):
         controller.changed.connect(self.refresh)
         controller.preferences_changed.connect(self.apply_appearance)
         self.apply_appearance()
+        self._focus_binding = FocusBinding(self)
 
     def _tool(self, icon, callback):
         button = QToolButton()
@@ -162,7 +173,8 @@ class MonitorWindow(QWidget):
         if self._quitting:
             return
         self._layout_timer.stop()
-        scale = effective_scale(self, self.controller.settings.scale)
+        self.overlay.apply()
+        scale = effective_scale(self, self.controller.ui_settings.scale)
         if self._logical_size is None or self.size() != self._last_scaled_size:
             self._logical_size = (self.width() / self._scale, self.height() / self._scale)
         self.refresh()
@@ -172,12 +184,13 @@ class MonitorWindow(QWidget):
         minimum = self.minimumSizeHint()
         for _ in range(6):
             self._set_scale(scale)
-            minimum = self.minimumSizeHint()
+            minimum = self.minimumSizeHint().expandedTo(QSize(round(360 * scale), round(320 * scale)))
             fit = min(1.0, area.width() / max(1, minimum.width()), area.height() / max(1, minimum.height()))
             if fit >= 1:
                 break
             scale *= fit * 0.98
         self._scale = scale
+        minimum = minimum.expandedTo(QSize(round(360 * scale), round(320 * scale)))
         self.setMinimumSize(minimum)
         width, height = (round(value * scale) for value in self._logical_size)
         self.resize(max(minimum.width(), min(width, area.width())), max(minimum.height(), min(height, area.height())))
@@ -188,20 +201,26 @@ class MonitorWindow(QWidget):
     def _set_scale(self, scale):
         scaled_font(self, scale)
         self._scale = scale
-        self.setStyleSheet(self.styleSheet() + monitor_style(scale, current_accent(), self.controller.settings.transparency, self.controller.settings.background_opacity))
-        self._shell_layout.setContentsMargins(round(12 * scale), round(10 * scale), round(12 * scale), round(8 * scale))
-        self._shell_layout.setSpacing(round(6 * scale))
+        self.setStyleSheet(monitor_style(scale, current_accent(), self.controller.ui_settings.transparency, self.controller.ui_settings.background_opacity))
+        self._shell_layout.setContentsMargins(round(16 * scale), round(12 * scale), round(16 * scale), round(12 * scale))
+        self._shell_layout.setSpacing(round(8 * scale))
         self._profile_layout.setSpacing(round(8 * scale))
-        for button in (self.notifications, self.settings_button, self.refresh_button, self.close_button):
-            button.setFixedSize(round(32 * scale), round(32 * scale))
-            button.setIconSize(QSize(round(18 * scale), round(18 * scale)))
+        for button in (self.notifications, self.settings_button, self.refresh_button, self.close_button, self.overlay.pin, self.overlay.menu_button):
+            size = round(36 * scale)
+            button.setStyleSheet(f"padding: 0; min-height: {size - 2}px; max-height: {size - 2}px; min-width: {size - 2}px; max-width: {size - 2}px;")
+            button.setFixedSize(size, size)
+            button.setIconSize(QSize(round(20 * scale), round(20 * scale)))
+        self.refresh_button.hide()
+        self.version_label.hide()
         for button in (*self.profile_buttons, self.auto_toggle):
             button.ensurePolished()
         controls_height = max(button.sizeHint().height() for button in (*self.profile_buttons, self.auto_toggle, self.profile_choice))
         margins = self._profile_layout.contentsMargins()
         self.profile_scroll.setFixedHeight(controls_height + margins.top() + margins.bottom() + 2)
         self.profile_scroll.setMinimumWidth(self._profile_container.minimumSizeHint().width() + 2)
-        self.flow.setMinimumSize(round(420 * scale), round(407 * scale))
+        self.flow.setMinimumSize(round(280 * scale), round(220 * scale))
+        self.flow.configure(scale)
+        self.title.outlined = self.controller.ui_settings.transparency and self.controller.ui_settings.background_opacity == 0
         for widget in reversed(self.shell.findChildren(QWidget)):
             child_layout = widget.layout()
             if child_layout is not None:
@@ -220,7 +239,10 @@ class MonitorWindow(QWidget):
         self.title.setText(t("app_title"))
         self.refresh_button.setToolTip(t("refresh"))
         self.settings_button.setToolTip(t("settings"))
+        self.settings_button.setIcon(QIcon(icon_path("expand")))
         self.close_button.setToolTip(t("hide"))
+        for button in (self.settings_button, self.refresh_button, self.close_button):
+            button.setAccessibleName(button.toolTip())
         self.notifications.refresh(controller, self.hotkey_notice)
         self.limits.refresh()
         modules = tuple(module for module in controller.settings.integrations if module.enabled)
@@ -281,11 +303,13 @@ class MonitorWindow(QWidget):
             self.controller.request_profile(integration_id, profile_id)
 
     def _save_geometry(self):
-        if self._quitting:
+        if self._quitting or self.controller.preview is not None:
             return
         geometry = (self.x(), self.y(), self.width(), self.height())
         if geometry != self.controller.settings.monitor_geometry:
-            self.controller.update_preferences(monitor_geometry=geometry)
+            screen = self.screen()
+            context = replace(self.controller.settings.main_overlay, screen=screen.name(), dpi=screen.logicalDotsPerInch()) if screen else self.controller.settings.main_overlay
+            self.controller.update_preferences(monitor_geometry=geometry, main_overlay=context)
 
     def moveEvent(self, event):
         super().moveEvent(event)
@@ -306,7 +330,8 @@ class MonitorWindow(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
-        self.msi_section.set_expanded(False)
+        if not self.property("applying_overlay"):
+            self.msi_section.set_expanded(False)
         self.visibility_changed.emit(False)
 
     def closeEvent(self, event):

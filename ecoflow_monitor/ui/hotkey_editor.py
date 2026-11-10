@@ -1,24 +1,20 @@
 from typing import Optional
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.hotkey_binding import parse_combo
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.reference_style import bordered_input_style, icon_path
-from ecoflow_monitor.ui.theme import accent_text, bind_style
+from ecoflow_monitor.ui.theme import bind_style, settings_style
 
 
 MODIFIER_OPTIONS = [
     ("", "Select"),
-    ("ctrl", "Ctrl (Left)"),
-    ("ctrl", "Ctrl (Right)"),
-    ("alt", "Alt (Left)"),
-    ("alt", "Alt (Right)"),
-    ("shift", "Shift (Left)"),
-    ("shift", "Shift (Right)"),
-    ("win", "Win (Left)"),
-    ("win", "Win (Right)"),
+    ("ctrl", "Ctrl"),
+    ("alt", "Alt"),
+    ("shift", "Shift"),
+    ("win", "Win"),
 ]
 
 KEY_OPTIONS = [
@@ -50,10 +46,14 @@ KEY_OPTIONS = [
 ]
 
 class HotkeyComboEditor(QFrame):
+    comboChanged = Signal()
+
     def __init__(self, combo: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._select_boxes: list[QComboBox] = []
         self._syncing = False
+        self._recording = False
+        self._before_recording = combo
 
         self.setObjectName("hotkeyComboInput")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -62,14 +62,25 @@ class HotkeyComboEditor(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         bind_style(self, lambda color: bordered_input_style("hotkeyComboInput", color))
 
-        self._select_layout = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._select_layout = QHBoxLayout()
+        outer.addLayout(self._select_layout)
         self._select_layout.setContentsMargins(10, 10, 10, 10)
         self._select_layout.setSpacing(4)
 
         self._placeholder_label = QLabel(t("press_shortcut"), self)
-        self._placeholder_label.setStyleSheet("color: #b7b7bd; padding-left: 2px;")
+        self._placeholder_label.setObjectName("secondary")
         self._select_layout.addWidget(self._placeholder_label)
         self._select_layout.addStretch(1)
+        self.record_button = QToolButton(self)
+        self.record_button.setText(t("record_shortcut"))
+        self.record_button.clicked.connect(self.start_recording)
+        self._select_layout.addWidget(self.record_button)
+        self.recording_hint = QLabel(t("recording_shortcut"), self)
+        self.recording_hint.setWordWrap(True)
+        self.recording_hint.hide()
+        outer.addWidget(self.recording_hint)
 
         self.set_combo(combo)
 
@@ -88,6 +99,12 @@ class HotkeyComboEditor(QFrame):
         self.setFocus()
 
     def keyPressEvent(self, event) -> None:
+        if self._recording and event.key() == Qt.Key.Key_Escape:
+            self._recording = False
+            self.set_combo(self._before_recording)
+            self.recording_hint.hide()
+            event.accept()
+            return
         if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
             self.clear()
             event.accept()
@@ -95,9 +112,19 @@ class HotkeyComboEditor(QFrame):
         tokens = self._tokens_from_event(event)
         if tokens:
             self._set_tokens(tokens)
+            if self._recording and tokens[-1] not in {"ctrl", "alt", "shift", "win"}:
+                self._recording = False
+                self.recording_hint.hide()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def start_recording(self):
+        self._before_recording = self.combo()
+        self._recording = True
+        self.recording_hint.show()
+        self.setFocus()
+        self.comboChanged.emit()
 
     def eventFilter(self, watched, event) -> bool:
         if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
@@ -126,6 +153,7 @@ class HotkeyComboEditor(QFrame):
 
         self._placeholder_label.setVisible(not self._select_boxes)
         self._syncing = False
+        self.comboChanged.emit()
 
     def _clear_select_boxes(self) -> None:
         while self._select_boxes:
@@ -138,6 +166,7 @@ class HotkeyComboEditor(QFrame):
         box = QComboBox(self)
         box.setMinimumHeight(32)
         box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        box.setMaxVisibleItems(12)
         bind_style(box, self._box_style)
         for value, label in options:
             box.addItem(label, value)
@@ -147,17 +176,7 @@ class HotkeyComboEditor(QFrame):
 
     @staticmethod
     def _box_style(accent):
-        arrow_path = icon_path("dropdown_arrow").replace("\\", "/")
-        return f"""
-        QComboBox {{ background: #383838; border: 1px solid transparent;
-            border-radius: 7px; color: #f2f2f5; padding: 5px 20px 5px 9px; }}
-        QComboBox:hover {{ background: #454545; }}
-        QComboBox:focus {{ border-color: {accent}; }}
-        QComboBox::drop-down {{ border: 0; width: 18px; }}
-        QComboBox::down-arrow {{ image: url({arrow_path}); width: 12px; height: 12px; }}
-        QComboBox QAbstractItemView {{ background: #202020; border: 1px solid #565656;
-            color: #f2f2f5; selection-background-color: {accent}; selection-color: {accent_text(accent)}; }}
-        """
+        return settings_style(accent)
 
     def _options_for_token(self, token: str) -> list[tuple[str, str]]:
         if token in {"ctrl", "alt", "shift", "win"}:

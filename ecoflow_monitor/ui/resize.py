@@ -3,6 +3,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ecoflow_monitor.i18n import t
+from ecoflow_monitor.ui.tokens import COLORS
 
 
 class ResizeEdge(QWidget):
@@ -38,7 +39,7 @@ class ResizeGrip(ResizeEdge):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#d0d0d0" if self.underMouse() else "#808080"), max(1.0, self.width() / 18)))
+        painter.setPen(QPen(QColor(COLORS["text"] if self.underMouse() else COLORS["subtle"]), max(1.0, self.width() / 18)))
         step = self.width() / 4
         for index in (1, 2, 3):
             painter.drawLine(round(self.width() - index * step), self.height() - 3, self.width() - 3, round(self.height() - index * step))

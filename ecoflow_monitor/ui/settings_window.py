@@ -1,7 +1,7 @@
 from dataclasses import replace
 
-from PySide6.QtCore import QPoint, QSize, Qt
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QModelIndex, QPoint, QSize, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.credentials import CredentialError
@@ -20,19 +20,31 @@ from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
 from ecoflow_monitor.ui.onepassword import OnePasswordPanel
+from ecoflow_monitor.ui.focus import FocusBinding
+from ecoflow_monitor.ui.localization import TranslationBinding
 
 
 class SettingsWindow(QDialog):
+    preview_changed = Signal(object)
+
     def __init__(self, controller, parent=None):
         super().__init__(parent)
         self.setObjectName("settings_dialog")
         self.controller = controller
+        self._loading = True
+        self.preflight = None
+        self._dirty = False
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.setInterval(80)
+        self._draft_timer.timeout.connect(self._draft_changed)
         self.setWindowTitle(t("settings"))
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         area = self.screen().availableGeometry()
         scale = min(effective_scale(self, controller.settings.scale), (area.width() - 40) / 850, (area.height() - 60) / 780)
+        self._settings_scale = scale
         scaled_font(self, scale)
-        bind_style(self, settings_style)
+        bind_style(self, lambda accent: settings_style(accent, self._settings_scale))
         self.resize(round(850 * scale), round(780 * scale))
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -59,6 +71,17 @@ class SettingsWindow(QDialog):
         self.load_draft()
         controller.changed.connect(self._refresh_metric_tooltips)
         self.finished.connect(self._close_credentials)
+        self.finished.connect(lambda: self.preview_changed.emit(None))
+        self.error_label = QLabel(self)
+        self.error_label.setObjectName("form_error")
+        self.error_label.setWordWrap(True)
+        self.error_label.setMinimumHeight(self.fontMetrics().height())
+        outer.insertWidget(1, self.error_label)
+        self._loading = False
+        self._connect_draft()
+        self._draft_changed()
+        self._focus_binding = FocusBinding(self)
+        self._translations = TranslationBinding(self)
         install_scrollbars(self)
 
     def _tab(self, title: str):
@@ -78,6 +101,7 @@ class SettingsWindow(QDialog):
         manual_layout = QVBoxLayout(self.manual_credentials)
         manual_layout.setContentsMargins(0, 0, 0, 0)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.access = QLineEdit()
         self.secret = QLineEdit()
         self.access.setEchoMode(QLineEdit.EchoMode.Password)
@@ -87,6 +111,9 @@ class SettingsWindow(QDialog):
         form.addRow(t("access_key"), self.access)
         form.addRow(t("secret_key"), self.secret)
         manual_layout.addLayout(form)
+        self.show_keys = QCheckBox(t("show_keys"))
+        self.show_keys.toggled.connect(self._show_keys)
+        manual_layout.addWidget(self.show_keys)
         manual_layout.addWidget(hint(t("credentials_hint")))
         self.onepassword = OnePasswordPanel(self._entered_credentials, self.manual_credentials, self)
         self.onepassword.source_changed.connect(self._credential_source_changed)
@@ -98,6 +125,7 @@ class SettingsWindow(QDialog):
         self.devices = QComboBox()
         self.devices.setEditable(True)
         form2 = QFormLayout()
+        form2.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form2.addRow(t("device"), self.devices)
         layout.addLayout(form2)
         layout.addWidget(hint(t("load_devices_hint")))
@@ -109,6 +137,7 @@ class SettingsWindow(QDialog):
         self.minimum.setAccessibleName(t("manual_min_label"))
         self.maximum.setAccessibleName(t("manual_max_label"))
         form3 = QFormLayout()
+        form3.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form3.addRow(t("capacity_wh"), self.capacity)
         form3.addRow(t("manual_min_label"), self.minimum)
         form3.addRow(t("manual_max_label"), self.maximum)
@@ -119,6 +148,11 @@ class SettingsWindow(QDialog):
             widget.setToolTip(tooltip)
             form3.labelForField(widget).setToolTip(tooltip)
         layout.addLayout(form3)
+        self.range_error = QLabel()
+        self.range_error.setObjectName("form_error")
+        self.range_error.setWordWrap(True)
+        self.range_error.setMinimumHeight(self.fontMetrics().height())
+        layout.addWidget(self.range_error)
         layout.addWidget(hint(t("capacity_hint")))
         layout.addWidget(hint(t("manual_limit_hint")))
         layout.addStretch()
@@ -153,8 +187,8 @@ class SettingsWindow(QDialog):
         self.transparency = QCheckBox(t("transparency"))
         self.background_transparency = PercentEditor(decimals=2)
         self.background_transparency.setAccessibleName(t("main_transparency"))
-        self.transparency.toggled.connect(self.background_transparency.setEnabled)
-        monitor.addWidget(self.transparency)
+        self.transparency.hide()
+        self.background_transparency.valueChanged.connect(lambda: self._opacity_changed("main"))
         background_form = QFormLayout()
         background_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         background_form.addRow(t("main_transparency"), self.background_transparency)
@@ -170,8 +204,32 @@ class SettingsWindow(QDialog):
             monitor.addWidget(control)
         for control in (self.mini_enabled, self.mini_above):
             mini.addWidget(control)
+        self.overlay_fields = {}
+        self.materials = {}
+        for kind, target in (("main", monitor), ("mini", mini)):
+            material = QComboBox()
+            for name in ("panel", "overlay", "clear"):
+                material.addItem(t("material_" + name), name)
+            material.setAccessibleName(t("widget_material"))
+            row = QFormLayout()
+            row.addRow(t("widget_material"), material)
+            target.addLayout(row)
+            self.materials[kind] = material
+            material.currentIndexChanged.connect(lambda index, name=kind: self._material_changed(name))
+            clear_hint = hint(t("clear_readability"))
+            target.addWidget(clear_hint)
+            target.addWidget(action(t("restore_overlay"), lambda checked=False, name=kind: self._restore_overlay(name)))
+            fields = {}
+            for name, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
+                control = QCheckBox(t(label))
+                control.setAccessibleName(t(label))
+                target.addWidget(control)
+                fields[name] = control
+            self.overlay_fields[kind] = fields
+        monitor.addWidget(hint(t("click_through_hint")))
         self.mini_scale = PercentEditor(50, 300)
         self.mini_alpha = PercentEditor()
+        self.mini_alpha.valueChanged.connect(lambda: self._opacity_changed("mini"))
         self.mini_scale.setAccessibleName(t("mini_scale"))
         self.mini_alpha.setAccessibleName(t("mini_transparency"))
         self.dock = QComboBox()
@@ -188,6 +246,43 @@ class SettingsWindow(QDialog):
         self.metrics.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.metrics.setMinimumHeight(180)
         metrics.addWidget(self.metrics)
+        metric_buttons = QHBoxLayout()
+        metric_buttons.addWidget(action(t("move_up"), lambda: self._move_metric(-1)))
+        metric_buttons.addWidget(action(t("move_down"), lambda: self._move_metric(1)))
+        metrics.addLayout(metric_buttons)
+
+    def _restore_overlay(self, kind):
+        self.materials[kind].setCurrentIndex(1)
+        self._material_changed(kind)
+
+    def _material_changed(self, kind):
+        if self._loading:
+            return
+        material = self.materials[kind].currentData()
+        value = {"panel": 100, "overlay": 82, "clear": 0}[material]
+        if kind == "main":
+            self.transparency.setChecked(material != "panel")
+            self.background_transparency.setValue(value)
+        else:
+            self.mini_alpha.setValue(value)
+
+    def _opacity_changed(self, kind):
+        if self._loading:
+            return
+        value = self.background_transparency.value() if kind == "main" else self.mini_alpha.value()
+        if kind == "main":
+            self.transparency.setChecked(value != 100)
+        with QSignalBlocker(self.materials[kind]):
+            self.materials[kind].setCurrentIndex(0 if value == 100 else 2 if value == 0 else 1)
+
+    def _move_metric(self, direction):
+        row = self.metrics.currentRow()
+        target = row + direction
+        if row < 0 or not 0 <= target < self.metrics.count():
+            return
+        self.metrics.model().moveRows(QModelIndex(), row, 1, QModelIndex(), target if direction < 0 else target + 1)
+        self.metrics.setCurrentRow(target)
+        self._draft_timer.start()
 
     def _build_hotkeys(self):
         layout = self._tab(t("hotkeys_settings"))
@@ -245,10 +340,15 @@ class SettingsWindow(QDialog):
                 target.addWidget(field)
             self.hotkey_rows[name] = (field, editor, enabled)
             field.setVisible(":" not in name or name.split(":")[1] in enabled_modules)
+        if not self._loading:
+            self._connect_draft()
 
     def load_draft(self):
+        was_loading = self._loading
+        self._loading = True
         settings = self.controller.settings
         self._baseline = settings
+        self.show_keys.setChecked(False)
         self.onepassword.load(settings)
         self.access.clear()
         self.secret.clear()
@@ -257,12 +357,15 @@ class SettingsWindow(QDialog):
         self.capacity.setValue(settings.capacity_wh)
         self.minimum.setValue(-1 if settings.manual_min is None else settings.manual_min)
         self.maximum.setValue(-1 if settings.manual_max is None else settings.manual_max)
+        if settings.manual_min is None:
+            self.minimum.spin.setValue(settings.manual_min_retained)
+        if settings.manual_max is None:
+            self.maximum.spin.setValue(settings.manual_max_retained)
         self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.scale.setValue(settings.scale * 100)
         self.transparency.setChecked(settings.transparency)
-        self.background_transparency.setValue((1 - settings.background_opacity) * 100)
-        self.background_transparency.setEnabled(settings.transparency)
+        self.background_transparency.setValue(settings.background_opacity * 100 if settings.transparency else 100)
         self.animations.setChecked(settings.animations)
         self.visible_on_start.setChecked(settings.monitor_visible)
         self.monitor_labels_visible.setChecked(settings.monitor_labels_visible)
@@ -270,11 +373,17 @@ class SettingsWindow(QDialog):
         self.mini_enabled.setChecked(settings.mini_enabled)
         self.mini_above.setChecked(settings.mini_above_taskbar)
         self.mini_scale.setValue(settings.mini_scale * 100)
-        self.mini_alpha.setValue(settings.mini_transparency * 100)
+        self.mini_alpha.setValue((1 - settings.mini_transparency) * 100)
+        for kind in ("main", "mini"):
+            preferences = getattr(settings, kind + "_overlay")
+            for name, control in self.overlay_fields[kind].items():
+                control.setChecked(getattr(preferences, name))
+            opacity = settings.background_opacity if kind == "main" and settings.transparency else 1 if kind == "main" else 1 - settings.mini_transparency
+            self.materials[kind].setCurrentIndex(0 if opacity == 1 else 2 if opacity == 0 else 1)
         self.dock.setCurrentIndex(max(0, self.dock.findData(settings.mini_dock)))
         self.metrics.clear()
         selected_metrics = settings.mini_metrics + settings.mini_hidden_metrics
-        for key in (*selected_metrics, *(key for key in METRICS if key not in selected_metrics)):
+        for key in settings.metric_order:
             item = QListWidgetItem(self.metrics)
             item.setToolTip(metric_tooltip(key, self.controller))
             item.setData(Qt.ItemDataRole.UserRole, key)
@@ -295,6 +404,11 @@ class SettingsWindow(QDialog):
             item.setSizeHint(row.sizeHint())
             self.metrics.setItemWidget(item, row)
         self.hotkey_rows = self._reset_hotkeys()
+        self._loading = was_loading
+        if not self._loading:
+            self.preview_changed.emit(None)
+            self._connect_draft()
+            self._draft_timer.start()
 
     def _reset_hotkeys(self):
         self._clear_hotkeys()
@@ -326,11 +440,17 @@ class SettingsWindow(QDialog):
         return Credentials(access, secret) if access else None
 
     def _credential_source_changed(self):
+        self.show_keys.setChecked(False)
         self.access.clear()
         self.secret.clear()
         self.access.setReadOnly(self.onepassword.uses_onepassword)
         self.secret.setReadOnly(self.onepassword.uses_onepassword)
         self.manual_credentials.setVisible(not self.onepassword.uses_onepassword)
+
+    def _show_keys(self, visible):
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self.access.setEchoMode(mode)
+        self.secret.setEchoMode(mode)
 
     def _fill_credentials(self, credentials):
         if credentials is not None:
@@ -339,9 +459,12 @@ class SettingsWindow(QDialog):
 
     def _credential_busy_changed(self, busy):
         if hasattr(self, "save_button"):
-            self.save_button.setEnabled(not busy)
+            self.save_button.setEnabled(not busy and self._dirty)
         if hasattr(self, "discover_button"):
             self.discover_button.setEnabled(not busy)
+        if not busy and hasattr(self, "error_label"):
+            self._draft_timer.stop()
+            self._draft_changed()
 
     def _close_credentials(self):
         self.onepassword.cancel(show_status=False)
@@ -375,11 +498,13 @@ class SettingsWindow(QDialog):
         if index >= 0:
             self.devices.setCurrentIndex(index)
 
-    def gather(self):
+    def gather(self, validate_paths=True):
         current = self.controller.settings
         serial = self.devices.currentData() if self.devices.currentIndex() >= 0 and self.devices.currentText() == self.devices.itemText(self.devices.currentIndex()) else self.devices.currentText().strip()
         hotkeys = tuple(HotkeyBinding(action_name, editor.combo(), enabled.isChecked()) for action_name, (field, editor, enabled) in self.hotkey_rows.items())
-        modules = self.integrations_editor.modules(True)
+        previous_actions = {binding.action for binding in self._baseline.hotkeys}
+        hotkeys = tuple(binding for binding in hotkeys if binding.action in previous_actions or binding.combo or binding.enabled)
+        modules = self.integrations_editor.modules(validate_paths)
         baseline = {module.id: module for module in self._baseline.integrations}
         latest = {module.id: module for module in current.integrations}
         merged = []
@@ -397,17 +522,66 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             transparency=self.transparency.isChecked(), animations=self.animations.isChecked(),
-            background_opacity=self._baseline.background_opacity if self.background_transparency.value() == round((1 - self._baseline.background_opacity) * 100, 2) else 1 - self.background_transparency.value() / 100,
+            background_opacity=self._baseline.background_opacity if not self.transparency.isChecked() or self.background_transparency.value() == round(self._baseline.background_opacity * 100, 2) else self.background_transparency.value() / 100,
             monitor_visible=self.visible_on_start.isChecked(), mini_enabled=self.mini_enabled.isChecked(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
             mini_above_taskbar=self.mini_above.isChecked(), mini_scale=self.mini_scale.value() / 100,
-            mini_transparency=self.mini_alpha.value() / 100, mini_dock=self.dock.currentData(),
+            mini_transparency=self._baseline.mini_transparency if self.mini_alpha.value() == round((1 - self._baseline.mini_transparency) * 100) else 1 - self.mini_alpha.value() / 100, mini_dock=self.dock.currentData(),
             mini_metrics=self._metric_group("always"),
             mini_hidden_metrics=self._metric_group("expanded"),
+            metric_order=tuple(self.metrics.item(index).data(Qt.ItemDataRole.UserRole) for index in range(self.metrics.count())),
+            manual_min_retained=self.minimum.spin.value(), manual_max_retained=self.maximum.spin.value(),
+            **{kind + "_overlay": self._overlay_draft(kind) for kind in ("main", "mini")},
         )
         changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(self._baseline, name)}
         return replace(current, **changes)
+
+    def _overlay_draft(self, kind):
+        baseline = getattr(self._baseline, kind + "_overlay")
+        current = getattr(self.controller.settings, kind + "_overlay")
+        changes = {name: control.isChecked() for name, control in self.overlay_fields[kind].items() if control.isChecked() != getattr(baseline, name)}
+        return replace(current, **changes)
+
+    def _connect_draft(self):
+        for widget in self.findChildren(QWidget):
+            if widget.property("draft_connected"):
+                continue
+            widget.setProperty("draft_connected", True)
+            for name in ("textChanged", "valueChanged", "currentIndexChanged", "toggled", "changed", "comboChanged", "itemChanged"):
+                signal = getattr(widget, name, None)
+                if signal is not None and hasattr(signal, "connect"):
+                    signal.connect(self._schedule_draft)
+        if not self.metrics.model().property("draft_connected"):
+            self.metrics.model().setProperty("draft_connected", True)
+            self.metrics.model().rowsMoved.connect(self._schedule_draft)
+            self.metrics.model().dataChanged.connect(self._schedule_draft)
+
+    def _schedule_draft(self, *args):
+        if not self._loading:
+            self._draft_timer.start()
+
+    def _draft_changed(self):
+        if self._loading:
+            return
+        invalid_range = self.minimum.value() >= 0 and self.maximum.value() >= 0 and self.minimum.value() >= self.maximum.value()
+        self.range_error.setText(t("invalid_settings") if invalid_range else "")
+        try:
+            draft = self.gather(False)
+            draft.validate()
+            self._entered_credentials()
+            self._dirty = draft != self.controller.settings or bool(self.access.text().strip() or self.secret.text().strip())
+            recording = any(editor._recording for _, editor, _ in self.hotkey_rows.values())
+            self.save_button.setEnabled(self._dirty and not self.onepassword.busy and not recording)
+            self.error_label.clear()
+            if self._dirty:
+                self.preview_changed.emit(draft)
+            else:
+                self.preview_changed.emit(None)
+        except (ValueError, OSError, SettingsError, CredentialError):
+            self._dirty = True
+            self.save_button.setEnabled(False)
+            self.error_label.setText(t("invalid_settings"))
 
     def _metric_group(self, mode):
         return tuple(self.metrics.item(index).data(Qt.ItemDataRole.UserRole)
@@ -415,15 +589,35 @@ class SettingsWindow(QDialog):
                      if self.metrics.item(index).data(Qt.ItemDataRole.UserRole + 1) == mode)
 
     def save(self):
-        if self.onepassword.busy:
+        if self.onepassword.busy or any(editor._recording for _, editor, _ in self.hotkey_rows.values()):
             return
+        rollback = None
         try:
-            self.controller.apply_settings(self.gather(), self._entered_credentials())
+            draft = self.gather()
+            if self.preflight is not None:
+                rollback = self.preflight(draft)
+            self.controller.apply_settings(draft, self._entered_credentials())
         except (ValueError, OSError, SettingsError, CredentialError) as error:
+            if rollback is not None:
+                rollback()
             key = str(error)
             QMessageBox.warning(self, t("error_title"), t(key) if t(key) != key else t("invalid_settings"))
             return
-        self.accept()
+        self.preview_changed.emit(None)
+        self._translations.refresh()
+        self.load_draft()
+        self.error_label.setText(t("settings_saved"))
+
+    def sync_runtime_overlays(self):
+        self._loading = True
+        for kind in ("main", "mini"):
+            baseline = getattr(self._baseline, kind + "_overlay")
+            current = getattr(self.controller.settings, kind + "_overlay")
+            for name, control in self.overlay_fields[kind].items():
+                if control.isChecked() == getattr(baseline, name):
+                    control.setChecked(getattr(current, name))
+            self._baseline = replace(self._baseline, **{kind + "_overlay": current})
+        self._loading = False
 
     def showEvent(self, event):
         super().showEvent(event)

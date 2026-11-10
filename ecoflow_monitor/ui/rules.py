@@ -8,6 +8,7 @@ from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationProfile, IntegrationRule
 from ecoflow_monitor.i18n import t
+from ecoflow_monitor.ui.dialogs import confirm
 from ecoflow_monitor.ui.common import action, profile_tooltip
 from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.metrics import rule_tooltip
@@ -185,7 +186,7 @@ class RulesEditor(QWidget):
 
     def remove(self) -> None:
         row = self.table.currentRow()
-        if row >= 0:
+        if row >= 0 and confirm(self, t("confirm_delete")):
             self.table.removeRow(row)
 
     def move_rule(self, delta: int) -> None:

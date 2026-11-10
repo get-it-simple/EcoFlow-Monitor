@@ -15,7 +15,8 @@ from ecoflow_monitor.adapters.hotkeys import HotkeyManager
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.settings import AppSettings
-from ecoflow_monitor.ui.flow import FlowWidget
+from ecoflow_monitor.ui.readings import MainReadings
+from ecoflow_monitor.ui.common import metric_text
 from ecoflow_monitor.ui.integrations import ProfileDialog
 from ecoflow_monitor.ui.scrollbar import QuietScrollBar
 from ecoflow_monitor.ui.settings_window import SettingsWindow
@@ -84,38 +85,22 @@ def test_display_drafts_reset_save_cancel_and_merge(runtime):
 @pytest.mark.parametrize("fresh", [True, False])
 def test_hidden_metric_text_and_hover_use_paint_transform(runtime, qapp, size, fresh):
     controller = runtime.controller
-    controller.telemetry = Telemetry(120, 80, 65, time.time(), time.monotonic(), ports=(("usb_c1", 20),))
+    controller.telemetry = Telemetry(120, 80, 65, time.time(), time.monotonic())
     controller.connection = ConnectionState.LIVE if fresh else ConnectionState.STALE
-    controller.apply_settings(replace(controller.settings, animations=False, monitor_labels_visible=True))
-    flow = FlowWidget(controller)
+    controller.apply_settings(replace(controller.settings, animations=False, monitor_labels_visible=False, monitor_values_on_hover=True))
+    flow = MainReadings(controller)
+    flow.configure(1)
+    flow.resize(*size)
+    flow.show()
+    qapp.processEvents()
     try:
-        flow.setMinimumSize(0, 0)
-        flow.resize(*size)
-        flow.show()
-        qapp.processEvents()
-        scale, offset = flow._drawing_transform()
-        label_rect = QRect(round(offset.x() + 30 * scale), round(offset.y() + 2 * scale), round(270 * scale), round(32 * scale))
-        value_rect = QRect(round(offset.x() + 30 * scale), round(offset.y() + 36 * scale), round(270 * scale), round(60 * scale))
-        shown = flow.grab().toImage()
-        controller.update_preferences(monitor_labels_visible=False, monitor_values_on_hover=True)
-        flow.refresh()
-        hidden = flow.grab().toImage()
-        assert shown.copy(label_rect) != hidden.copy(label_rect)
-        assert shown.copy(value_rect) != hidden.copy(value_rect)
-        for key, point in (("input_power", QPointF(130, 65)), ("output_power", QPointF(500, 65)), ("battery_level", QPointF(320, 310)), ("estimated_runtime", QPointF(320, 400)), ("ac_input", QPointF(130, 125)), ("usb_c1", QPointF(320, 582))):
-            position = (offset + point * scale).toPoint()
-            QTest.mouseMove(flow, position)
+        for key, reading in flow.readings.items():
+            assert reading.label.isHidden()
+            reading.setFocus()
             qapp.processEvents()
-            assert flow.value_visible(key)
-            assert all(not flow.value_visible(other) for other in ("input_power", "output_power", "battery_level") if other != key)
-            assert flow.tooltip_at(QPointF(position))
-        QTest.mouseMove(flow, (offset + QPointF(130, 65) * scale).toPoint())
-        hovered = flow.grab().toImage()
-        assert hovered.copy(value_rect) == shown.copy(value_rect)
-        assert hovered.copy(label_rect) == hidden.copy(label_rect)
-        QApplication.sendEvent(flow, QEvent(QEvent.Type.Leave))
-        assert not flow.value_visible("input_power")
-        assert flow.grab().toImage().copy(value_rect) == hidden.copy(value_rect)
+            assert reading.value.isVisible()
+            assert reading.toolTip()
+            assert reading.value.text() == metric_text(controller, key)
     finally:
         flow.close()
         flow.deleteLater()
@@ -131,9 +116,9 @@ def test_charge_limit_values_reveal_independently_without_resize(runtime, qapp):
     size = runtime.window.size()
     assert minimum.display_text() == maximum.display_text() == ""
     QTest.mouseMove(minimum, minimum.rect().center())
-    assert minimum.display_text() == "10 %" and maximum.display_text() == ""
+    assert minimum.display_text() == "10 %" and maximum.display_text() == ""
     QTest.mouseMove(maximum, maximum.rect().center())
-    assert maximum.display_text() == "90 %" and minimum.display_text() == ""
+    assert maximum.display_text() == "90 %" and minimum.display_text() == ""
     assert runtime.window.size() == size
     assert "Source: Manual" in minimum.toolTip()
 

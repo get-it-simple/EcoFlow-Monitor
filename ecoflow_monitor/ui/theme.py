@@ -1,14 +1,12 @@
 from PySide6.QtCore import QObject
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
 
-from ecoflow_monitor.adapters.reference_effects import get_accent_color
 from ecoflow_monitor.ui.reference_style import icon_path
+from ecoflow_monitor.ui.tokens import COLORS, RADIUS, surface
 
 
 def current_accent() -> str:
-    watcher = getattr(QApplication.instance(), "ecoflow_accent", None)
-    return watcher.color if watcher is not None else get_accent_color()
+    return COLORS["accent"]
 
 
 def accent_text(accent: str) -> str:
@@ -25,9 +23,6 @@ class StyleBinding(QObject):
         self.widget = widget
         self.factory = factory
         self.prefix = widget.styleSheet()
-        watcher = getattr(QApplication.instance(), "ecoflow_accent", None)
-        if watcher is not None:
-            watcher.changed.connect(self.refresh)
         self.refresh()
 
     def refresh(self):
@@ -38,71 +33,83 @@ def bind_style(widget, factory):
     return StyleBinding(widget, factory)
 
 
-def settings_style(accent: str) -> str:
-    text = accent_text(accent)
-    check = icon_path("check_black" if text == "#000000" else "check_white").replace("\\", "/")
-    return _SETTINGS_STYLE.replace("CHECK_ICON", check).replace("ACCENT_TEXT", text).replace("ACCENT", accent)
+def settings_style(accent: str = "", scale: float = 1) -> str:
+    c = COLORS
+    px = lambda value: max(1, round(value * scale))
+    check = icon_path("check_black").replace("\\", "/")
+    return f"""
+QDialog#settings_dialog, QWidget#dashboard {{ background: {c['surface']}; color: {c['text']}; }}
+QWidget {{ color: {c['text']}; background: transparent; font-size: {px(14)}px; }}
+QLabel, QCheckBox {{ background: transparent; }}
+QLabel#hint, QLabel#secondary {{ color: {c['muted']}; }}
+QLabel#page_title {{ font-size: {px(26)}px; font-weight: 600; }}
+QLabel#section_title {{ font-size: {px(20)}px; font-weight: 600; }}
+QLabel#form_error {{ color: {c['danger']}; }}
+QLineEdit, QComboBox, QAbstractSpinBox, QListWidget, QTableWidget, QPlainTextEdit {{
+    background: {c['raised']}; color: {c['text']}; border: {px(1)}px solid {c['border']};
+    border-radius: {px(RADIUS['control'])}px; padding: {px(10)}px;
+    selection-background-color: {c['successSurface']}; selection-color: {c['text']};
+}}
+QLineEdit, QComboBox, QAbstractSpinBox {{ min-height: {px(22)}px; }}
+QPushButton, QToolButton {{ background: {c['raised']}; color: {c['text']};
+    border: {px(1)}px solid {c['border']}; border-radius: {px(RADIUS['control'])}px;
+    padding: {px(8)}px {px(12)}px; min-height: {px(22)}px; }}
+QPushButton:hover, QToolButton:hover {{ background: {c['border']}; }}
+QPushButton:pressed, QToolButton:pressed {{ background: {c['canvas']}; }}
+QPushButton:disabled, QToolButton:disabled, QAbstractSpinBox:disabled, QLineEdit:disabled {{ color: {c['subtle']}; }}
+QPushButton#primary {{ background: {c['accent']}; color: {c['onAccent']}; border-color: {c['accent']}; font-weight: 600; }}
+QPushButton#primary:hover {{ background: {c['accentHover']}; }}
+QPushButton#primary:pressed {{ background: {c['accentPressed']}; }}
+QPushButton#primary:disabled {{ background: {c['raised']}; color: {c['subtle']}; border-color: {c['border']}; }}
+QPushButton#danger {{ color: {c['danger']}; background: {c['dangerSurface']}; }}
+QTabWidget::pane {{ border: none; background: transparent; }}
+QTabBar::tab {{ background: transparent; color: {c['muted']}; padding: {px(12)}px {px(24)}px; border-radius: {px(10)}px; }}
+QTabBar::tab:selected {{ background: {c['raised']}; color: {c['text']}; }}
+QTabBar::tab:hover:!selected {{ background: {c['raised']}; }}
+QHeaderView::section {{ background: {c['raised']}; color: {c['muted']}; padding: {px(12)}px; border: none; }}
+QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus,
+QListWidget:focus, QTableWidget:focus, QPlainTextEdit:focus {{ border-color: {c['focus']}; }}
+QGroupBox, QFrame#card {{ border: 1px solid {c['border']}; border-radius: {px(RADIUS['card'])}px; padding: {px(16)}px; }}
+QGroupBox {{ margin-top: {px(16)}px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: {px(16)}px; color: {c['text']}; }}
+QComboBox QAbstractItemView {{ background: {c['raised']}; color: {c['text']}; selection-background-color: {c['successSurface']}; selection-color: {c['text']}; }}
+QListWidget::item {{ padding: {px(12)}px; }}
+QTableWidget::item:selected, QListWidget::item:selected {{ background: {c['successSurface']}; color: {c['text']}; }}
+QTableWidget {{ alternate-background-color: {c['surface']}; }}
+QCheckBox {{ spacing: {px(8)}px; min-height: {px(28)}px; }}
+QCheckBox::indicator {{ width: {px(20)}px; height: {px(20)}px; background: {c['raised']}; border: 1px solid {c['muted']}; border-radius: {px(4)}px; }}
+QCheckBox::indicator:checked {{ background: {c['accent']}; border-color: {c['accent']}; image: url({check}); }}
+QSlider::groove:horizontal {{ height: {px(4)}px; background: {c['border']}; border-radius: {px(2)}px; }}
+QSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: {px(2)}px; }}
+QSlider::handle:horizontal {{ width: {px(20)}px; margin: -{px(8)}px 0; background: {c['accent']}; border: 1px solid {c['accent']}; border-radius: {px(10)}px; }}
+QSlider::handle:horizontal:focus {{ border: 2px solid {c['focus']}; }}
+QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled {{ background: {c['subtle']}; }}
+QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
+QToolTip {{ color: {c['text']}; background: {c['raised']}; border: 1px solid {c['border']}; padding: {px(8)}px; }}
+QListWidget#navigation {{ background: transparent; border: none; padding: {px(8)}px; }}
+QListWidget#navigation::item {{ padding: {px(12)}px; margin-bottom: {px(8)}px; border-radius: {px(10)}px; }}
+QListWidget#navigation::item:selected {{ background: {c['successSurface']}; color: {c['accent']}; }}
+""" + menu_style(scale)
 
 
-_SETTINGS_STYLE = """
-QDialog#settings_dialog { background: #202020; color: #f2f2f5; }
-QWidget { color: #f2f2f5; background: transparent; }
-QLabel, QCheckBox { background: transparent; }
-QLabel#hint { color: #c2c2c8; padding: 6px; }
-QLineEdit, QComboBox, QAbstractSpinBox, QListWidget, QTableWidget, QPlainTextEdit {
-    background: #181818; color: #f2f2f5; border: 1px solid #505050;
-    border-radius: 8px; padding: 7px; selection-background-color: ACCENT; selection-color: ACCENT_TEXT;
-}
-QPushButton, QToolButton { background: rgba(255,255,255,12); color: #f2f2f5; border: none; border-radius: 8px; padding: 6px; }
-QPushButton:hover, QToolButton:hover { background: rgba(255,255,255,22); }
-QPushButton:disabled { color: #9a9a9a; }
-QTabWidget::pane { border: 1px solid #424242; border-radius: 8px; background: #202020; }
-QTabBar::tab { background: #202020; color: #c2c2c8; padding: 10px; border-bottom: 2px solid transparent; }
-QTabBar::tab:selected { background: ACCENT; color: ACCENT_TEXT; border-bottom: 2px solid ACCENT; }
-QTabBar::tab:hover:!selected { background: #303030; }
-QHeaderView::section { background: #292929; color: #f2f2f5; padding: 7px; border: none; }
-QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QListWidget:focus, QTableWidget:focus, QPlainTextEdit:focus { border: 1px solid ACCENT; }
-QPushButton#primary { background: ACCENT; color: ACCENT_TEXT; border: 1px solid ACCENT; }
-QPushButton#primary:hover { border: 1px solid ACCENT_TEXT; }
-QGroupBox { border: 1px solid #424242; border-radius: 8px; margin-top: 12px; padding: 12px; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; color: #f2f2f5; }
-QComboBox QAbstractItemView { background: #202020; selection-background-color: ACCENT; selection-color: ACCENT_TEXT; }
-QListWidget::item { padding: 7px; }
-QTableWidget::item:selected, QListWidget::item:selected { background: ACCENT; color: ACCENT_TEXT; }
-QTableWidget { alternate-background-color: #242424; }
-QCheckBox { spacing: 8px; }
-QCheckBox::indicator { background: #202020; border: 1px solid #808080; border-radius: 3px; }
-QCheckBox::indicator:checked { background: ACCENT; border: 1px solid ACCENT; image: url(CHECK_ICON); }
-QCheckBox::indicator:focus { border: 1px solid #f2f2f5; }
-QSlider::groove:horizontal { height: 4px; background: #505050; border-radius: 2px; }
-QSlider::sub-page:horizontal { background: ACCENT; border-radius: 2px; }
-QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: ACCENT; border: 1px solid ACCENT_TEXT; border-radius: 7px; }
-QSlider::handle:horizontal:focus { border: 2px solid ACCENT_TEXT; }
-QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled { background: #606060; border-color: #808080; }
-QAbstractSpinBox:disabled { color: #909090; }
-QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
-QToolTip { color: #f2f2f5; background: #202020; border: 1px solid #3f3f42; }
-"""
+def menu_style(scale: float = 1) -> str:
+    c = COLORS
+    return f"""QMenu, QMessageBox {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; }}
+QMenu {{ padding: {round(8 * scale)}px; border-radius: {round(12 * scale)}px; }}
+QMenu::item {{ padding: {round(10 * scale)}px {round(24 * scale)}px; min-height: {round(20 * scale)}px; border-radius: {round(10 * scale)}px; }}
+QMenu::item:selected {{ background: {c['successSurface']}; color: {c['accent']}; }}
+QMenu::item:disabled {{ color: {c['subtle']}; }}
+QMenu::separator {{ height: 1px; background: {c['border']}; margin: {round(8 * scale)}px; }}"""
 
 
-SETTINGS_STYLE = settings_style("#3a96dd")
+SETTINGS_STYLE = settings_style()
 
 
-def monitor_style(scale: float, accent: str, transparent: bool, background_opacity: float = 140 / 255) -> str:
-    background = f"rgba(32,32,32,{round(background_opacity * 255)})" if transparent else "rgb(32,32,32)"
-    return f"""QWidget {{ color: #f2f2f5; background: transparent; }}
-#monitor_shell {{ background: {background}; border: 1px solid {accent}; border-radius: 8px; }}
-#monitor_title {{ font-size: {round(17 * scale)}px; font-weight: 600; }}
-#monitor_version {{ color: #9a9a9a; font-size: {round(11 * scale)}px; }}
-QToolButton {{ background: rgba(255,255,255,12); border: none; border-radius: {round(8 * scale)}px; padding: {round(6 * scale)}px; }}
-QToolButton:hover {{ background: rgba(255,255,255,22); }}
-QPushButton {{ background: rgba(0,0,0,70); border: 1px solid transparent; border-radius: {round(8 * scale)}px; padding: {round(6 * scale)}px; }}
-QPushButton:hover {{ background: rgba(0,0,0,100); }}
-QPushButton:checked {{ background: {accent}; color: {accent_text(accent)}; }}
-QPushButton:disabled {{ color: #9a9a9a; }}
-QCheckBox {{ spacing: {round(8 * scale)}px; }}
-QComboBox {{ background: #202020; color: #f2f2f5; border: 1px solid #505050; border-radius: 4px; padding: 3px; }}
-QComboBox:focus {{ border-color: {accent}; }}
-QComboBox QAbstractItemView {{ background: #202020; color: #f2f2f5; selection-background-color: {accent}; selection-color: {accent_text(accent)}; }}
-QToolTip {{ color: #f2f2f5; background: #202020; border: 1px solid #3f3f42; }}
+def monitor_style(scale: float, accent: str, transparent: bool, background_opacity: float = 0.82) -> str:
+    opacity = background_opacity if transparent else 1
+    return settings_style(scale=scale) + f"""
+#monitor_shell {{ background: {surface(opacity)}; border: 1px solid {surface(opacity, 'border')}; border-radius: {round(RADIUS['window'] * scale)}px; }}
+#monitor_title {{ font-size: {round(14 * scale)}px; font-weight: 600; }}
+#monitor_version {{ color: {COLORS['muted']}; font-size: {round(11 * scale)}px; }}
+QWidget#monitor_msi, QWidget#monitor_profiles {{ background: transparent; }}
 """

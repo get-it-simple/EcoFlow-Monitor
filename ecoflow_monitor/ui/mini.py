@@ -1,13 +1,20 @@
 import math
+from dataclasses import replace
 
-from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QToolButton, QVBoxLayout
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLayout, QToolButton, QVBoxLayout
 
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.i18n import get_current_language, t
-from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, metric_text, scaled_font, update_status
-from ecoflow_monitor.ui.metrics import metric_tooltip
-from ecoflow_monitor.ui.theme import current_accent
+from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, scaled_font, status_tooltip
+from ecoflow_monitor.ui.common import metric_text, status_color, status_text
+from ecoflow_monitor.ui.overlay import OverlayControls
+from ecoflow_monitor.ui.readings import MetricReading
+from ecoflow_monitor.ui.reference_style import icon_path
+from ecoflow_monitor.ui.theme import settings_style
+from ecoflow_monitor.ui.tokens import RADIUS, surface
+from ecoflow_monitor.ui.focus import FocusBinding
 
 
 class MiniWidget(QFrame):
@@ -19,123 +26,138 @@ class MiniWidget(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setObjectName("mini")
         self._layout = QVBoxLayout(self)
-        self.status = QLabel(self)
-        self.status.setWordWrap(True)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self.shell = QFrame(self)
+        self.shell.setObjectName("mini_shell")
+        self._layout.addWidget(self.shell)
+        self.content = QVBoxLayout(self.shell)
+        self.status = DragHeader("DELTA 3 Max", self.shell)
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
         header.addWidget(self.status, 1)
+        self.overlay = OverlayControls(self, controller, "mini")
+        header.addWidget(self.overlay.pin)
         self.reveal_button = QToolButton(self)
-        self.reveal_button.setObjectName("mini_reveal")
+        self.reveal_button.setIcon(QIcon(icon_path("expand")))
         self.reveal_button.setCheckable(True)
-        self.reveal_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.reveal_button.toggled.connect(self.refresh)
         header.addWidget(self.reveal_button)
-        self._layout.addLayout(header)
+        header.addWidget(self.overlay.menu_button)
+        self.close_button = QToolButton(self)
+        self.close_button.setIcon(QIcon(icon_path("close")))
+        self.close_button.clicked.connect(lambda: controller.update_preferences(mini_enabled=False))
+        header.addWidget(self.close_button)
+        self.content.addLayout(header)
         self.body = QFrame(self)
         self.grid = QGridLayout(self.body)
-        self._layout.addWidget(self.body)
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.content.addWidget(self.body)
         self.labels = {}
+        self.readings = {}
         self._signature = None
+        self._fit_context = None
+        self._fit_limit = 3
         self._screen_tracker = ScreenTracker(self, self.refresh)
-        self._drag = None
         self._initial = True
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(500)
         self._save_timer.timeout.connect(self._save_position)
         controller.changed.connect(self.refresh)
-        accent = getattr(QApplication.instance(), "ecoflow_accent", None)
-        if accent is not None:
-            accent.changed.connect(self.refresh)
+        self._focus_binding = FocusBinding(self)
 
     def refresh(self):
-        settings = self.controller.settings
+        settings = self.controller.ui_settings
+        self.overlay.apply()
         if not settings.mini_hidden_metrics:
             self.reveal_button.blockSignals(True)
             self.reveal_button.setChecked(False)
             self.reveal_button.blockSignals(False)
         expanded = self.reveal_button.isChecked()
         self.reveal_button.setVisible(bool(settings.mini_hidden_metrics))
-        self.reveal_button.setArrowType(Qt.ArrowType.UpArrow if expanded else Qt.ArrowType.DownArrow)
         self.reveal_button.setToolTip(t("hide_hidden_metrics" if expanded else "show_hidden_metrics"))
         self.reveal_button.setAccessibleName(self.reveal_button.toolTip())
+        self.close_button.setToolTip(t("hide"))
+        self.close_button.setAccessibleName(t("hide"))
         groups = tuple(group for group in (settings.mini_metrics, settings.mini_hidden_metrics if expanded else ()) if group)
-        largest_group = max((len(group) for group in groups), default=0)
+        largest = max((len(group) for group in groups), default=0)
         scale = effective_scale(self, settings.mini_scale)
         screen = self.screen() or QApplication.primaryScreen()
         area = screen.geometry() if settings.mini_above_taskbar else screen.availableGeometry()
-        vertical = settings.mini_dock in {"left", "right"}
-        count = 1
-        for _ in range(6):
-            count = max(1, int((area.height() - 44 * scale) / (74 * scale))) if vertical else max(1, int((area.width() - 16 * scale) / (152 * scale)))
-            count = min(count, max(1, largest_group))
-            extent = sum(math.ceil(len(group) / count) for group in groups)
-            columns, rows = (extent, min(count, largest_group)) if vertical else (min(count, largest_group), extent)
-            fit = min(1.0, area.width() / ((max(1, columns) * 152 + 16) * scale), area.height() / ((rows * 74 + 44) * scale))
-            if fit >= 1:
-                break
-            scale *= fit * 0.98
-        signature = (groups, scale, settings.mini_transparency, settings.mini_dock, settings.mini_above_taskbar, get_current_language(), area.width(), area.height(), current_accent())
+        context = (settings.mini_scale, area.width(), area.height(), groups, get_current_language())
+        if context != self._fit_context:
+            self._fit_context = context
+            self._fit_limit = 3
+        scale = min(scale, self._fit_limit)
+        count = max(1, min(3, largest, int((area.width() / scale - 32) / 112)))
+        rows = sum(math.ceil(len(group) / count) for group in groups)
+        scale *= min(1, area.width() / (max(320, count * 136 + 32) * scale), area.height() / ((rows * 72 + 60) * scale))
+        lengths = tuple(len(metric_text(self.controller, key)) for group in groups for key in group)
+        signature = (groups, scale, settings.mini_transparency, get_current_language(), settings.mini_dock, area.width(), area.height(), lengths)
         if signature != self._signature:
             self._signature = signature
             while self.grid.count():
                 item = self.grid.takeAt(0)
-                widget = item.widget()
-                widget.hide()
-                widget.deleteLater()
+                item.widget().hide()
+                item.widget().deleteLater()
             self.labels = {}
+            self.readings = {}
             scaled_font(self, scale)
-            self._layout.setContentsMargins(round(8 * scale), round(6 * scale), round(8 * scale), round(6 * scale))
-            self._layout.setSpacing(round(4 * scale))
-            self.grid.setContentsMargins(0, 0, 0, 0)
-            self.grid.setSpacing(round(4 * scale))
-            self.status.setMinimumHeight(round(19 * scale))
-            self.status.setStyleSheet(f"font-size: {round(11 * scale)}px;")
-            self.reveal_button.setFixedSize(round(24 * scale), round(24 * scale))
-            self.body.setVisible(bool(groups))
-            positions = []
+            opacity = 1 - settings.mini_transparency
+            self.setStyleSheet(settings_style(scale=scale) + f"#mini_shell {{ background: {surface(opacity)}; border: 1px solid {surface(opacity, 'border')}; border-radius: {round(RADIUS['card'] * scale)}px; }}")
+            self.content.setContentsMargins(round(16 * scale), round(8 * scale), round(16 * scale), round(8 * scale))
+            self.content.setSpacing(round(4 * scale))
+            self.grid.setSpacing(round(8 * scale))
+            for button in (self.overlay.pin, self.overlay.menu_button, self.reveal_button, self.close_button):
+                size = round(36 * scale)
+                button.setStyleSheet(f"padding: 0; min-height: {size - 2}px; max-height: {size - 2}px; min-width: {size - 2}px; max-width: {size - 2}px;")
+                button.setFixedSize(size, size)
+                button.setIconSize(QSize(round(20 * scale), round(20 * scale)))
             offset = 0
             for group in groups:
                 for index, key in enumerate(group):
-                    row, column = (index % count, offset + index // count) if vertical else (offset + index // count, index % count)
-                    positions.append((key, row, column))
+                    reading = MetricReading(self.controller, key, self.body)
+                    reading.configure(scale, 24, opacity == 0)
+                    self.readings[key] = reading
+                    self.labels[key] = reading.value
+                    self.grid.addWidget(reading, offset + index // count, index % count)
+                    reading.show()
                 offset += math.ceil(len(group) / count)
-            for key, row, column in positions:
-                tile = QFrame(self.body)
-                tile.setObjectName("mini_tile")
-                tile.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
-                tile.setFixedSize(round(148 * scale), round(70 * scale))
-                box = QVBoxLayout(tile)
-                box.setContentsMargins(round(8 * scale), round(6 * scale), round(8 * scale), round(6 * scale))
-                box.setSpacing(round(4 * scale))
-                label = QLabel(t(key), tile)
-                label.setWordWrap(True)
-                label.setStyleSheet(f"font-size: {round(11 * scale)}px;")
-                value = QLabel(tile)
-                value.setObjectName("mini_value")
-                box.addWidget(label)
-                box.addWidget(value)
-                self.labels[key] = value
-                self.grid.addWidget(tile, row, column)
-            alpha = round(255 * (1 - settings.mini_transparency))
-            self.setStyleSheet(f"QWidget, QFrame {{ background: transparent; border: none; }} #mini_tile {{ background: rgba(0, 0, 0, {alpha}); border: 1px solid transparent; border-radius: {round(10 * scale)}px; }} QLabel {{ color: #f2f2f5; background: transparent; }} #mini_value {{ font-size: {round(20 * scale)}px; font-weight: 600; }} QToolButton#mini_reveal {{ color: #f2f2f5; background: rgba(255,255,255,8); border: 1px solid transparent; border-radius: {round(6 * scale)}px; }} QToolButton#mini_reveal:hover {{ background: rgba(255,255,255,18); }} QToolButton#mini_reveal:focus {{ border-color: {current_accent()}; }}")
+            self.body.setVisible(bool(groups))
+            self.setMinimumSize(0, 0)
+            self.content.activate()
+            self.grid.activate()
+            minimum = self.minimumSizeHint().expandedTo(QSize(round(320 * scale), round(88 * scale)))
+            fit = min(1, area.width() / max(1, minimum.width()), area.height() / max(1, minimum.height()))
+            if fit < 1 and scale > 0.1:
+                self._fit_limit = scale * fit * 0.98
+                self._signature = None
+                return self.refresh()
+            self.setMinimumSize(minimum)
             self.adjustSize()
             self._dock()
-        for key, label in self.labels.items():
-            label.setText(metric_text(self.controller, key))
-            label.parentWidget().setToolTip(metric_tooltip(key, self.controller))
-            label.setEnabled(self.controller.fresh)
-        update_status(self.status, self.controller)
-        self.status.setMaximumWidth(max(round(148 * scale), self.body.sizeHint().width()))
+        for reading in self.readings.values():
+            reading.refresh()
+        self.status.setText("DELTA 3 Max · " + status_text(self.controller))
+        self.status.setToolTip(status_tooltip(self.controller))
+        self.status.setAccessibleName(self.status.toolTip())
+        self.status.setStyleSheet(f"color: {status_color(self.controller)};")
+        self.status.outlined = settings.mini_transparency == 1
+        self.status.setWordWrap(True)
+        self.status.setMaximumWidth(max(80, round(190 * scale)))
         self.adjustSize()
         if self._initial:
             self._initial = False
+            context = settings.mini_overlay
+            target = next((item for item in QApplication.screens() if item.name() == context.screen), screen)
+            if context.screen:
+                self.setScreen(target)
             x, y = settings.mini_position
             if x != -1 or y != -1:
                 self.move(x, y)
             else:
                 self.move(area.right() - self.width() - 20, area.top() + 20)
-            self._dock()
+        self._dock()
         if self.isVisible() != settings.mini_enabled:
             self.setVisible(settings.mini_enabled)
         if self.isVisible():
@@ -156,29 +178,18 @@ class MiniWidget(QFrame):
         clamp_window(self, settings.mini_above_taskbar)
 
     def _save_position(self):
+        if self.controller.preview is not None:
+            return
         position = (self.x(), self.y())
-        if position != self.controller.settings.mini_position:
-            self.controller.update_preferences(mini_position=position)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag = event.globalPosition().toPoint() - self.pos()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag)
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self._drag is not None:
-            self._drag = None
-            self.controller.update_preferences(mini_position=(self.x(), self.y()), mini_dock="")
-        super().mouseReleaseEvent(event)
+        screen = self.screen()
+        old = self.controller.settings.mini_overlay
+        context = replace(old, screen=screen.name(), dpi=screen.logicalDotsPerInch()) if screen else old
+        if position != self.controller.settings.mini_position or context != old:
+            self.controller.update_preferences(mini_position=position, mini_overlay=context)
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if not self._initial:
+        if hasattr(self, "_initial") and not self._initial:
             self._save_timer.start()
 
     def resizeEvent(self, event):
@@ -188,14 +199,18 @@ class MiniWidget(QFrame):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self.reveal_button.isChecked():
+        if not self.property("applying_overlay"):
             self.reveal_button.setChecked(False)
         self._screen_tracker.watch()
         raise_without_focus(self)
 
     def closeEvent(self, event):
-        self._screen_tracker.stop()
-        super().closeEvent(event)
+        if not self.controller._stopped:
+            event.ignore()
+            self.controller.update_preferences(mini_enabled=False)
+        else:
+            self._screen_tracker.stop()
+            super().closeEvent(event)
 
     def event(self, event):
         if event.type() == QEvent.Type.DevicePixelRatioChange and hasattr(self, "_signature"):

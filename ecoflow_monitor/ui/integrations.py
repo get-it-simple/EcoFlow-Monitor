@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import uuid
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
@@ -16,6 +16,7 @@ from ecoflow_monitor.ui.rules import RulesEditor
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.metrics import metric_tooltip, rule_tooltip
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
+from ecoflow_monitor.ui.dialogs import confirm
 
 
 class ExecutableField(QLineEdit):
@@ -36,6 +37,75 @@ class ExecutableField(QLineEdit):
             event.acceptProposedAction()
         except (ValueError, OSError):
             QMessageBox.warning(self, t("error_title"), t("invalid_executable"))
+
+
+class CommandDialog(QDialog):
+    def __init__(self, module, command=None, parent=None):
+        super().__init__(parent)
+        self.module = module
+        self.original = command
+        self.command = command
+        self.setObjectName("settings_dialog")
+        bind_style(self, settings_style)
+        self.setWindowTitle(t("integration_mapping"))
+        self.resize(620, 360)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        form = QFormLayout()
+        self.identity = QLineEdit(command.id if command else "command_" + uuid.uuid4().hex[:8])
+        self.identity.setReadOnly(True)
+        self.label = QLineEdit(command.label if command else "")
+        self.arguments = QPlainTextEdit(subprocess.list2cmdline(command.arguments) if command else "")
+        self.arguments.setMinimumHeight(88)
+        form.addRow(t("profile_label"), self.label)
+        form.addRow(t("integration_arguments"), self.arguments)
+        layout.addLayout(form)
+        advanced = CollapsibleSection(t("integration_advanced"))
+        advanced.content.addWidget(self.identity)
+        layout.addWidget(advanced)
+        self.preview = QLabel()
+        self.preview.setWordWrap(True)
+        self.preview.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.preview)
+        self.error = QLabel()
+        self.error.setObjectName("form_error")
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(action(t("cancel"), self.reject))
+        self.save_button = action(t("save"), self.save)
+        self.save_button.setObjectName("primary")
+        row.addWidget(self.save_button)
+        layout.addLayout(row)
+        self.label.textChanged.connect(self.validate_draft)
+        self.arguments.textChanged.connect(self.validate_draft)
+        self.validate_draft()
+
+    def draft(self):
+        arguments = template_tokens("{app} " + self.arguments.toPlainText())[1:]
+        command = CliCommand(self.identity.text(), self.label.text().strip(), arguments)
+        mapping = tuple(item for item in self.module.mapping if item.id != command.id) + (command,)
+        replace(self.module, mapping=mapping).validate()
+        return command
+
+    def validate_draft(self):
+        try:
+            command = self.draft()
+            self.preview.setText(subprocess.list2cmdline((self.module.executable or t("integration_app_token"), *command.arguments)))
+            self.error.clear()
+            self.save_button.setEnabled(command != self.original)
+        except ValueError:
+            self.error.setText(t("invalid_settings"))
+            self.save_button.setEnabled(False)
+
+    def save(self):
+        try:
+            self.command = self.draft()
+        except ValueError:
+            self.error.setText(t("invalid_settings"))
+            return
+        self.accept()
 
 
 class ProfileDialog(QDialog):
@@ -109,28 +179,51 @@ class ProfileDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addWidget(action(t("cancel"), self.reject))
         save_button = action(t("save"), self.save)
+        self.save_button = save_button
         save_button.setObjectName("primary")
         buttons.addWidget(save_button)
         outer.addLayout(buttons)
         self.profile: IntegrationProfile | None = profile
+        self.error_label = QLabel()
+        self.error_label.setObjectName("form_error")
+        self.error_label.setWordWrap(True)
+        outer.insertWidget(1, self.error_label)
+        for widget in self.findChildren(QWidget):
+            for signal_name in ("textChanged", "toggled", "valueChanged"):
+                signal = getattr(widget, signal_name, None)
+                if signal is not None:
+                    signal.connect(self.validate_draft)
+        self.validate_draft()
         install_scrollbars(self)
 
     def showEvent(self, event):
         super().showEvent(event)
         clamp_window(self)
 
+    def draft_profile(self):
+        reactions = {name: Reaction(toggle.isChecked(), tuple(line.strip() for line in editor.toPlainText().splitlines() if line.strip())) for name, (toggle, editor) in self.reactions.items()}
+        profile = IntegrationProfile(self.identity.text().strip(), self.label.text().strip(), **reactions,
+                                     slot=self.slot.value() if self.module.driver == "afterburner" else None,
+                                     power_pct=self.profile.power_pct if self.profile else None,
+                                     technical_details=self.technical_details.toPlainText())
+        profiles = tuple(item for item in self.module.profiles if self.profile is None or item.id != self.profile.id) + (profile,)
+        replace(self.module, profiles=profiles).validate()
+        return profile
+
+    def validate_draft(self):
+        try:
+            draft = self.draft_profile()
+            self.save_button.setEnabled(draft != self.profile)
+            self.error_label.clear()
+        except (ValueError, TypeError):
+            self.save_button.setEnabled(False)
+            self.error_label.setText(t("invalid_settings"))
+
     def save(self):
         try:
-            reactions = {name: Reaction(toggle.isChecked(), tuple(line.strip() for line in editor.toPlainText().splitlines() if line.strip())) for name, (toggle, editor) in self.reactions.items()}
-            profile = IntegrationProfile(self.identity.text().strip(), self.label.text().strip(), **reactions,
-                                         slot=self.slot.value() if self.module.driver == "afterburner" else None,
-                                         power_pct=self.profile.power_pct if self.profile else None,
-                                         technical_details=self.technical_details.toPlainText())
-            profiles = tuple(item for item in self.module.profiles if self.profile is None or item.id != self.profile.id) + (profile,)
-            replace(self.module, profiles=profiles).validate()
-            self.profile = profile
-        except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, t("error_title"), t("invalid_settings") + "\n" + str(error))
+            self.profile = self.draft_profile()
+        except (ValueError, TypeError):
+            self.error_label.setText(t("invalid_settings"))
             return
         self.accept()
 
@@ -187,8 +280,14 @@ class IntegrationsEditor(QWidget):
             self.conditions[name] = control
             conditions_form.addWidget(control)
         conditions_form.addWidget(hint(t("integration_conditions_hint")))
+        self.condition_error = QLabel()
+        self.condition_error.setObjectName("form_error")
+        self.condition_error.setWordWrap(True)
+        conditions_form.addWidget(self.condition_error)
         form.addRow(conditions_group)
-        form.addRow(t("integration_id"), self.identity)
+        technical = CollapsibleSection(t("integration_advanced"))
+        technical.content.addWidget(self.identity)
+        form.addRow(technical)
         self.identity.setToolTip(t("integration_id_help"))
         self.body.addTab(general, t("integration_general"))
         mapping_body = QWidget()
@@ -203,8 +302,10 @@ class IntegrationsEditor(QWidget):
         self.mapping.setHorizontalHeaderLabels([t("integration_id"), t("profile_label"), t("integration_arguments")])
         self.mapping.horizontalHeader().setStretchLastSection(True)
         self.mapping.itemChanged.connect(self.mapping_tooltip)
+        self.mapping.itemDoubleClicked.connect(lambda item: self.edit_mapping(True))
         mapping_buttons = QHBoxLayout()
-        mapping_buttons.addWidget(action(t("integration_add_command"), self.add_mapping))
+        mapping_buttons.addWidget(action(t("integration_add_command"), lambda: self.edit_mapping(False)))
+        mapping_buttons.addWidget(action(t("integration_edit_command"), lambda: self.edit_mapping(True)))
         mapping_buttons.addWidget(action(t("remove"), self.remove_mapping))
         mapping_layout.addLayout(mapping_buttons)
         mapping_layout.addWidget(self.mapping)
@@ -239,6 +340,22 @@ class IntegrationsEditor(QWidget):
             control.toggled.connect(self.update_conditions)
 
     def update_conditions(self):
+        blocked = []
+        for name, control in self.conditions.items():
+            if control.isChecked():
+                continue
+            dependent = []
+            for editor in (self.application_rules, self.system_rules):
+                for rule in editor.rules():
+                    used = bool(rule.executable) if name == "application" else rule.input_condition != "any" if name == "input" else rule.min_soc is not None or rule.max_soc is not None
+                    if used:
+                        dependent.append(rule.id)
+            if dependent:
+                control.blockSignals(True)
+                control.setChecked(True)
+                control.blockSignals(False)
+                blocked.extend(dependent)
+        self.condition_error.setText(t("condition_in_use").format(items=", ".join(dict.fromkeys(blocked))) if blocked else "")
         conditions = tuple(name for name, control in self.conditions.items() if control.isChecked())
         self.application_rules_label.setVisible("application" in conditions)
         for editor in (self.application_rules, self.system_rules):
@@ -323,10 +440,11 @@ class IntegrationsEditor(QWidget):
         for command in module.mapping:
             self.add_mapping(command)
         self._profiles = module.profiles
-        self.refresh_profiles()
-        self.update_conditions()
+        self.application_rules.configure(self._profiles, module.conditions)
+        self.system_rules.configure(self._profiles, module.conditions)
         self.application_rules.set_rules(module.application_rules)
         self.system_rules.set_rules(module.system_rules)
+        self.refresh_profiles()
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(self, t("integration_executable"), "", t("application_files") + " (*.exe *.lnk)")
@@ -342,8 +460,31 @@ class IntegrationsEditor(QWidget):
         row = self.mapping.rowCount()
         self.mapping.insertRow(row)
         for column, value in enumerate((command.id, command.label, subprocess.list2cmdline(command.arguments))):
-            self.mapping.setItem(row, column, QTableWidgetItem(value))
+            item = QTableWidgetItem(value)
+            if column == 0:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.mapping.setItem(row, column, item)
         self.mapping.selectRow(row)
+
+    def edit_mapping(self, existing):
+        if self._index < 0:
+            return
+        try:
+            self.capture()
+            module = self._modules[self._index]
+            row = self.mapping.currentRow()
+            command = module.mapping[row] if existing and row >= 0 else None
+            dialog = CommandDialog(module, command, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.command is not None:
+                if command is not None:
+                    self.mapping.item(row, 1).setText(dialog.command.label)
+                    self.mapping.item(row, 2).setText(subprocess.list2cmdline(dialog.command.arguments))
+                else:
+                    self.add_mapping(dialog.command)
+                self.changed.emit()
+            dialog.deleteLater()
+        except (ValueError, AttributeError):
+            QMessageBox.warning(self, t("error_title"), t("invalid_settings"))
 
     def mapping_tooltip(self, item):
         if item.toolTip() != item.text():
@@ -357,7 +498,8 @@ class IntegrationsEditor(QWidget):
         if any("{cli:" + key + "}" in command for profile in self._profiles for reaction in (profile.activation, profile.deactivation) for command in reaction.commands):
             QMessageBox.warning(self, t("error_title"), t("integration_in_use"))
             return
-        self.mapping.removeRow(row)
+        if confirm(self, t("confirm_delete") + "\n" + self.mapping.item(row, 1).text()):
+            self.mapping.removeRow(row)
 
     def refresh_profiles(self):
         row = self.profiles.currentRow()
@@ -406,6 +548,8 @@ class IntegrationsEditor(QWidget):
         if any(rule.profile_id == profile.id for editor in (self.application_rules, self.system_rules) for rule in editor.rules()):
             QMessageBox.warning(self, t("error_title"), t("integration_in_use"))
             return
+        if not confirm(self, t("confirm_delete") + "\n" + profile.label):
+            return
         self._profiles = tuple(item for item in self._profiles if item.id != profile.id)
         self.refresh_profiles()
         self.refresh_rule_profiles()
@@ -426,6 +570,8 @@ class IntegrationsEditor(QWidget):
 
     def remove(self):
         if self._index >= 0:
+            if not confirm(self, t("confirm_delete") + "\n" + self._modules[self._index].label):
+                return
             self._modules.pop(self._index)
             self.refresh_selector(max(0, self._index - 1))
 
@@ -441,7 +587,9 @@ class IntegrationsEditor(QWidget):
             return
         try:
             module = IntegrationDefinition.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
-            self.add_module(replace(module, enabled=False, auto_enabled=False))
+            message = t("import_preview").format(name=module.label, profiles=len(module.profiles), rules=len(module.application_rules) + len(module.system_rules))
+            if confirm(self, message, "integration_import"):
+                self.add_module(replace(module, enabled=False, auto_enabled=False))
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
             QMessageBox.warning(self, t("error_title"), t("invalid_settings") + "\n" + str(error))
 

@@ -117,7 +117,7 @@ def test_legacy_settings_migrate_all_msi_values_and_hotkeys():
     assert [profile.label for profile in module.profiles] == [f"Saved {slot}" for slot in range(1, 6)]
     assert module.application_rules[0].profile_id == "profile_2"
     assert module.system_rules[0].profile_id == "profile_5"
-    assert [binding.action for binding in settings.hotkeys] == ["auto:afterburner", "profile:afterburner:profile_2"]
+    assert [binding.action for binding in settings.hotkeys] == ["auto:afterburner", "profile:afterburner:profile_2", "open_dashboard", "recover_widgets"]
     assert settings.scale == 1.5 and settings.language == "uk"
     assert AppSettings.from_dict(settings.to_dict()) == settings
 
@@ -126,7 +126,7 @@ def test_deleted_example_stays_deleted_after_restart(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.save(replace(AppSettings(), integrations=()))
     assert store.load().integrations == ()
-    assert store.load().to_dict()["version"] == 2
+    assert store.load().to_dict()["version"] == 3
 
 
 def test_rules_use_declared_conditions_and_order():
@@ -285,7 +285,8 @@ def test_editor_shortcut_and_draft_reset(controller: Controller, tmp_path, qapp)
         dialog.deleteLater()
 
 
-def test_editor_add_delete_restore_and_duplicate(qapp):
+def test_editor_add_delete_restore_and_duplicate(qapp, monkeypatch):
+    monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
     editor = IntegrationsEditor()
     editor.load((afterburner_example(),))
     try:
@@ -441,6 +442,7 @@ def test_table_headers_keep_their_appearance_when_rows_are_selected(qapp, table_
 
 
 def test_import_export_and_rejected_import_preserve_modules(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
     module = module_example(auto_enabled=True)
     source = tmp_path / "import.json"
     destination = tmp_path / "export.json"
@@ -517,15 +519,16 @@ def test_no_rule_stale_disable_and_shutdown_do_not_deactivate(controller: Contro
     assert calls == []
 
 
-def test_module_hotkey_removal_is_saved(controller: Controller, qapp):
+def test_module_hotkey_removal_is_saved(controller: Controller, qapp, monkeypatch):
+    monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
     dialog = SettingsWindow(controller)
     try:
         assert "profile:afterburner:profile_1" in dialog.hotkey_rows
         dialog.integrations_editor.remove()
-        assert tuple(dialog.hotkey_rows) == ("toggle_monitor", "toggle_mini")
+        assert tuple(dialog.hotkey_rows) == ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets")
         dialog.save()
         assert controller.store.load().integrations == ()
-        assert {binding.action for binding in controller.store.load().hotkeys} == {"toggle_monitor", "toggle_mini"}
+        assert {binding.action for binding in controller.store.load().hotkeys} == {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
     finally:
         dialog.deleteLater()
 

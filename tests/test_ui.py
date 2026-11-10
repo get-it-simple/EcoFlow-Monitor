@@ -80,7 +80,10 @@ def test_settings_initial_size_fits_content_or_scrolls(runtime, qapp, language, 
                 dialog.tabs.setCurrentIndex(index)
                 qapp.processEvents()
                 page = dialog.tabs.currentWidget()
-                assert page.verticalScrollBar().maximum() == 0
+                if page.verticalScrollBar().maximum():
+                    assert dialog.frameGeometry().height() >= area.height() - 2
+                    page.verticalScrollBar().setValue(page.verticalScrollBar().maximum())
+                    assert page.verticalScrollBar().value() == page.verticalScrollBar().maximum()
                 assert page.horizontalScrollBar().maximum() == 0
         else:
             assert scroller.verticalScrollBar().maximum() > 0
@@ -120,60 +123,42 @@ def test_repeat_launch_restores_monitor(runtime, qapp, state):
         window.showMinimized()
     runtime.activate_existing_window()
     qapp.processEvents()
-    assert window.isVisible()
-    assert not window.isMinimized()
-    assert runtime.controller.store.load().monitor_visible
+    assert runtime.dashboard.isVisible()
+    assert not runtime.dashboard.isMinimized()
+    assert runtime.controller.settings.monitor_visible is (state != "hidden")
 
 
 def test_repeat_launch_preserves_settings_draft(runtime, qapp):
-    from PySide6.QtCore import Qt
-    dialog = SettingsWindow(runtime.controller, runtime.window)
-    runtime._dialog = dialog
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.show()
+    runtime.open_settings()
+    dialog = runtime.dashboard
     dialog.capacity.setValue(1234)
     runtime.window.request_visibility(False)
-    try:
-        runtime.activate_existing_window()
-        qapp.processEvents()
-        assert runtime.window.isVisible()
-        assert dialog.isVisible()
-        assert dialog.capacity.value() == 1234
-        assert runtime.controller.settings.capacity_wh != 1234
-        assert runtime._dialog is dialog
-    finally:
-        runtime._dialog = None
-        dialog.close()
-        dialog.deleteLater()
+    runtime.activate_existing_window()
+    qapp.processEvents()
+    assert dialog.isVisible()
+    assert dialog.capacity.value() == 1234
+    assert runtime.controller.settings.capacity_wh != 1234
+    assert runtime.dashboard is dialog
+    dialog.reject()
 
 
 @pytest.mark.parametrize("size", [(320, 310), (640, 620), (900, 620), (640, 900), (1280, 1240), (1920, 1860)])
-def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size: tuple[int, int]):
-    from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QHelpEvent
-    from PySide6.QtWidgets import QToolTip
+def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size):
     flow = runtime.window.flow
     controller = runtime.controller
-    controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90,
-                                     (("usb_c1", 10), ("usb_a1", 5), ("anderson_1", 30)))
+    controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90)
     controller.connection = ConnectionState.STALE
     flow.setMinimumSize(0, 0)
     flow.resize(*size)
-    scale = min(size[0] / 640, size[1] / 620)
-    offset = QPointF((size[0] - 640 * scale) / 2, (size[1] - 620 * scale) / 2)
-    for point, field in (((100, 40), "powInSumW"), ((500, 40), "powOutSumW"),
-                         ((130, 116), "powGetAcIn"), ((510, 116), "powGetPv"),
-                         ((130, 530), "powGetAcOut"), ((510, 530), "powGet12v"),
-                         ((320, 300), "cmsBattSoc"), ((180, 427), "cmsMinDsgSoc"),
-                         ((180, 224), "cmsMaxChgSoc"), ((120, 583), "powGetTypec1"),
-                         ((320, 583), "powGetQcusb1"), ((520, 583), "powGet12vList.powGet12vItem")):
-        position = (offset + QPointF(*point) * scale).toPoint()
-        event = QHelpEvent(QEvent.Type.ToolTip, position, flow.mapToGlobal(position))
-        QCoreApplication.sendEvent(flow, event)
-        assert field in QToolTip.text()
-    assert "calculated by this app" in flow.tooltip_at(offset + QPointF(320, 400) * scale)
-    assert flow.tooltip_at(offset + QPointF(10, 450) * scale) == ""
-    QToolTip.hideText()
+    flow.show()
+    flow.refresh()
+    qapp.processEvents()
+    for key, field in (("input_power", "powInSumW"), ("output_power", "powOutSumW"), ("battery_level", "cmsBattSoc")):
+        reading = flow.readings[key]
+        assert field in reading.toolTip()
+        assert reading.value.accessibleName() == reading.accessibleName()
+        assert flow.rect().contains(reading.geometry())
+    assert "calculated by this app" in flow.readings["estimated_runtime"].toolTip()
 
 
 def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp):
@@ -188,13 +173,13 @@ def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp)
                         if dialog.metrics.item(index).data(Qt.ItemDataRole.UserRole) == "minimum_discharge_level")
             return runtime.window.limits.toolTip(), runtime.mini.labels["minimum_discharge_level"].parentWidget().toolTip(), item.toolTip()
         for tooltip in tips():
-            assert "Source: Manual. Value: 10 %" in tooltip
+            assert "Source: Manual. Value: 10 %" in tooltip
             assert "do not change the station" in tooltip
         controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90)
         controller.connection = ConnectionState.LIVE
         controller.changed.emit()
         for tooltip in tips():
-            assert "Source: EcoFlow API. Value: 20 %" in tooltip
+            assert "Source: EcoFlow API. Value: 20 %" in tooltip
             assert "do not change the station" not in tooltip
         controller.telemetry = None
         controller.apply_settings(replace(controller.settings, manual_min=None))
@@ -262,38 +247,25 @@ def test_power_units_follow_discovered_catalog_and_live_language_changes(runtime
     controller.telemetry = Telemetry(50, 280, 80, time.time(), time.monotonic())
     for language, unit in (("en", "W"), ("xx", "test-unit"), ("en", "W")):
         controller.apply_settings(replace(controller.settings, language=language))
-        assert runtime.mini.labels["input_power"].text() == "50 " + unit
-        assert runtime.mini.labels["output_power"].text() == "280 " + unit
-        assert metric_text(controller, "battery_level") == "80 %"
+        assert runtime.mini.labels["input_power"].text() == "50 " + unit
+        assert runtime.mini.labels["output_power"].text() == "280 " + unit
+        assert metric_text(controller, "battery_level") == "80 %"
     controller.telemetry = None
     assert metric_text(controller, "input_power") == "—"
 
 
 def test_metric_tooltips_follow_language_changes(runtime, qapp):
-    from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QHelpEvent
-    from PySide6.QtWidgets import QToolTip
     from ecoflow_monitor.ui.metrics import metric_tooltip
-    from ecoflow_monitor.settings import METRICS
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, mini_metrics=METRICS))
-    english = metric_tooltip("battery_level")
-    flow = runtime.window.flow
-    scale = min(flow.width() / 640, flow.height() / 620)
-    position = QPointF((flow.width() - 640 * scale) / 2 + 100 * scale,
-                      (flow.height() - 620 * scale) / 2 + 40 * scale).toPoint()
-    QCoreApplication.sendEvent(flow, QHelpEvent(QEvent.Type.ToolTip, position, flow.mapToGlobal(position)))
-    assert QToolTip.text() == metric_tooltip("input_power")
+    english = metric_tooltip("input_power")
+    assert runtime.window.flow.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
     controller.apply_settings(replace(controller.settings, language="uk"))
-    translated = metric_tooltip("battery_level")
-    assert translated != english
-    assert "cmsBattSoc" in translated
-    assert runtime.mini.labels["battery_level"].parentWidget().toolTip() == translated
-    assert QToolTip.text() == metric_tooltip("input_power")
+    translated = metric_tooltip("input_power")
+    assert translated != english and "powInSumW" in translated
+    assert runtime.mini.labels["input_power"].parentWidget().toolTip() == translated + "\n" + i18n.t("missing_data")
+    assert runtime.window.flow.readings["input_power"].toolTip() == translated + "\n" + i18n.t("missing_data")
     controller.apply_settings(replace(controller.settings, language="en"))
-    assert runtime.mini.labels["battery_level"].parentWidget().toolTip() == english
-    assert QToolTip.text() == metric_tooltip("input_power")
-    QToolTip.hideText()
+    assert runtime.window.flow.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
 
 
 @pytest.mark.parametrize("language", ["en", "uk"])
@@ -542,13 +514,13 @@ def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, 
     qapp.processEvents()
     actual = runtime.window._scale
     assert actual <= effective_scale(runtime.window, scale)
-    assert runtime.window.title.font().pixelSize() == round(17 * actual)
+    assert runtime.window.title.font().pixelSize() == round(14 * actual)
     assert runtime.mini.status.height() >= runtime.mini.status.fontMetrics().height()
     dialog = SettingsWindow(controller, runtime.window)
     dialog.show()
     qapp.processEvents()
     assert dialog.capacity.font().pixelSize() == dialog.font().pixelSize()
-    assert 6 <= dialog.capacity.font().pixelSize() <= round(13 * effective_scale(dialog, scale))
+    assert 6 <= dialog.capacity.font().pixelSize() <= round(14 * effective_scale(dialog, scale))
     assert dialog.screen().availableGeometry().contains(dialog.geometry())
     assert controller.settings.scale == scale
     dialog.close()
@@ -609,7 +581,7 @@ def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime
     window.msi_section.set_expanded(True)
     qapp.processEvents()
     image = window.grab().toImage()
-    for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.flow, QPoint(2, 2)), (window.msi_section.body, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
+    for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.msi_section.body, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
         position = widget.mapTo(window, point)
         assert image.pixelColor(position).alpha() == alpha, widget.objectName()
     assert image.pixelColor(0, 0).alpha() == 0
@@ -642,7 +614,7 @@ def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
         try:
             restarted.show()
             qapp.processEvents()
-            assert restarted.grab().toImage().pixelColor(4, restarted.height() // 2).alpha() == (140 if enabled else 255)
+            assert restarted.grab().toImage().pixelColor(4, restarted.height() // 2).alpha() == (209 if enabled else 255)
         finally:
             restarted._quitting = True
             restarted.close()
@@ -651,7 +623,7 @@ def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
         runtime.window.show()
         runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=True))
         qapp.processEvents()
-        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 140
+        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 209
     finally:
         dialog.deleteLater()
 
@@ -660,24 +632,24 @@ def test_background_transparency_draft_reset_save_and_cancel(runtime, qapp):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
         dialog.background_transparency.setValue(75)
-        assert runtime.controller.settings.background_opacity == 140 / 255
+        assert runtime.controller.settings.background_opacity == 0.82
         dialog.load_draft()
-        assert dialog.gather().background_opacity == 140 / 255
+        assert dialog.gather().background_opacity == 0.82
         dialog.transparency.setChecked(False)
-        assert not dialog.background_transparency.isEnabled()
+        assert dialog.background_transparency.isEnabled()
         dialog.transparency.setChecked(True)
         dialog.background_transparency.setValue(75)
         dialog.save()
-        assert runtime.controller.store.load().background_opacity == 0.25
+        assert runtime.controller.store.load().background_opacity == 0.75
         runtime.window.show()
         qapp.processEvents()
-        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 64
+        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 191
     finally:
         dialog.deleteLater()
     cancelled = SettingsWindow(runtime.controller, runtime.window)
     cancelled.background_transparency.setValue(10)
     cancelled.reject()
-    assert runtime.controller.store.load().background_opacity == 0.25
+    assert runtime.controller.store.load().background_opacity == 0.75
     cancelled.deleteLater()
 
 
@@ -717,7 +689,7 @@ def test_rapid_visibility_requests_and_transparency_changes_use_latest_request(r
     assert runtime.controller.store.load().monitor_visible is False
     window.request_visibility(True)
     qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 140
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 209
 
 
 @pytest.mark.parametrize("visible", [False, True])
@@ -733,7 +705,7 @@ def test_shutdown_prevents_later_window_show(runtime, visible):
     assert not window._layout_timer.isActive()
 
 
-@pytest.mark.parametrize("enabled,alpha", [(True, 140), (False, 255)])
+@pytest.mark.parametrize("enabled,alpha", [(True, 209), (False, 255)])
 def test_background_survives_repeated_show_and_native_handle_recreation(runtime, qapp, enabled, alpha):
     runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled))
     window = runtime.window

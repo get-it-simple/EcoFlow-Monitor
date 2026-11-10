@@ -68,16 +68,16 @@ def test_tray_menu_does_not_inherit_widget_scale_or_theme(runtime, qapp):
         assert menu.parentWidget() is None
         assert menu.font() == initial_font
         assert menu.sizeHint() == initial_size
-        assert menu.styleSheet() == ""
+        assert "#151B20" in menu.styleSheet() and "#74E3BD" in menu.styleSheet()
 
 
 @pytest.mark.parametrize("state,color", [
-    (ConnectionState.UNCONFIGURED, "#ffc16c"),
-    (ConnectionState.CONNECTING, "#ffc16c"),
-    (ConnectionState.LIVE, "#50e9a2"),
-    (ConnectionState.STALE, "#ff6060"),
-    (ConnectionState.DEVICE_OFFLINE, "#ff6060"),
-    (ConnectionState.AUTH_ERROR, "#ff6060"),
+    (ConnectionState.UNCONFIGURED, "#FFC884"),
+    (ConnectionState.CONNECTING, "#FFC884"),
+    (ConnectionState.LIVE, "#74E3BD"),
+    (ConnectionState.STALE, "#FF9B9B"),
+    (ConnectionState.DEVICE_OFFLINE, "#FF9B9B"),
+    (ConnectionState.AUTH_ERROR, "#FF9B9B"),
 ])
 def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state, color):
     controller = runtime.controller
@@ -86,7 +86,8 @@ def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state
     runtime.window.refresh()
     runtime.mini.refresh()
     for label in (runtime.window.status, runtime.mini.status):
-        assert label.text() == "●"
+        assert runtime.controller.connection.value != label.text()
+        assert label.text() and label.text() != "●"
         assert color in label.styleSheet()
         assert "\n" in label.toolTip()
         assert label.accessibleName() == label.toolTip()
@@ -152,7 +153,10 @@ def test_manager_replaces_bindings_delivers_both_event_types_and_reports_conflic
     manager.triggered.connect(received.append)
     bindings = (HotkeyBinding("toggle_monitor", "ctrl+alt+num5", True), HotkeyBinding("profile_1", "ctrl+num1", True), HotkeyBinding("toggle_mini", "ctrl+f1", True))
     try:
+        assert manager.configure(bindings[:1], {"toggle_monitor"}) == ()
+        previous = dict(registered)
         assert manager.configure(bindings, {"toggle_monitor", "toggle_mini"}) == ("toggle_mini",)
+        assert registered == previous
         assert len(registered) == 1
         assert next(iter(registered.values())) == (3 | 0x4000, 0x65)
         message = wintypes.MSG()
@@ -163,7 +167,7 @@ def test_manager_replaces_bindings_delivers_both_event_types_and_reports_conflic
         assert received == ["toggle_monitor", "toggle_monitor"]
         old_ids = set(registered)
         assert manager.configure(bindings[:2], {binding.action for binding in bindings[:2]}) == ()
-        assert len(registered) == 2 and not old_ids.intersection(registered)
+        assert len(registered) == 2 and old_ids.issubset(registered)
     finally:
         manager.stop()
     assert registered == {}
@@ -215,7 +219,9 @@ def test_rapid_scale_changes_settle_at_final_scale(runtime, qapp):
         runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale))
     qapp.processEvents()
     assert runtime.window._scale == 0.5
-    assert runtime.window.flow.minimumSize().width() == 210
+    assert runtime.window.minimumWidth() >= 180
+    for reading in runtime.window.flow.readings.values():
+        assert reading.width() >= reading.minimumSizeHint().width()
 
 
 @pytest.mark.parametrize("dock", ["", "left", "right", "top", "bottom"])

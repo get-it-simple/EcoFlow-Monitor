@@ -99,15 +99,16 @@ def test_mini_expansion_updates_values_and_resets_on_reopen(runtime, qapp):
     QTest.keyClick(mini.reveal_button, Qt.Key.Key_Space)
     qapp.processEvents()
     assert tuple(mini.labels) == ("battery_level", "output_power", "estimated_runtime")
-    assert mini._drag is None
+    assert mini.overlay.preferences.position_locked is False
     controller.telemetry = Telemetry(10, 240, 70, time.time(), time.monotonic())
     controller.connection = ConnectionState.LIVE
     controller.changed.emit()
-    assert mini.labels["output_power"].text() == "240 W"
+    assert mini.labels["output_power"].text() == "240 W"
     assert mini.labels["output_power"].isEnabled()
     controller.connection = ConnectionState.STALE
     controller.changed.emit()
-    assert not mini.labels["output_power"].isEnabled()
+    assert mini.labels["output_power"].isEnabled()
+    assert "Data is out of date" in mini.status.text()
     assert mini.reveal_button.isChecked()
     controller.update_preferences(mini_enabled=False)
     controller.update_preferences(mini_enabled=True)
@@ -186,7 +187,8 @@ def test_monitor_disclosure_retains_selection_and_resets_on_hide(runtime, qapp):
     assert window.msi_section.isHidden()
 
 
-def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp):
+def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp, monkeypatch):
+    monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
         dialog.show()
