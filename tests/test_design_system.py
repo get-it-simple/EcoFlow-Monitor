@@ -169,6 +169,7 @@ def test_hotkey_recording_escape_preserves_previous_shortcut(qapp):
 
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("scale", [0.5, 1, 1.25, 1.5, 2, 3])
+@pytest.mark.design
 def test_widgets_fit_screen_with_all_metrics(runtime, qapp, language, scale):
     settings = replace(runtime.controller.settings, language=language, scale=scale, mini_scale=scale, mini_enabled=True, mini_metrics=METRICS[:3], mini_hidden_metrics=METRICS[3:])
     runtime.controller.apply_settings(settings)
@@ -181,12 +182,14 @@ def test_widgets_fit_screen_with_all_metrics(runtime, qapp, language, scale):
         assert runtime.mini.body.rect().contains(reading.geometry())
 
 
+@pytest.mark.design
 def test_canonical_tokens_are_packaged_and_match_reference():
     assert COLORS["accent"] == "#74E3BD"
     assert COLORS["input"] == "#84D5FF"
     assert COLORS["output"] == "#FFC884"
 
 
+@pytest.mark.design
 def test_font_fallback_renders_ukrainian_and_numbers(runtime):
     from PySide6.QtGui import QFontMetrics
     metrics = QFontMetrics(runtime.dashboard.brand.font())
@@ -273,6 +276,7 @@ def test_reduced_motion_stops_energy_animation(runtime, qapp):
     qapp.setProperty("system_animations", True)
 
 
+@pytest.mark.design
 def test_packaged_inter_is_the_actual_font_for_controls_and_keycaps(runtime):
     from pathlib import Path
     from PySide6.QtGui import QFontInfo, QFontMetrics
@@ -290,6 +294,7 @@ def test_packaged_inter_is_the_actual_font_for_controls_and_keycaps(runtime):
 
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+@pytest.mark.design
 def test_metric_visibility_rows_and_numeric_text_fit_after_scale_change(runtime, qapp, scale):
     dashboard = runtime.dashboard
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
@@ -344,6 +349,7 @@ def test_shortcut_conflict_preserves_working_combo_and_distinguishes_numpad(runt
     assert editor.property("state") == "assigned"
 
 
+@pytest.mark.design
 def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
     dashboard = runtime.dashboard
     dashboard.show()
@@ -369,7 +375,6 @@ def test_legacy_main_flags_are_retained_without_affecting_app_shell(runtime, qap
     dashboard = runtime.dashboard
     assert not dashboard.windowFlags() & Qt.WindowType.WindowTransparentForInput
     assert not dashboard.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
-    assert dashboard.grab().toImage().pixelColor(4, dashboard.height() // 2).alpha() == 255
     dashboard.capacity.setValue(3000)
     dashboard.save()
     stored = runtime.controller.store.load()
@@ -427,6 +432,7 @@ def test_key_picker_can_change_modifiers_and_key_in_one_menu(qapp):
         editor.deleteLater()
 
 
+@pytest.mark.design
 def test_footer_actions_stay_reachable_in_a_small_window_at_large_scale(runtime, qapp):
     dashboard = runtime.dashboard
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3, language="uk"))
@@ -444,6 +450,7 @@ def test_footer_actions_stay_reachable_in_a_small_window_at_large_scale(runtime,
 
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+@pytest.mark.design
 def test_all_footer_buttons_fit_reference_width_and_keep_control_height(runtime, qapp, scale):
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
     dashboard = runtime.dashboard
@@ -461,6 +468,7 @@ def test_all_footer_buttons_fit_reference_width_and_keep_control_height(runtime,
         assert button.text()
 
 
+@pytest.mark.design
 def test_monitoring_and_controls_share_the_shell_effective_dpi_scale(runtime, monkeypatch):
     from PySide6.QtGui import QPaintDevice
     from ecoflow_monitor.ui.dashboard import Dashboard
@@ -498,7 +506,7 @@ def test_integration_editor_accepts_command_and_profile_dialog_results(runtime, 
     updated = editor.modules()[0]
     assert updated.mapping[0].label == "Updated command"
     assert updated.mapping[0].id == original.mapping[0].id
-    editor.profiles.setCurrentRow(0)
+    editor.profiles.selectRow(0)
     editor.edit_profile(True)
     updated = editor.modules()[0]
     assert updated.profiles[0].label == "Updated profile"

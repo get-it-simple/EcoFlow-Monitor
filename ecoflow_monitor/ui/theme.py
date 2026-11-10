@@ -48,6 +48,7 @@ QLabel#hint, QLabel#secondary {{ color: {c['muted']}; }}
 QLabel#page_title {{ font-size: {px(26)}px; font-weight: 600; }}
 QLabel#section_title {{ font-size: {px(20)}px; font-weight: 600; }}
 QLabel#form_error {{ color: {c['danger']}; }}
+QLabel#warning {{ color: {c['output']}; font-size: {px(12)}px; }}
 QLabel#hint, QLabel#secondary {{ font-size: {px(12)}px; }}
 QLabel#brand, QLabel#row_title {{ font-size: {px(16)}px; font-weight: 600; }}
 QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
@@ -72,6 +73,7 @@ QPushButton#primary:hover {{ background: {c['accentHover']}; }}
 QPushButton#primary:pressed {{ background: {c['accentPressed']}; }}
 QPushButton#primary:disabled {{ background: {c['raised']}; color: {c['subtle']}; border-color: {c['border']}; }}
 QPushButton#danger {{ color: {c['danger']}; background: {c['dangerSurface']}; }}
+QPushButton[token_chip="true"] {{ color: {c['input']}; font-size: {px(12)}px; padding: {px(4)}px {px(16)}px; }}
 QTabWidget::pane {{ border: none; background: transparent; }}
 QTabBar::tab {{ background: transparent; color: {c['muted']}; padding: {px(12)}px {px(24)}px; border-radius: {px(10)}px; }}
 QTabBar::tab:selected {{ background: {c['raised']}; color: {c['text']}; }}
@@ -86,8 +88,12 @@ QGroupBox::title {{ subcontrol-origin: margin; left: {px(16)}px; color: {c['text
 QComboBox QAbstractItemView {{ background: {c['raised']}; color: {c['text']}; selection-background-color: {c['successSurface']}; selection-color: {c['text']}; }}
 QListWidget, QTableWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ padding: {px(12)}px; }}
-QTableWidget::item:selected, QListWidget::item:selected {{ background: {c['successSurface']}; color: {c['text']}; }}
+QTableWidget::item:selected {{ background: {c['successSurface']}; }}
+QListWidget::item:selected {{ background: {c['successSurface']}; color: {c['text']}; }}
 QTableWidget {{ alternate-background-color: {c['surface']}; }}
+QTableWidget::item {{ padding: {px(8)}px {px(16)}px; }}
+QToolButton#danger {{ color: {c['danger']}; background: {c['dangerSurface']}; }}
+QLabel#code, QPlainTextEdit[code="true"] {{ color: {c['input']}; }}
 QCheckBox {{ spacing: {px(8)}px; min-height: {px(28)}px; }}
 QCheckBox::indicator {{ width: {px(18)}px; height: {px(18)}px; background: {c['raised']}; border: 1px solid {c['border']}; border-radius: {px(4)}px; }}
 QCheckBox::indicator:checked {{ background: {c['accent']}; border-color: {c['accent']}; image: url({check}); }}

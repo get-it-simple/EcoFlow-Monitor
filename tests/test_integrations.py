@@ -17,6 +17,7 @@ from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, IntegrationRule, Reaction, afterburner_example, template_tokens
 from ecoflow_monitor.settings import AppSettings, SettingsStore
 from ecoflow_monitor.ui.integrations import IntegrationsEditor, ProfileDialog
+from ecoflow_monitor.ui.integration_creation import IntegrationCreationDialog
 from ecoflow_monitor.ui.settings_window import SettingsWindow
 
 
@@ -292,7 +293,11 @@ def test_editor_add_delete_restore_and_duplicate(qapp, monkeypatch):
     try:
         editor.remove()
         assert editor.modules() == ()
-        editor.restore()
+        creation = IntegrationCreationDialog(editor.modules(), editor)
+        creation.use_example()
+        creation.save()
+        editor.add_module(creation.module)
+        creation.deleteLater()
         assert editor.modules()[0] == afterburner_example()
         with pytest.raises(ValueError):
             editor.add_module(afterburner_example())
@@ -385,7 +390,7 @@ def test_editor_referenced_items_cannot_be_removed(qapp, monkeypatch):
         editor.mapping.selectRow(0)
         editor.remove_mapping()
         assert len(messages) == 1 and editor.mapping.rowCount() == 2
-        editor.profiles.setCurrentRow(0)
+        editor.profiles.selectRow(0)
         editor.remove_profile()
         assert len(messages) == 2 and len(editor.modules()[0].profiles) == 2
     finally:
@@ -394,6 +399,7 @@ def test_editor_referenced_items_cannot_be_removed(qapp, monkeypatch):
 
 @pytest.mark.parametrize("table_name", ["mapping", "application_rules", "system_rules"])
 @pytest.mark.parametrize("styled", [False, True])
+@pytest.mark.design
 def test_table_headers_keep_their_appearance_when_rows_are_selected(qapp, table_name, styled):
     from ecoflow_monitor.ui.theme import settings_style
 
@@ -442,28 +448,37 @@ def test_table_headers_keep_their_appearance_when_rows_are_selected(qapp, table_
 
 
 def test_import_export_and_rejected_import_preserve_modules(tmp_path, qapp, monkeypatch):
-    monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
+    monkeypatch.setattr("ecoflow_monitor.ui.integration_creation.confirm", lambda *args: True)
     module = module_example(auto_enabled=True)
     source = tmp_path / "import.json"
     destination = tmp_path / "export.json"
     source.write_text(json.dumps(module.to_dict()), encoding="utf-8")
     monkeypatch.setattr("ecoflow_monitor.ui.integrations.QFileDialog.getOpenFileName", lambda *args: (str(source), ""))
     monkeypatch.setattr("ecoflow_monitor.ui.integrations.QFileDialog.getSaveFileName", lambda *args: (str(destination), ""))
-    messages = []
-    monkeypatch.setattr("ecoflow_monitor.ui.integrations.QMessageBox.warning", lambda *args: messages.append(args))
     editor = IntegrationsEditor()
     editor.load(())
+
+    def import_module():
+        creation = IntegrationCreationDialog(editor.modules(), editor)
+        creation.import_module()
+        error = creation.error.text()
+        if not error:
+            creation.save()
+            editor.add_module(creation.module)
+        creation.deleteLater()
+        return error
+
     try:
-        editor.import_module()
+        assert not import_module()
         imported = editor.modules()[0]
         assert not imported.enabled and not imported.auto_enabled
         editor.export_module()
         assert IntegrationDefinition.from_dict(json.loads(destination.read_text(encoding="utf-8"))) == imported
-        editor.import_module()
-        assert len(editor.modules()) == 1 and len(messages) == 1
+        assert import_module()
+        assert len(editor.modules()) == 1
         source.write_text('{"version":999}', encoding="utf-8")
-        editor.import_module()
-        assert editor.modules() == (imported,) and len(messages) == 2
+        assert import_module()
+        assert editor.modules() == (imported,)
     finally:
         editor.deleteLater()
 

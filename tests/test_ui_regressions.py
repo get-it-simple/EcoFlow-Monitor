@@ -216,6 +216,7 @@ def test_command_double_click_has_no_inline_editor_after_dialog(runtime, qapp, m
 
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+@pytest.mark.design
 def test_key_picker_is_bounded_searchable_and_keyboard_accessible(runtime, qapp, scale):
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
     editor = runtime.dashboard.hotkey_rows["toggle_monitor"][1]
@@ -276,6 +277,7 @@ def test_key_picker_escape_keeps_previous_combo(qapp):
 
 @pytest.mark.parametrize("application", [False, True])
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+@pytest.mark.design
 def test_rule_charge_fields_show_synchronized_slider_and_number(runtime, qapp, application, scale):
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
     runtime.open_dashboard(3)
@@ -283,11 +285,11 @@ def test_rule_charge_fields_show_synchronized_slider_and_number(runtime, qapp, a
     editor.body.setCurrentIndex(3)
     rules = editor.application_rules if application else editor.system_rules
     from ecoflow_monitor.integrations import IntegrationRule
-    rules.append(IntegrationRule("synthetic", rules.profiles[0].id, executable="example.exe" if application else ""))
+    from ecoflow_monitor.ui.rules import RuleDialog
+    dialog = RuleDialog(rules.profiles, rules.conditions, application, IntegrationRule("synthetic", rules.profiles[0].id, executable="example.exe" if application else ""), runtime.dashboard)
+    dialog.show()
     qapp.processEvents()
-    column = 3 if application else 2
-    for index, value in enumerate((20, 90)):
-        field = rules.table.cellWidget(rules.table.rowCount() - 1, column + index)
+    for field, value in ((dialog.minimum, 20), (dialog.maximum, 90)):
         assert field.slider.isVisible()
         assert field.rect().contains(field.slider.geometry())
         assert field.rect().contains(field.spin.geometry())
@@ -304,10 +306,13 @@ def test_rule_charge_fields_show_synchronized_slider_and_number(runtime, qapp, a
         assert not field.spin.isEnabled() and not field.slider.isEnabled()
         field.toggle.setChecked(True)
         assert field.value() == value + 1
+    dialog.close()
+    dialog.deleteLater()
 
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 @pytest.mark.parametrize("integration_warning", [False, True])
+@pytest.mark.design
 def test_dashboard_minimum_fits_work_area_and_monitoring_has_no_horizontal_clip(runtime, qapp, scale, integration_warning):
     module = replace(runtime.controller.settings.integrations[0], enabled=integration_warning)
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk", integrations=(module,)))
@@ -328,6 +333,7 @@ def test_dashboard_minimum_fits_work_area_and_monitoring_has_no_horizontal_clip(
         assert dashboard.monitoring.notifications.isVisible()
 
 
+@pytest.mark.design
 def test_saved_small_dashboard_geometry_is_raised_to_new_minimum(tmp_path, qapp):
     from ecoflow_monitor.settings import AppSettings, SettingsStore
     path = tmp_path / "settings.json"
@@ -343,6 +349,7 @@ def test_saved_small_dashboard_geometry_is_raised_to_new_minimum(tmp_path, qapp)
 
 
 @pytest.mark.parametrize("opacity", [0, 0.82, 1])
+@pytest.mark.design
 def test_mini_tooltip_and_menu_do_not_inherit_button_size(runtime, qapp, opacity):
     runtime.controller.update_preferences(mini_enabled=True, mini_transparency=1 - opacity)
     button = runtime.mini.overlay.menu_button

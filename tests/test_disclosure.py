@@ -137,6 +137,7 @@ def test_metric_reordering_keeps_modes_and_group_order(runtime, qapp):
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("dock", ["", "left", "right", "top", "bottom"])
 @pytest.mark.parametrize("hidden_only", [False, True])
+@pytest.mark.design
 def test_mini_groups_fit_work_area_in_both_states(runtime, qapp, language, dock, hidden_only):
     mini = runtime.mini
     for scale in (0.5, 1, 3):
@@ -186,6 +187,15 @@ def test_monitor_disclosure_retains_selection_and_resets_on_hide(runtime, qapp):
 
 def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp, monkeypatch):
     monkeypatch.setattr("ecoflow_monitor.ui.integrations.confirm", lambda *args: True)
+    from ecoflow_monitor.ui.integration_creation import IntegrationCreationDialog
+
+    def create(dialog):
+        dialog.label.setText("New integration")
+        dialog.save()
+        return dialog.result()
+
+    from PySide6.QtWidgets import QDialog
+    monkeypatch.setattr(IntegrationCreationDialog, QDialog.exec.__name__, create)
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
         dialog.show()

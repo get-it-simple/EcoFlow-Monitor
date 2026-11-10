@@ -82,6 +82,7 @@ def test_display_drafts_reset_save_cancel_and_merge(runtime):
 
 @pytest.mark.parametrize("size", [(640, 620), (900, 700), (320, 310)])
 @pytest.mark.parametrize("fresh", [True, False])
+@pytest.mark.design
 def test_hidden_metric_text_and_hover_use_paint_transform(runtime, qapp, size, fresh):
     controller = runtime.controller
     controller.telemetry = Telemetry(120, 80, 65, time.time(), time.monotonic())
@@ -181,9 +182,10 @@ def test_settings_rebuilds_never_show_temporary_top_level_widgets(runtime, qapp)
         assert not observer.windows
         dialog.show()
         dialog.tabs.setCurrentIndex(1)
-        dialog.integrations_editor.add()
+        from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationRule
+        dialog.integrations_editor.add_module(IntegrationDefinition("synthetic", "Synthetic"))
         dialog.integrations_editor.enabled.setChecked(True)
-        dialog.integrations_editor.system_rules.add_rule()
+        dialog.integrations_editor.system_rules.append(IntegrationRule("synthetic", "profile_1"))
         dialog.integrations_editor.select(0)
         dialog.hotkey_sections[module.id].set_expanded(True)
         dialog._refresh_hotkeys()
@@ -198,6 +200,7 @@ def test_settings_rebuilds_never_show_temporary_top_level_widgets(runtime, qapp)
             dialog.deleteLater()
 
 
+@pytest.mark.design
 def test_scrollbars_grow_without_changing_viewport_and_drag_normally(runtime, qapp):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:

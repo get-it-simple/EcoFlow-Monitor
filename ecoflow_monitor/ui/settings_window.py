@@ -56,11 +56,12 @@ class SettingsWindow(QDialog):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs)
         self._build_connection()
-        integrations = self._tab(t("integrations"))
+        integrations = self._tab(t("integrations"), show_title=False)
         self.integrations_section = CollapsibleSection(t("integrations"))
         integrations.addWidget(self.integrations_section)
         self.integrations_editor = IntegrationsEditor(self.integrations_section.body)
         self.integrations_section.content.addWidget(self.integrations_editor)
+        self.integrations_section.content.setContentsMargins(0, 0, 0, 0)
         self.integrations_section.header.hide()
         self.integrations_section.set_expanded(True)
         self._build_appearance()
@@ -95,7 +96,7 @@ class SettingsWindow(QDialog):
         controller.runtime_preferences_changed.connect(self.sync_runtime_preferences)
         install_scrollbars(self)
 
-    def _tab(self, title: str):
+    def _tab(self, title: str, show_title=True):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -105,9 +106,10 @@ class SettingsWindow(QDialog):
         scroll.setWidget(body)
         layout.setContentsMargins(32, 24, 32, 24)
         layout.setSpacing(24)
-        heading = QLabel(title, body)
-        heading.setObjectName("page_title")
-        layout.addWidget(heading)
+        if show_title:
+            heading = QLabel(title, body)
+            heading.setObjectName("page_title")
+            layout.addWidget(heading)
         self.tabs.addTab(scroll, title)
         return layout
 

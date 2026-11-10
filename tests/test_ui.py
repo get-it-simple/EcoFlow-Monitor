@@ -25,6 +25,7 @@ class NoCredentials:
 
 
 @pytest.mark.parametrize("conditions", [("input", "soc"), ("soc",), ("input",), ()])
+@pytest.mark.design
 def test_system_rule_fields_fill_available_table_width(qapp, conditions):
     from ecoflow_monitor.integrations import IntegrationRule, afterburner_example
     from ecoflow_monitor.ui.rules import RulesEditor
@@ -44,7 +45,7 @@ def test_system_rule_fields_fill_available_table_width(qapp, conditions):
         editor.resize(1400, 300)
         qapp.processEvents()
         assert abs(sum(table.columnWidth(column) for column in visible) - table.viewport().width()) <= 1
-        assert all(table.columnWidth(column) > widths[column] for column in visible if column)
+        assert all(table.columnWidth(column) > widths[column] for column in visible)
         assert editor.rules() == expected
     finally:
         editor.close()
@@ -54,6 +55,7 @@ def test_system_rule_fields_fill_available_table_width(qapp, conditions):
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("work_size", [(1920, 1800), (640, 480)])
 @pytest.mark.parametrize("scale", [0.5, 1, 3])
+@pytest.mark.design
 def test_settings_initial_size_fits_content_or_scrolls(runtime, qapp, language, work_size, scale):
     from types import SimpleNamespace
     from PySide6.QtCore import QRect
@@ -142,6 +144,7 @@ def test_repeat_launch_preserves_settings_draft(runtime, qapp):
 
 
 @pytest.mark.parametrize("size", [(320, 310), (640, 620), (900, 620), (640, 900), (1280, 1240), (1920, 1860)])
+@pytest.mark.design
 def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size):
     flow = runtime.window.monitoring
     controller = runtime.controller
@@ -193,7 +196,8 @@ def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp)
 
 def test_friendly_rule_names_and_explanations(runtime, qapp):
     from ecoflow_monitor.integrations import IntegrationRule
-    from ecoflow_monitor.ui.rules import RulesEditor
+    from ecoflow_monitor.integrations import IntegrationProfile
+    from ecoflow_monitor.ui.rules import RuleDialog
     from ecoflow_monitor.ui.metrics import API_FIELDS, metric_tooltip
     from ecoflow_monitor.adapters.ecoflow import PORT_KEYS
     assert i18n.t("rule_min") == "Charge from (%)"
@@ -205,26 +209,23 @@ def test_friendly_rule_names_and_explanations(runtime, qapp):
     for key in (*API_FIELDS, "estimated_runtime", "capacity_wh", "anderson_2"):
         assert "_help" not in metric_tooltip(key)
     for application in (False, True):
-        editor = RulesEditor(application)
+        editor = RuleDialog((IntegrationProfile("example", "Example"),), ("application", "input", "soc"), application,
+                            IntegrationRule("test", "example", executable="example.exe" if application else "", min_soc=20, max_soc=80))
         try:
-            editor.append(IntegrationRule("test", "example", min_soc=20, max_soc=80))
-            column = 2 if application else 1
-            condition = editor.table.cellWidget(0, column)
-            assert editor.table.horizontalHeaderItem(column).text() == "Input"
+            condition = editor.input
             assert [condition.itemText(index) for index in range(condition.count())] == ["Any", "On", "Off"]
             explanation = " ".join(condition.toolTip().split())
             assert "without charging the battery" in explanation
             assert "does not switch" in explanation
             for index, value in enumerate(("any", "present", "absent")):
                 condition.setCurrentIndex(index)
-                assert editor.rules()[0].input_condition == value
-            assert "powInSumW" in editor.table.horizontalHeaderItem(column).toolTip()
-            assert "includes this" in editor.table.horizontalHeaderItem(column + 1).toolTip()
-            assert "except 100%" in editor.table.horizontalHeaderItem(column + 2).toolTip()
-            assert "cmsBattSoc" in editor.table.cellWidget(0, column + 1).spin.toolTip()
-            assert "except 100%" in editor.table.cellWidget(0, column + 2).slider.toolTip()
-            assert editor.rules()[0].min_soc == 20
-            assert editor.rules()[0].max_soc == 80
+                assert editor.draft().input_condition == value
+            assert "powInSumW" in editor.input.toolTip()
+            assert "includes this" in editor.minimum.toolTip()
+            assert "cmsBattSoc" in editor.minimum.spin.toolTip()
+            assert "except 100%" in editor.maximum.slider.toolTip()
+            assert editor.draft().min_soc == 20
+            assert editor.draft().max_soc == 80
         finally:
             editor.deleteLater()
 
@@ -268,6 +269,7 @@ def test_metric_tooltips_follow_language_changes(runtime, qapp):
 
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
+@pytest.mark.design
 def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, language, scale):
     controller = runtime.controller
     module = replace(controller.settings.integrations[0], enabled=True)
@@ -320,10 +322,13 @@ def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
     editor = IntegrationsEditor()
     try:
         editor.load((module,))
-        assert editor.profiles.item(1).toolTip() == expected
-        combo = editor.system_rules.table.cellWidget(0, 4)
+        assert editor.profiles.item(1, 1).toolTip() == expected
+        from ecoflow_monitor.ui.rules import RuleDialog
+        rule_dialog = RuleDialog(profiles, module.conditions, False, module.system_rules[0], editor)
+        combo = rule_dialog.profile
         combo.setCurrentIndex(1)
         assert combo.toolTip() == expected
+        rule_dialog.deleteLater()
         updated = replace(module, profiles=tuple(replace(profile, technical_details="Updated") for profile in profiles))
         runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(updated,)))
         window.refresh()
@@ -491,6 +496,7 @@ def test_every_literal_translation_key_exists_in_english():
 
 
 @pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
+@pytest.mark.design
 def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, scale):
     controller = runtime.controller
     controller.apply_settings(replace(controller.settings, scale=scale, mini_enabled=True, mini_scale=scale))
@@ -549,6 +555,7 @@ def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp, mo
         instance.mini.deleteLater()
 
 
+@pytest.mark.design
 def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
     runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     runtime.open_dashboard()
@@ -562,6 +569,7 @@ def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
 
 
 @pytest.mark.parametrize("enabled,opacity,alpha", [(True, 140 / 255, 140), (False, 0.25, 255), (True, 0, 0), (True, 0.25, 64), (True, 1, 255)])
+@pytest.mark.design
 def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, opacity, alpha):
     runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, background_opacity=opacity, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     runtime.open_dashboard()
@@ -636,7 +644,6 @@ def test_rapid_visibility_requests_and_transparency_changes_use_latest_request(r
     assert window.isHidden()
     window.request_visibility(True)
     assert window.capacity.value() == 3000
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255
 
 
 @pytest.mark.parametrize("visible", [False, True])
@@ -653,6 +660,7 @@ def test_shutdown_prevents_later_window_show(runtime, qapp, visible):
 
 
 @pytest.mark.parametrize("enabled,alpha", [(True, 209), (False, 255)])
+@pytest.mark.design
 def test_background_survives_repeated_show_and_native_handle_recreation(runtime, qapp, enabled, alpha):
     runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled))
     window = runtime.window

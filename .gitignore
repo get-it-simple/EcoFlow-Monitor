@@ -17,6 +17,8 @@ venv/
 !.run/Build EXE.run.xml
 !.run/Tests (pytest).run.xml
 !.run/Tests (serial).run.xml
+!.run/Tests (design).run.xml
+!.run/Tests (integrations).run.xml
 /docs/
 settings.json
 settings.json.bak

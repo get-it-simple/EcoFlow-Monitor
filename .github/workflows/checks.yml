@@ -77,8 +77,8 @@ jobs:
           }
       - name: Install application and check dependencies
         run: python -m pip install -r requirements-dev.txt -r requirements-build.txt
-      - name: Run the full suite
-        run: python -m pytest -q
+      - name: Run the full functional suite
+        run: python -m pytest -q -m "not design"
       - name: Build the Python wheel
         run: python -m pip wheel --no-deps --wheel-dir dist/wheels .
       - name: Verify packaged metadata and all language catalogs

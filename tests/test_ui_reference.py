@@ -31,6 +31,7 @@ def runtime(tmp_path, qapp):
 
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("msi", [False, True])
+@pytest.mark.design
 def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, language, msi):
     controller = runtime.controller
     window = runtime.dashboard
@@ -49,6 +50,7 @@ def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, langu
         assert window.monitoring.msi_section.isHidden() is (not msi)
 
 
+@pytest.mark.design
 def test_tray_menu_does_not_inherit_widget_scale_or_theme(runtime, qapp):
     menu = runtime.menu
     menu.ensurePolished()
@@ -80,10 +82,20 @@ def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state
     for label in (runtime.window.monitoring.status, runtime.mini.status):
         assert runtime.controller.connection.value != label.text()
         assert label.text() and label.text() != "●"
-        assert color in label.styleSheet()
         assert "\n" in label.toolTip()
         assert label.accessibleName() == label.toolTip()
     assert runtime.window.monitoring.isAncestorOf(runtime.window.monitoring.status)
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("state,color", [(ConnectionState.LIVE, "#74E3BD"), (ConnectionState.STALE, "#FFC884"), (ConnectionState.AUTH_ERROR, "#FF9B9B")])
+def test_status_colors_follow_semantic_roles(runtime, state, color):
+    runtime.controller.telemetry = Telemetry(0, 100, 80, time.time(), time.monotonic())
+    runtime.controller.connection = state
+    runtime.window.refresh()
+    runtime.mini.refresh()
+    assert color in runtime.window.monitoring.status.styleSheet()
+    assert color in runtime.mini.status.styleSheet()
 
 
 def test_hotkey_editor_keeps_reference_capture_selection_and_clear(qapp):
@@ -175,6 +187,7 @@ def test_geometry_preference_updates_do_not_reload_global_hotkeys(runtime, monke
     assert len(calls) == 2
 
 
+@pytest.mark.design
 def test_screen_and_dpi_changes_restore_desired_scale_without_clipping(runtime, qapp):
     window = runtime.dashboard
     runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3))
@@ -203,6 +216,7 @@ def test_rapid_scale_changes_settle_at_final_scale(runtime, qapp):
 
 
 @pytest.mark.parametrize("dock", ["", "left", "right", "top", "bottom"])
+@pytest.mark.design
 def test_all_mini_metrics_fit_work_area_and_small_scale_labels(runtime, qapp, dock):
     from ecoflow_monitor.settings import METRICS
     for scale in (0.5, 3, 1):

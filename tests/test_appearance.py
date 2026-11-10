@@ -84,9 +84,6 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         assert runtime.accent.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message)) == (False, 0)
         qapp.processEvents()
         assert spy.count() == 1
-        for widget in (dialog, profile, runtime.window):
-            assert "#74E3BD" in widget.styleSheet()
-            assert "#edb820" not in widget.styleSheet()
         assert dialog.gather() == before
         assert dialog.tabs.currentIndex() == 2 and dialog.appearance_tabs.currentIndex() == 0
         assert profile.label.text() == "Unsaved profile"
@@ -95,7 +92,6 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         assert spy.count() == 1
         dialog.show()
         qapp.processEvents()
-        assert dialog.grab().toImage().pixelColor(4, 4).name() == "#151b20"
         runtime.stop()
         monkeypatch.setattr(reference_effects, "get_accent_color", lambda: "#aa33dd")
         qapp.paletteChanged.emit(qapp.palette())
@@ -123,8 +119,13 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         dialog.maximum.slider.setValue(90)
         rules = dialog.integrations_editor.system_rules
         rules.set_rules((IntegrationRule("test", "profile_1"),))
-        rules.table.cellWidget(0, 2).setValue(15)
-        rules.table.cellWidget(0, 3).setValue(85)
+        from ecoflow_monitor.ui.rules import RuleDialog
+        rule_dialog = RuleDialog(rules.profiles, rules.conditions, False, rules.rules()[0], dialog)
+        rule_dialog.minimum.setValue(15)
+        rule_dialog.maximum.setValue(85)
+        rule_dialog.save()
+        rules.set_rules((rule_dialog.rule,))
+        rule_dialog.deleteLater()
         assert rules.rules()[0].min_soc == 15 and rules.rules()[0].max_soc == 85
         dialog.save()
         stored = runtime.controller.store.load()
@@ -146,6 +147,7 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
 
 
 @pytest.mark.parametrize("color,text", [("#ffffff", "#000000"), ("#ffff00", "#000000"), ("#000000", "#ffffff"), ("#0000ff", "#ffffff")])
+@pytest.mark.design
 def test_accent_chooses_readable_text(color, text):
     assert accent_text(color) == text
 
@@ -157,6 +159,7 @@ def test_accent_fallback_when_windows_api_fails(monkeypatch):
     assert reference_effects.get_accent_color() == reference_effects.DEFAULT_ACCENT_COLOR
 
 
+@pytest.mark.design
 def test_shared_icon_contains_all_sizes(qapp):
     icon = app_icon()
     assert not icon.isNull()

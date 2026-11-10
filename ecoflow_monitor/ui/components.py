@@ -1,8 +1,8 @@
 from typing import cast
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
-from PySide6.QtWidgets import QAbstractSpinBox, QBoxLayout, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QMenu, QMessageBox, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPalette, QPen
+from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QBoxLayout, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit, QListWidget, QMenu, QMessageBox, QPlainTextEdit, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle, QTableWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import ActionButton, status_color, status_text, status_tooltip
@@ -43,6 +43,19 @@ class NumberField(QDoubleSpinBox):
     def showEvent(self, event):
         super().showEvent(event)
         self._layout_text()
+
+
+class TextArea(QPlainTextEdit):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setProperty("wide_field", "long")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self):
+        return QSize(320, round(88 * max(0.5, self.font().pixelSize() / 14)))
+
+    def minimumSizeHint(self):
+        return QSize(0, self.sizeHint().height())
 
 
 class SelectField(QComboBox):
@@ -111,14 +124,87 @@ class ActionLayout(QBoxLayout):
         super().setGeometry(rect)
 
 
+class ContentTabs(QTabWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self.updateGeometry)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def sizeHint(self):
+        if self.currentWidget() is None:
+            return super().sizeHint()
+        size = self.currentWidget().sizeHint()
+        size.setHeight(size.height() + self.tabBar().sizeHint().height())
+        return size
+
+    def minimumSizeHint(self):
+        if self.currentWidget() is None:
+            return super().minimumSizeHint()
+        size = self.currentWidget().minimumSizeHint()
+        size.setHeight(size.height() + self.tabBar().sizeHint().height())
+        size.setWidth(0)
+        return size
+
+
+class TableDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        foreground = index.data(Qt.ItemDataRole.ForegroundRole)
+        if not isinstance(foreground, QBrush):
+            foreground = option.palette.brush(QPalette.ColorRole.Text)
+        option.palette.setBrush(QPalette.ColorRole.HighlightedText, foreground)
+
+
+class DataTable(QTableWidget):
+    def __init__(self, weights, parent=None):
+        super().__init__(0, len(weights), parent)
+        self.weights = weights
+        self.setItemDelegate(TableDelegate(self))
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setShowGrid(False)
+        self.verticalHeader().hide()
+        self.horizontalHeader().setHighlightSections(False)
+        self.verticalHeader().setHighlightSections(False)
+        self.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+
+    def fit_columns(self):
+        scale = max(0.5, self.font().pixelSize() / 14)
+        self.verticalHeader().setDefaultSectionSize(round(48 * scale))
+        visible = [index for index in range(self.columnCount()) if not self.isColumnHidden(index)]
+        total = sum(self.weights[index] for index in visible)
+        width = self.viewport().width()
+        used = 0
+        for index in visible:
+            column_width = int(width * self.weights[index] / total) if index != visible[-1] else width - used
+            column_width = max(round(44 * scale), self.horizontalHeader().sectionSizeHint(index), column_width)
+            self.setColumnWidth(index, column_width)
+            used += column_width
+        row_limit = self.property("row_limit")
+        if row_limit:
+            height = self.horizontalHeader().height() + self.frameWidth() * 2 + round(48 * scale) * max(1, min(self.rowCount(), row_limit))
+            self.setFixedHeight(height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_columns()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_columns()
+
+
 class SettingRow(QWidget):
     def __init__(self, label, control, parent=None):
         super().__init__(parent)
         self.row = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
         self.row.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.row.setContentsMargins(0, 0, 0, 0)
-        self.label = QLabel(label, self)
-        self.label.setWordWrap(True)
+        self.label = QLabel(label, self) if isinstance(label, str) else label
+        if isinstance(self.label, QLabel):
+            self.label.setWordWrap(True)
         self.row.addWidget(self.label, 1)
         if isinstance(control, QLayout):
             self.control = QWidget(self)
@@ -130,7 +216,8 @@ class SettingRow(QWidget):
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
-        self.label.setBuddy(self.control)
+        if isinstance(self.label, QLabel):
+            self.label.setBuddy(self.control)
 
     def minimumSizeHint(self):
         return QSize(0, self.heightForWidth(max(1, self.width())))
@@ -141,35 +228,53 @@ class SettingRow(QWidget):
     def heightForWidth(self, width):
         scale = max(0.5, self.font().pixelSize() / 14)
         control_height = max(self.control.sizeHint().height(), self.control.minimumSizeHint().height())
-        if width < GEOMETRY["form_breakpoint"] * scale:
+        if self.stacked(width, scale):
             return max(self.label.minimumSizeHint().height(), self.label.sizeHint().height(), self.label.heightForWidth(max(1, width))) + round(8 * scale) + control_height
-        field_width = GEOMETRY["range_width"] if self.control.property("wide_field") else GEOMETRY["field_width"]
+        field_width = self.control_width()
         return max(control_height, self.label.heightForWidth(max(1, round(width - (field_width + 24) * scale))))
+
+    def control_width(self):
+        width = self.control.property("wide_field")
+        return GEOMETRY["long_field_width"] if width == "long" else GEOMETRY["range_width"] if width else GEOMETRY["field_width"]
+
+    def stacked(self, width, scale):
+        return width < max(GEOMETRY["form_breakpoint"], self.control_width() + 184) * scale
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.arrange()
+
+    def arrange(self):
         scale = self.font().pixelSize() / 14 if self.font().pixelSize() > 0 else 1
-        vertical = self.width() < GEOMETRY["form_breakpoint"] * scale
+        vertical = self.stacked(self.width(), scale)
         self.row.setDirection(QBoxLayout.Direction.TopToBottom if vertical else QBoxLayout.Direction.LeftToRight)
         self.row.setSpacing(round((8 if vertical else 24) * scale))
-        width = GEOMETRY["range_width"] if self.control.property("wide_field") else GEOMETRY["field_width"]
+        width = self.control_width()
         self.control.setMaximumWidth(16777215 if vertical else round(width * scale))
         self.control.setMinimumWidth(0 if vertical else round(width * scale))
         if isinstance(self.control, Switch):
             self.control.setMinimumWidth(0)
             self.row.setAlignment(self.control, Qt.AlignmentFlag.AlignLeft if vertical else Qt.AlignmentFlag.AlignRight)
+        self.row.invalidate()
+        self.row.setGeometry(self.rect())
         self.updateGeometry()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange and hasattr(self, "control"):
+            self.arrange()
 
 
 class FormLayout(QFormLayout):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.labels = {}
+        self.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         self.setContentsMargins(0, 0, 0, 0)
         self.setVerticalSpacing(16)
 
     def addRow(self, *args):
-        if len(args) == 2 and isinstance(args[0], str):
+        if len(args) == 2 and isinstance(args[0], (str, QCheckBox)):
             row = SettingRow(*args)
             self.labels[args[1]] = row.label
             super().addRow(row)
@@ -181,11 +286,12 @@ class FormLayout(QFormLayout):
 
 
 class ActionFooter(QScrollArea):
-    def __init__(self, actions, parent=None):
+    def __init__(self, actions, parent=None, leading_action=True):
         super().__init__(parent)
         self.setObjectName("settings_footer")
         self.body = QWidget(self)
         self.buttons = []
+        self.leading_action = leading_action
         while actions.count():
             item = actions.takeAt(0)
             button = item.widget()
@@ -228,9 +334,11 @@ class ActionFooter(QScrollArea):
                 height = y - gap + round(24 * scale)
             else:
                 height = max(size.height() for size in preferred)
-                self.buttons[0].setGeometry(margin, y, preferred[0].width(), height)
-                x = width - margin - sum(size.width() for size in preferred[1:]) - gap * max(0, len(preferred) - 2)
-                for button, size in zip(self.buttons[1:], preferred[1:]):
+                start = int(self.leading_action)
+                if self.leading_action:
+                    self.buttons[0].setGeometry(margin, y, preferred[0].width(), height)
+                x = width - margin - sum(size.width() for size in preferred[start:]) - gap * max(0, len(preferred) - start - 1)
+                for button, size in zip(self.buttons[start:], preferred[start:]):
                     button.setGeometry(x, y, size.width(), height)
                     x += size.width() + gap
                 height += y + round(24 * scale)
@@ -371,6 +479,10 @@ class DesignDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._framed = False
+        self.footer = None
+
+    def set_footer(self, actions):
+        self.footer = ActionFooter(actions, self, leading_action=False)
 
     def showEvent(self, event):
         if not self._framed:
@@ -388,15 +500,21 @@ class DesignDialog(QDialog):
             content.setSpacing(0)
             self.titlebar = TitleBar(self)
             self.titlebar.title.setText(self.windowTitle())
+            self.titlebar.title.setObjectName("page_title")
             content.addWidget(self.titlebar)
             scroll = QScrollArea(frame)
             scroll.setWidgetResizable(True)
             scroll.setWidget(body)
+            self.content_scroll = scroll
             content.addWidget(scroll, 1)
+            if self.footer is not None:
+                content.addWidget(self.footer)
             parent = self.parentWidget()
             scale = max(0.5, parent.font().pixelSize() / 14) if parent is not None else 1
             self.setStyleSheet(settings_style(scale=scale) + f"QDialog#settings_dialog {{ background: transparent; }} QFrame#dialog_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 20px; }}")
             self.resize((self.size() * scale).boundedTo(self.screen().availableGeometry().size()))
+            if self.footer is not None:
+                self.footer.configure(scale)
             self._focus_binding = FocusBinding(self)
             from ecoflow_monitor.ui.scrollbar import install_scrollbars
             install_scrollbars(self)
