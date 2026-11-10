@@ -6,6 +6,7 @@ TOKENS = json.loads((Path(__file__).parent / "assets" / "design-tokens.json").re
 COLORS = {name: token["$value"] for name, token in TOKENS["color"].items()}
 SPACE = TOKENS["space"]
 RADIUS = TOKENS["radius"]
+GEOMETRY = {"field_width": 320, "range_width": 536, "form_breakpoint": 620, "sidebar": 216, "header": 60, "control": 40, "field": 44}
 
 
 def surface(opacity: float, role: str = "surface") -> str:

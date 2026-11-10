@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import time
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, Qt
 from PySide6.QtTest import QTest
 import pytest
 
@@ -17,7 +17,6 @@ from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.ui.common import metric_text, status_tooltip
 from ecoflow_monitor.ui.common import effective_scale
 from ecoflow_monitor.ui.settings_window import SettingsWindow
-from ecoflow_monitor.ui import window as window_module
 
 
 class NoCredentials:
@@ -84,7 +83,7 @@ def test_settings_initial_size_fits_content_or_scrolls(runtime, qapp, language, 
                     assert dialog.frameGeometry().height() >= area.height() - 2
                     page.verticalScrollBar().setValue(page.verticalScrollBar().maximum())
                     assert page.verticalScrollBar().value() == page.verticalScrollBar().maximum()
-                assert page.horizontalScrollBar().maximum() == 0
+                assert page.horizontalScrollBar().maximum() == 0, (index, page.widget().minimumSizeHint(), page.viewport().size())
         else:
             assert scroller.verticalScrollBar().maximum() > 0
             scroller.verticalScrollBar().setValue(scroller.verticalScrollBar().maximum())
@@ -109,8 +108,8 @@ def runtime(tmp_path, qapp):
 
 
 def test_initial_view_hides_msi_and_displays_unknown_data(runtime):
-    assert runtime.window.msi_section.isHidden()
-    assert all("—" in readout.display_text() for readout in runtime.window.limits.readouts)
+    assert runtime.window.monitoring.msi_section.isHidden()
+    assert all("—" in readout.display_text() for readout in runtime.window.monitoring.limits.readouts)
     assert metric_text(runtime.controller, "input_power") == "—"
     assert "No successful update" in status_tooltip(runtime.controller)
 
@@ -125,7 +124,7 @@ def test_repeat_launch_restores_monitor(runtime, qapp, state):
     qapp.processEvents()
     assert runtime.dashboard.isVisible()
     assert not runtime.dashboard.isMinimized()
-    assert runtime.controller.settings.monitor_visible is (state != "hidden")
+    assert runtime.controller.settings.monitor_visible is True
 
 
 def test_repeat_launch_preserves_settings_draft(runtime, qapp):
@@ -144,7 +143,7 @@ def test_repeat_launch_preserves_settings_draft(runtime, qapp):
 
 @pytest.mark.parametrize("size", [(320, 310), (640, 620), (900, 620), (640, 900), (1280, 1240), (1920, 1860)])
 def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size):
-    flow = runtime.window.flow
+    flow = runtime.window.monitoring
     controller = runtime.controller
     controller.telemetry = Telemetry(0, 100, 75, time.time(), time.monotonic(), 20, 90)
     controller.connection = ConnectionState.STALE
@@ -157,7 +156,7 @@ def test_flow_metric_hover_follows_paint_scale_and_offsets(runtime, qapp, size):
         reading = flow.readings[key]
         assert field in reading.toolTip()
         assert reading.value.accessibleName() == reading.accessibleName()
-        assert flow.rect().contains(reading.geometry())
+        assert reading.parentWidget().rect().contains(reading.geometry())
     assert "calculated by this app" in flow.readings["estimated_runtime"].toolTip()
 
 
@@ -169,9 +168,8 @@ def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp)
     dialog = SettingsWindow(controller, runtime.window)
     try:
         def tips():
-            item = next(dialog.metrics.item(index) for index in range(dialog.metrics.count())
-                        if dialog.metrics.item(index).data(Qt.ItemDataRole.UserRole) == "minimum_discharge_level")
-            return runtime.window.limits.toolTip(), runtime.mini.labels["minimum_discharge_level"].parentWidget().toolTip(), item.toolTip()
+            item = dialog.metrics.rows["minimum_discharge_level"]
+            return runtime.window.monitoring.limits.toolTip(), runtime.mini.labels["minimum_discharge_level"].parentWidget().toolTip(), item.toolTip()
         for tooltip in tips():
             assert "Source: Manual. Value: 10 %" in tooltip
             assert "do not change the station" in tooltip
@@ -258,65 +256,51 @@ def test_metric_tooltips_follow_language_changes(runtime, qapp):
     from ecoflow_monitor.ui.metrics import metric_tooltip
     controller = runtime.controller
     english = metric_tooltip("input_power")
-    assert runtime.window.flow.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
+    assert runtime.window.monitoring.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
     controller.apply_settings(replace(controller.settings, language="uk"))
     translated = metric_tooltip("input_power")
     assert translated != english and "powInSumW" in translated
     assert runtime.mini.labels["input_power"].parentWidget().toolTip() == translated + "\n" + i18n.t("missing_data")
-    assert runtime.window.flow.readings["input_power"].toolTip() == translated + "\n" + i18n.t("missing_data")
+    assert runtime.window.monitoring.readings["input_power"].toolTip() == translated + "\n" + i18n.t("missing_data")
     controller.apply_settings(replace(controller.settings, language="en"))
-    assert runtime.window.flow.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
+    assert runtime.window.monitoring.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
 
 
 @pytest.mark.parametrize("language", ["en", "uk"])
 @pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
 def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, language, scale):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLabel
     controller = runtime.controller
     module = replace(controller.settings.integrations[0], enabled=True)
     controller.apply_settings(replace(controller.settings, language=language, scale=scale, integrations=(module,)))
-    dialog = SettingsWindow(controller, runtime.window)
-    try:
-        dialog.show()
-        dialog.tabs.setCurrentIndex(2)
-        qapp.processEvents()
-        for index, section in enumerate(dialog.appearance_sections.values()):
-            assert section.body.isHidden() == (index != 0)
-            if index:
-                QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
-        qapp.processEvents()
-        sections = list(dialog.appearance_sections.values())
-        for above, below in zip(sections, sections[1:]):
+    dialog = runtime.dashboard
+    dialog.show()
+    dialog.navigation.setCurrentRow(2)
+    dialog.appearance_tabs.setCurrentIndex(1)
+    qapp.processEvents()
+    rows = list(dialog.metrics.rows.values())
+    for row in rows:
+        assert row.height() >= row.mode.height()
+        assert row.field.rect().contains(row.mode.geometry())
+    for mode in ("always", "expanded", "off"):
+        visible = [dialog.metrics.rows[key] for key in dialog.metrics.group(mode)]
+        for above, below in zip(visible, visible[1:]):
             assert above.geometry().bottom() < below.geometry().top()
-        scroller = dialog.tabs.currentWidget()
-        assert scroller.widget().height() >= scroller.widget().minimumSizeHint().height()
-        dialog.scale.setValue(125)
-        sections[0].set_expanded(False)
-        sections[0].set_expanded(True)
-        assert dialog.scale.value() == 125
-        dialog.tabs.setCurrentIndex(3)
-        section = dialog.hotkey_sections[module.id]
-        assert section.body.isHidden()
-        QTest.mouseClick(section.header, Qt.MouseButton.LeftButton)
-        qapp.processEvents()
-        fields = [field for name, (field, _, _) in dialog.hotkey_rows.items() if ":" in name]
-        for above, below in zip(fields, fields[1:]):
-            assert above.geometry().bottom() < below.geometry().top()
-        for field in fields:
-            label = field.findChild(QLabel)
-            assert label.height() >= label.heightForWidth(label.width())
-        name = "profile:afterburner:profile_3"
-        dialog.hotkey_rows[name][1].set_combo("ctrl+shift+num3")
-        section.set_expanded(False)
-        dialog._refresh_hotkeys()
-        assert dialog.hotkey_sections[module.id].body.isHidden()
-        assert dialog.hotkey_rows[name][1].combo() == "ctrl+shift+num3"
-        dialog.load_draft()
-        assert dialog.gather().scale == scale
-    finally:
-        dialog.reject()
-        dialog.deleteLater()
+    dialog.scale.setValue(125)
+    dialog.navigation.setCurrentRow(4)
+    section = dialog.hotkey_sections[module.id]
+    section.set_expanded(True)
+    qapp.processEvents()
+    fields = [field for name, (field, _, _) in dialog.hotkey_rows.items() if ":" in name]
+    for above, below in zip(fields, fields[1:]):
+        assert above.geometry().bottom() < below.geometry().top()
+    name = "profile:afterburner:profile_3"
+    dialog.hotkey_rows[name][1].set_combo("ctrl+shift+num3")
+    section.set_expanded(False)
+    dialog._refresh_hotkeys()
+    assert dialog.hotkey_sections[module.id].body.isHidden()
+    assert dialog.hotkey_rows[name][1].combo() == "ctrl+shift+num3"
+    dialog.load_draft()
+    assert dialog.gather().scale == scale
 
 
 def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
@@ -329,10 +313,10 @@ def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
     runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(module,)))
     window = runtime.window
     window.refresh()
-    window.profile_choice.setCurrentIndex(1)
+    window.monitoring.profile_choice.setCurrentIndex(1)
     expected = profiles[1].label + "\n" + profiles[1].technical_details
-    assert window.profile_choice.toolTip() == expected
-    assert window.profile_choice.itemData(1, Qt.ItemDataRole.ToolTipRole) == expected
+    assert window.monitoring.profile_choice.toolTip() == expected
+    assert window.monitoring.profile_choice.itemData(1, Qt.ItemDataRole.ToolTipRole) == expected
     editor = IntegrationsEditor()
     try:
         editor.load((module,))
@@ -343,7 +327,7 @@ def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
         updated = replace(module, profiles=tuple(replace(profile, technical_details="Updated") for profile in profiles))
         runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(updated,)))
         window.refresh()
-        assert window.profile_choice.toolTip() == profiles[1].label + "\nUpdated"
+        assert window.monitoring.profile_choice.toolTip() == profiles[1].label + "\nUpdated"
     finally:
         editor.deleteLater()
 
@@ -436,7 +420,7 @@ def test_msi_enable_reveals_only_draft_controls_until_save(runtime):
     assert runtime.controller.module("afterburner").enabled is False
     dialog.save()
     assert runtime.controller.module("afterburner").enabled is True
-    assert not runtime.window.msi_section.isHidden()
+    assert not runtime.window.monitoring.msi_section.isHidden()
     dialog.deleteLater()
 
 
@@ -446,7 +430,7 @@ def test_mini_metric_selection_and_live_language_change(runtime, qapp):
     assert tuple(runtime.mini.labels) == ("output_power", "battery_level")
     assert runtime.mini.isVisible()
     assert i18n.get_current_language() == "uk"
-    assert runtime.window.settings_button.toolTip() != "Settings"
+    assert runtime.dashboard.navigation.item(1).text() == i18n.t("connection_settings")
 
 
 def test_flow_animation_stops_when_hidden_or_stale(runtime, qapp):
@@ -456,15 +440,15 @@ def test_flow_animation_stops_when_hidden_or_stale(runtime, qapp):
     runtime.window.show()
     runtime.window.refresh()
     qapp.processEvents()
-    assert runtime.window.flow._timer.isActive()
+    assert runtime.window.monitoring.balance._timer.isActive()
     controller.connection = ConnectionState.STALE
     runtime.window.refresh()
-    assert not runtime.window.flow._timer.isActive()
+    assert not runtime.window.monitoring.balance._timer.isActive()
     assert metric_text(controller, "estimated_runtime") == "—"
     controller.connection = ConnectionState.LIVE
     runtime.window.refresh()
     runtime.window.hide()
-    assert not runtime.window.flow._timer.isActive()
+    assert not runtime.window.monitoring.balance._timer.isActive()
 
 
 def test_requested_profile_is_not_shown_as_confirmed(runtime):
@@ -473,8 +457,8 @@ def test_requested_profile_is_not_shown_as_confirmed(runtime):
     controller.integration_states["afterburner"].observation = IntegrationObservation("integration_ready")
     controller.integration_states["afterburner"].requested_profile = "profile_3"
     runtime.window.refresh()
-    assert "Requested profile: Profile 3" in runtime.window.notifications.toolTip()
-    assert "Current profile" not in runtime.window.notifications.toolTip()
+    assert "Requested profile: Profile 3" in runtime.window.monitoring.notifications.toolTip()
+    assert "Current profile" not in runtime.window.monitoring.notifications.toolTip()
 
 
 @pytest.mark.parametrize("result,expected", [
@@ -490,10 +474,10 @@ def test_cli_result_is_shown_without_claiming_observed_gpu_state(runtime, result
     state.requested_profile = "profile_5"
     state.result = result
     runtime.window.refresh()
-    text = runtime.window.notifications.toolTip()
+    text = runtime.window.monitoring.notifications.toolTip()
     assert expected in text and "Requested profile: Profile 5" in text
     assert "Current profile" not in text and "unknown" not in text
-    assert not runtime.window.notifications.isHidden()
+    assert not runtime.window.monitoring.notifications.isHidden()
 
 
 def test_every_literal_translation_key_exists_in_english():
@@ -514,7 +498,7 @@ def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, 
     qapp.processEvents()
     actual = runtime.window._scale
     assert actual <= effective_scale(runtime.window, scale)
-    assert runtime.window.title.font().pixelSize() == round(14 * actual)
+    assert runtime.window.titlebar.title.font().pixelSize() == round(16 * actual)
     assert runtime.mini.status.height() >= runtime.mini.status.fontMetrics().height()
     dialog = SettingsWindow(controller, runtime.window)
     dialog.show()
@@ -550,7 +534,7 @@ def test_zooming_past_screen_then_back_preserves_logical_geometry(runtime, qapp)
 def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp):
     store = SettingsStore(tmp_path / "scaled.json")
     from ecoflow_monitor.settings import AppSettings
-    store.save(replace(AppSettings(), scale=1.5, monitor_geometry=(0, 0, 700, 800)))
+    store.save(replace(AppSettings(), scale=1.5, dashboard_geometry=(0, 0, 700, 800)))
     controller = Controller(store, NoCredentials())
     instance = Application(store.path, native=False, controller=controller)
     try:
@@ -564,145 +548,105 @@ def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp):
 
 def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
     runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
-    runtime.window.show()
+    runtime.open_dashboard()
+    page = runtime.dashboard.monitoring
+    page.msi_section.set_expanded(True)
     qapp.processEvents()
-    scroller = runtime.window.profile_scroll
-    assert scroller.viewport().height() >= scroller.widget().minimumSizeHint().height()
-    assert runtime.window.auto_toggle.text() == i18n.t("automatic_mode")
+    assert page.integration_selector.isVisible()
+    assert page.auto_toggle.accessibleName() == i18n.t("automatic_mode")
+    assert page.profile_choice.height() >= page.profile_choice.minimumSizeHint().height()
+    assert page.apply_profile.height() >= page.apply_profile.minimumSizeHint().height()
 
 
 @pytest.mark.parametrize("enabled,opacity,alpha", [(True, 140 / 255, 140), (False, 0.25, 255), (True, 0, 0), (True, 0.25, 64), (True, 1, 255)])
 def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, opacity, alpha):
     runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, background_opacity=opacity, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
-    window = runtime.window
-    window.show()
-    qapp.processEvents()
-    assert window.windowOpacity() == 1
-    window.msi_section.set_expanded(True)
+    runtime.open_dashboard()
+    window = runtime.dashboard
+    window.monitoring.msi_section.set_expanded(True)
     qapp.processEvents()
     image = window.grab().toImage()
-    for widget, point in ((window.shell, QPoint(4, window.shell.height() // 2)), (window.msi_section.body, QPoint(2, 2)), (window.profile_scroll.widget(), QPoint(2, 2))):
-        position = widget.mapTo(window, point)
-        assert image.pixelColor(position).alpha() == alpha, widget.objectName()
-    assert image.pixelColor(0, 0).alpha() == 0
-    title = window.title.grab().toImage()
-    assert max(title.pixelColor(x, y).alpha() for x in range(title.width()) for y in range(title.height())) == 255
-    dialog = SettingsWindow(runtime.controller, window)
-    try:
-        dialog.show()
-        qapp.processEvents()
-        assert dialog.grab().toImage().pixelColor(4, 4).alpha() == 255
-    finally:
-        dialog.reject()
-        dialog.deleteLater()
+    assert window.windowOpacity() == 1
+    assert image.pixelColor(4, window.height() // 2).alpha() == 255
+    assert not window.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    assert runtime.controller.settings.background_opacity == opacity
 
 
 @pytest.mark.parametrize("enabled", [False, True])
 def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
-    dialog = SettingsWindow(runtime.controller, runtime.window)
+    dialog = runtime.dashboard
+    baseline = runtime.controller.settings
+    dialog.materials["mini"].setCurrentIndex(1 if enabled else 0)
+    assert runtime.controller.settings == baseline
+    dialog.load_draft()
+    assert dialog.gather().mini_transparency == baseline.mini_transparency
+    dialog.materials["mini"].setCurrentIndex(1 if enabled else 0)
+    dialog.save()
+    stored = runtime.controller.store.load()
+    assert stored.mini_transparency == pytest.approx(0.18 if enabled else 0)
+    assert stored.background_opacity == baseline.background_opacity
+    restarted = Controller(runtime.controller.store, NoCredentials())
     try:
-        assert dialog.transparency.text() == "Transparent background"
-        dialog.transparency.setChecked(not enabled)
-        assert runtime.controller.settings.transparency is True
-        dialog.load_draft()
-        assert dialog.transparency.isChecked()
-        dialog.transparency.setChecked(enabled)
-        dialog.save()
-        assert runtime.controller.store.load().transparency is enabled
-        restarted_controller = Controller(runtime.controller.store, NoCredentials())
-        restarted = window_module.MonitorWindow(restarted_controller, lambda: None)
-        try:
-            restarted.show()
-            qapp.processEvents()
-            assert restarted.grab().toImage().pixelColor(4, restarted.height() // 2).alpha() == (209 if enabled else 255)
-        finally:
-            restarted._quitting = True
-            restarted.close()
-            restarted_controller.stop()
-            restarted.deleteLater()
-        runtime.window.show()
-        runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=True))
-        qapp.processEvents()
-        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 209
+        assert restarted.settings.mini_transparency == stored.mini_transparency
+        assert restarted.settings.main_overlay == baseline.main_overlay
     finally:
-        dialog.deleteLater()
+        restarted.stop()
 
 
 def test_background_transparency_draft_reset_save_and_cancel(runtime, qapp):
-    dialog = SettingsWindow(runtime.controller, runtime.window)
-    try:
-        dialog.background_transparency.setValue(75)
-        assert runtime.controller.settings.background_opacity == 0.82
-        dialog.load_draft()
-        assert dialog.gather().background_opacity == 0.82
-        dialog.transparency.setChecked(False)
-        assert dialog.background_transparency.isEnabled()
-        dialog.transparency.setChecked(True)
-        dialog.background_transparency.setValue(75)
-        dialog.save()
-        assert runtime.controller.store.load().background_opacity == 0.75
-        runtime.window.show()
-        qapp.processEvents()
-        assert runtime.window.grab().toImage().pixelColor(4, runtime.window.height() // 2).alpha() == 191
-    finally:
-        dialog.deleteLater()
-    cancelled = SettingsWindow(runtime.controller, runtime.window)
-    cancelled.background_transparency.setValue(10)
-    cancelled.reject()
-    assert runtime.controller.store.load().background_opacity == 0.75
-    cancelled.deleteLater()
+    dialog = runtime.dashboard
+    baseline = runtime.controller.settings
+    dialog.mini_alpha.setValue(75)
+    dialog._draft_changed()
+    assert runtime.controller.settings == baseline
+    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.25)
+    dialog.load_draft()
+    assert runtime.controller.preview is None
+    dialog.mini_alpha.setValue(75)
+    dialog.save()
+    stored = runtime.controller.store.load()
+    assert stored.mini_transparency == pytest.approx(0.25)
+    assert stored.background_opacity == baseline.background_opacity
+    dialog.mini_alpha.setValue(10)
+    dialog.reject()
+    assert runtime.controller.store.load() == stored
 
 
 @pytest.mark.parametrize("visible", [False, True])
 def test_startup_preserves_visibility_without_temporary_show(runtime, visible):
-    events = []
-
-    class VisibilityTracker(QObject):
-        def eventFilter(self, watched, event):
-            if event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
-                events.append(event.type())
-            return False
-
-    tracker = VisibilityTracker()
-    runtime.window.installEventFilter(tracker)
-    runtime.window._desired_visible = visible
-    runtime.window.startup()
-    assert events == ([QEvent.Type.Show] if visible else [])
-    assert runtime.window.isVisible() == visible
-    for _ in range(3):
-        runtime.window.request_visibility(True)
-        assert runtime.window.isVisible()
-        runtime.window.request_visibility(False)
-        assert not runtime.window.isVisible()
+    runtime.controller.update_preferences(monitor_visible=visible)
+    runtime.start()
+    assert runtime.dashboard.isVisible()
+    assert runtime.dashboard is runtime.window
+    assert not any(widget.objectName() == "monitor_window" for widget in runtime.app.topLevelWidgets())
+    assert runtime.controller.settings.monitor_visible is visible
 
 
 def test_rapid_visibility_requests_and_transparency_changes_use_latest_request(runtime, qapp):
-    window = runtime.window
-    window.startup()
+    window = runtime.dashboard
+    window.capacity.setValue(3000)
     for enabled in (False, True, False, True):
         runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled))
         window.request_visibility(True)
-        assert window.isVisible()
         window.request_visibility(False)
     qapp.processEvents()
     assert window.isHidden()
-    assert runtime.controller.store.load().monitor_visible is False
     window.request_visibility(True)
-    qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 209
+    assert window.capacity.value() == 3000
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255
 
 
 @pytest.mark.parametrize("visible", [False, True])
-def test_shutdown_prevents_later_window_show(runtime, visible):
-    window = runtime.window
-    window._desired_visible = visible
-    window.startup()
+def test_shutdown_prevents_later_window_show(runtime, qapp, visible):
+    window = runtime.dashboard
+    window.request_visibility(visible)
     runtime.stop()
     window.startup()
     window.request_visibility(True)
-    QTest.qWait(250)
+    qapp.processEvents()
     assert window.isHidden()
-    assert not window._layout_timer.isActive()
+    assert not window._geometry_timer.isActive()
+    assert not window.monitoring.balance._timer.isActive()
 
 
 @pytest.mark.parametrize("enabled,alpha", [(True, 209), (False, 255)])
@@ -711,9 +655,9 @@ def test_background_survives_repeated_show_and_native_handle_recreation(runtime,
     window = runtime.window
     window.show()
     qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == alpha
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255
     window.hide()
     window.destroy()
     window.show()
     qapp.processEvents()
-    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == alpha
+    assert window.grab().toImage().pixelColor(4, window.height() // 2).alpha() == 255

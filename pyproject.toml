@@ -28,5 +28,5 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "ecoflow_monitor.i18n" = ["*/strings.json"]
-"ecoflow_monitor.ui" = ["assets/*.svg", "assets/*.ico", "assets/*.json"]
+"ecoflow_monitor.ui" = ["assets/*.svg", "assets/*.ico", "assets/*.json", "assets/fonts/*.ttf", "assets/fonts/*.txt"]
 "ecoflow_monitor.integration_examples" = ["*.json"]

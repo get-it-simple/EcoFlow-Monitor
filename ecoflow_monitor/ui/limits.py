@@ -6,7 +6,6 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import number
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.tokens import COLORS
-from ecoflow_monitor.ui.typography import draw_outlined
 
 
 class LimitReadout(QLabel):
@@ -37,10 +36,6 @@ class LimitReadout(QLabel):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        settings = self.controller.ui_settings
-        if settings.transparency and settings.background_opacity == 0:
-            draw_outlined(painter, self.display_text(), self.font(), self.contentsRect(), self.palette().windowText(), True)
-            return
         painter.setPen(self.palette().windowText().color())
         painter.drawText(self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap, self.display_text())
 

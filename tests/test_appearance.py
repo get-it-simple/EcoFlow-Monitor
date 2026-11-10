@@ -71,8 +71,7 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
     profile = ProfileDialog(module, module.profiles[0], dialog)
     try:
         dialog.tabs.setCurrentIndex(2)
-        section = dialog.appearance_sections["appearance_general"]
-        section.set_expanded(True)
+        dialog.appearance_tabs.setCurrentIndex(0)
         dialog.scale.slider.setValue(175)
         editor = dialog.hotkey_rows["toggle_monitor"][1]
         editor.set_combo("ctrl+f12")
@@ -85,11 +84,11 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         assert runtime.accent.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message)) == (False, 0)
         qapp.processEvents()
         assert spy.count() == 1
-        for widget in (dialog, profile, runtime.window, runtime.window.auto_toggle, editor._select_boxes[0]):
+        for widget in (dialog, profile, runtime.window):
             assert "#74E3BD" in widget.styleSheet()
             assert "#edb820" not in widget.styleSheet()
         assert dialog.gather() == before
-        assert dialog.tabs.currentIndex() == 2 and section.header.isChecked()
+        assert dialog.tabs.currentIndex() == 2 and dialog.appearance_tabs.currentIndex() == 0
         assert profile.label.text() == "Unsaved profile"
         assert editor.combo() == "ctrl+f12"
         runtime.accent.refresh()
@@ -118,7 +117,6 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         dialog.scale.slider.setValue(150)
         dialog.mini_scale.slider.setValue(125)
         dialog.mini_alpha.slider.setValue(35)
-        dialog.background_transparency.slider.setValue(75)
         dialog.minimum.toggle.setChecked(True)
         dialog.minimum.slider.setValue(10)
         dialog.maximum.toggle.setChecked(True)
@@ -130,7 +128,7 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         assert rules.rules()[0].min_soc == 15 and rules.rules()[0].max_soc == 85
         dialog.save()
         stored = runtime.controller.store.load()
-        assert (stored.scale, stored.mini_scale, stored.mini_transparency, stored.background_opacity) == (1.5, 1.25, 0.65, 0.75)
+        assert (stored.scale, stored.mini_scale, stored.mini_transparency, stored.background_opacity) == (1.5, 1.25, 0.65, 0.82)
         assert (stored.manual_min, stored.manual_max) == (10, 90)
         dialog.scale.slider.setValue(250)
         dialog.load_draft()

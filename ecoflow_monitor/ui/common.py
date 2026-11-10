@@ -2,9 +2,9 @@ from datetime import datetime
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer
+from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QSizePolicy, QStyle, QStyleOptionButton, QStylePainter, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.domain import ConnectionState
@@ -69,8 +69,10 @@ def status_tooltip(controller) -> str:
 def status_color(controller) -> str:
     if controller.fresh:
         return COLORS["accent"]
-    if controller.connection in {ConnectionState.UNCONFIGURED, ConnectionState.CONNECTING}:
+    if controller.connection in {ConnectionState.STALE, ConnectionState.CONNECTING}:
         return COLORS["output"]
+    if controller.connection in {ConnectionState.UNCONFIGURED, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+        return COLORS["muted"]
     return COLORS["danger"]
 
 
@@ -95,8 +97,36 @@ def hint(text: str) -> QLabel:
     return label
 
 
+class ActionButton(QPushButton):
+    def enable_wrapping(self):
+        self.setProperty("wrap_label", True)
+
+    def wrapped_height(self, width):
+        if not self.property("wrap_label") or width >= self.sizeHint().width():
+            return self.sizeHint().height()
+        scale = max(0.5, self.font().pixelSize() / 14)
+        rect = self.rect()
+        rect.setWidth(max(1, round(width - 40 * scale)))
+        rect.setHeight(10000)
+        text = self.fontMetrics().boundingRect(rect, Qt.TextFlag.TextWordWrap, self.text())
+        return max(self.sizeHint().height(), text.height() + round(18 * scale))
+
+    def paintEvent(self, event):
+        if not self.property("wrap_label") or self.width() >= self.sizeHint().width():
+            super().paintEvent(event)
+            return
+        painter = QStylePainter(self)
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ""
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        scale = max(0.5, self.font().pixelSize() / 14)
+        painter.setPen(self.palette().buttonText().color())
+        painter.drawText(self.rect().adjusted(round(20 * scale), 0, -round(20 * scale), 0), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.text())
+
+
 def action(text: str, callback, parent=None) -> QPushButton:
-    button = QPushButton(text, parent)
+    button = ActionButton(text, parent)
     button.clicked.connect(callback)
     return button
 
@@ -131,6 +161,8 @@ class DragHeader(ValueLabel):
 
 def font_family():
     family = TOKENS["type"]["fontFamily"]
+    if not QFontDatabase.hasFamily(family):
+        QFontDatabase.addApplicationFont(str(Path(__file__).parent / "assets" / "fonts" / "Inter.ttf"))
     if QFontDatabase.hasFamily(family):
         return family
     if not QFontDatabase.hasFamily("Segoe UI"):
@@ -146,8 +178,8 @@ def font_family():
 def scaled_font(window: QWidget, scale: float) -> None:
     font = QFont(font_family())
     font.setPixelSize(round(14 * scale))
+    font.setFeature(QFont.Tag("tnum"), 1)
     window.setFont(font)
-    window.setStyleSheet(f"QWidget {{ font-size: {round(14 * scale)}px; }} QCheckBox::indicator {{ width: {round(20 * scale)}px; height: {round(20 * scale)}px; }}")
 
 
 class ScreenTracker(QObject):

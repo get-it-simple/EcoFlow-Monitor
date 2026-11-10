@@ -17,7 +17,6 @@ from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.settings import HotkeyBinding
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
 from ecoflow_monitor.ui.settings_window import SettingsWindow
-from ecoflow_monitor.ui.window import MonitorWindow
 
 
 @pytest.fixture
@@ -34,27 +33,20 @@ def runtime(tmp_path, qapp):
 @pytest.mark.parametrize("msi", [False, True])
 def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, language, msi):
     controller = runtime.controller
-    window = runtime.window
+    window = runtime.dashboard
     controller.apply_settings(replace(controller.settings, language=language, integrations=(replace(controller.settings.integrations[0], enabled=msi),)))
     window.show()
-    window.msi_section.set_expanded(msi)
     for scale in (0.5, 1, 2, 3, 0.5, 3, 1):
         controller.apply_settings(replace(controller.settings, scale=scale))
-        qapp.processEvents()
-        window.resize(window.minimumSize())
+        window.resize(640, 480)
         qapp.processEvents()
         assert window.screen().availableGeometry().contains(window.geometry())
-        assert window.flow.width() >= window.flow.minimumWidth()
-        assert window.flow.height() >= window.flow.minimumHeight()
-        assert window.rect().contains(window.flow.geometry().translated(window.shell.pos()))
-        assert window.status.isVisible()
-        for scroller in window.findChildren(QScrollArea):
-            assert not scroller.verticalScrollBar().isVisible()
-            assert not scroller.horizontalScrollBar().isVisible()
-            if scroller.isVisible():
-                assert scroller.viewport().height() >= scroller.widget().minimumSizeHint().height()
-                assert scroller.viewport().width() >= scroller.widget().minimumSizeHint().width()
         assert controller.settings.scale == scale
+        assert window.monitoring.readings["battery_level"].value.font().pixelSize() == round(36 * scale)
+        page = window.tabs.widget(0)
+        assert page.widget().height() >= page.widget().minimumSizeHint().height()
+        page.verticalScrollBar().setValue(page.verticalScrollBar().maximum())
+        assert window.monitoring.msi_section.isHidden() is (not msi)
 
 
 def test_tray_menu_does_not_inherit_widget_scale_or_theme(runtime, qapp):
@@ -72,11 +64,11 @@ def test_tray_menu_does_not_inherit_widget_scale_or_theme(runtime, qapp):
 
 
 @pytest.mark.parametrize("state,color", [
-    (ConnectionState.UNCONFIGURED, "#FFC884"),
+    (ConnectionState.UNCONFIGURED, "#A8B7C2"),
     (ConnectionState.CONNECTING, "#FFC884"),
     (ConnectionState.LIVE, "#74E3BD"),
-    (ConnectionState.STALE, "#FF9B9B"),
-    (ConnectionState.DEVICE_OFFLINE, "#FF9B9B"),
+    (ConnectionState.STALE, "#FFC884"),
+    (ConnectionState.DEVICE_OFFLINE, "#A8B7C2"),
     (ConnectionState.AUTH_ERROR, "#FF9B9B"),
 ])
 def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state, color):
@@ -85,24 +77,23 @@ def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state
     controller.connection = state
     runtime.window.refresh()
     runtime.mini.refresh()
-    for label in (runtime.window.status, runtime.mini.status):
+    for label in (runtime.window.monitoring.status, runtime.mini.status):
         assert runtime.controller.connection.value != label.text()
         assert label.text() and label.text() != "●"
         assert color in label.styleSheet()
         assert "\n" in label.toolTip()
         assert label.accessibleName() == label.toolTip()
-    assert runtime.window.status.parentWidget() is runtime.window.flow
+    assert runtime.window.monitoring.status.parentWidget() is runtime.window.monitoring
 
 
 def test_hotkey_editor_keeps_reference_capture_selection_and_clear(qapp):
     editor = HotkeyComboEditor("ctrl+alt+num5")
     try:
-        assert editor.combo() == "ctrl+alt+num5"
+        editor.start_recording()
         event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_7, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.KeypadModifier, "7")
         editor.keyPressEvent(event)
         assert editor.combo() == "ctrl+num7"
-        key_box = editor._select_boxes[-1]
-        key_box.setCurrentIndex(key_box.findData("f24"))
+        editor.assign("ctrl+f24")
         assert editor.combo() == "ctrl+f24"
         QTest.keyClick(editor, Qt.Key.Key_Backspace)
         assert editor.combo() == ""
@@ -185,33 +176,20 @@ def test_geometry_preference_updates_do_not_reload_global_hotkeys(runtime, monke
 
 
 def test_screen_and_dpi_changes_restore_desired_scale_without_clipping(runtime, qapp):
-    area = QRect(0, 0, 640, 480)
-    ratio = 2.0
-    class ScreenConstrainedMonitor(MonitorWindow):
-        def screen(self):
-            return SimpleNamespace(availableGeometry=lambda: area)
-
-        def devicePixelRatioF(self):
-            return ratio
-
-    window = ScreenConstrainedMonitor(runtime.controller, lambda: None)
-    try:
-        runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
-        qapp.processEvents()
-        assert window.width() <= 640 and window.height() <= 480
-        assert window._scale <= 1.5
-        assert runtime.controller.settings.scale == 3
-        small_scale = window._scale
-        area = QRect(0, 0, 7680, 4320)
-        ratio = 1.0
-        window.apply_appearance()
-        assert window._scale == 3 and window._scale > small_scale
-        assert window.flow.width() >= window.flow.minimumWidth()
-        assert window.flow.height() >= window.flow.minimumHeight()
-    finally:
-        window._quitting = True
-        window.close()
-        window.deleteLater()
+    window = runtime.dashboard
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3))
+    window.resize(640, 480)
+    window.show()
+    qapp.processEvents()
+    assert window.width() <= window.screen().availableGeometry().width()
+    assert window._scale == 3
+    assert window.sidebar.isHidden()
+    assert window.navigation_button.isVisible()
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=1))
+    window.resize(1184, 900)
+    qapp.processEvents()
+    assert not window.sidebar.isHidden()
+    assert window._scale == 1
 
 
 def test_rapid_scale_changes_settle_at_final_scale(runtime, qapp):
@@ -220,7 +198,7 @@ def test_rapid_scale_changes_settle_at_final_scale(runtime, qapp):
     qapp.processEvents()
     assert runtime.window._scale == 0.5
     assert runtime.window.minimumWidth() >= 180
-    for reading in runtime.window.flow.readings.values():
+    for reading in runtime.window.monitoring.readings.values():
         assert reading.width() >= reading.minimumSizeHint().width()
 
 

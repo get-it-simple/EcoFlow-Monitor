@@ -23,9 +23,7 @@ def runtime(tmp_path, qapp):
 
 
 def metric_mode(dialog, key):
-    item = next(dialog.metrics.item(index) for index in range(dialog.metrics.count())
-                if dialog.metrics.item(index).data(Qt.ItemDataRole.UserRole) == key)
-    return dialog.metrics.itemWidget(item).findChild(QComboBox)
+    return dialog.metrics.rows[key].mode
 
 
 def test_hidden_metrics_roundtrip_and_existing_settings():
@@ -123,9 +121,8 @@ def test_metric_reordering_keeps_modes_and_group_order(runtime, qapp):
     try:
         metric_mode(dialog, "output_power").setCurrentIndex(1)
         metric_mode(dialog, "estimated_runtime").setCurrentIndex(1)
-        model = dialog.metrics.model()
-        assert model.moveRows(QModelIndex(), 3, 1, QModelIndex(), 0)
-        assert model.moveRows(QModelIndex(), 2, 1, QModelIndex(), 1)
+        assert dialog.metrics.move_before("estimated_runtime", "output_power")
+        assert dialog.metrics.move_before("input_power", "battery_level")
         qapp.processEvents()
         assert metric_mode(dialog, "estimated_runtime").currentData() == "expanded"
         assert metric_mode(dialog, "output_power").currentData() == "expanded"
@@ -168,23 +165,23 @@ def test_monitor_disclosure_retains_selection_and_resets_on_hide(runtime, qapp):
     controller.apply_settings(replace(controller.settings, integrations=(first, second)))
     window = runtime.window
     window.show()
-    assert window.msi_section.isVisible()
-    assert not window.integration_selector.isVisible()
-    QTest.keyClick(window.msi_section.header, Qt.Key.Key_Space)
+    assert window.monitoring.msi_section.isVisible()
+    assert not window.monitoring.integration_selector.isVisible()
+    QTest.keyClick(window.monitoring.msi_section.header, Qt.Key.Key_Space)
     qapp.processEvents()
-    assert window.integration_selector.isVisible()
-    window.integration_selector.setCurrentIndex(1)
-    window.profile_choice.setCurrentIndex(2)
-    window.msi_section.set_expanded(False)
+    assert window.monitoring.integration_selector.isVisible()
+    window.monitoring.integration_selector.setCurrentIndex(1)
+    window.monitoring.profile_choice.setCurrentIndex(2)
+    window.monitoring.msi_section.set_expanded(False)
     controller.changed.emit()
-    window.msi_section.set_expanded(True)
-    assert window.integration_selector.currentData() == second.id
-    assert window.profile_choice.currentIndex() == 2
+    window.monitoring.msi_section.set_expanded(True)
+    assert window.monitoring.integration_selector.currentData() == second.id
+    assert window.monitoring.profile_choice.currentIndex() == 2
     window.hide()
     window.show()
-    assert not window.integration_selector.isVisible()
+    assert not window.monitoring.integration_selector.isVisible()
     controller.apply_settings(replace(controller.settings, integrations=()))
-    assert window.msi_section.isHidden()
+    assert window.monitoring.msi_section.isHidden()
 
 
 def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp, monkeypatch):
@@ -193,8 +190,8 @@ def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp,
     try:
         dialog.show()
         dialog.tabs.setCurrentIndex(1)
-        assert dialog.integrations_section.header.isVisible()
-        assert not dialog.integrations_editor.isVisible()
+        assert dialog.integrations_section.header.isHidden()
+        assert dialog.integrations_editor.isVisible()
         dialog.integrations_section.set_expanded(True)
         editor = dialog.integrations_editor
         editor.label.setText("Draft module")
@@ -206,7 +203,7 @@ def test_settings_integrations_keep_draft_and_allow_empty_modules(runtime, qapp,
         assert editor.isVisible()
         dialog.hide()
         dialog.show()
-        assert not editor.isVisible()
+        assert editor.isVisible()
         dialog.integrations_section.set_expanded(True)
         assert editor.label.text() == "Draft module"
         editor.remove()

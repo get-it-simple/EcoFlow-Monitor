@@ -2,7 +2,7 @@ import uuid
 from typing import cast
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QFileDialog, QHeaderView, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
@@ -11,6 +11,7 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.dialogs import confirm
 from ecoflow_monitor.ui.common import action, profile_tooltip
 from ecoflow_monitor.ui.percent_editor import PercentEditor
+from ecoflow_monitor.ui.components import ActionLayout, SelectField as QComboBox
 from ecoflow_monitor.ui.metrics import rule_tooltip
 
 
@@ -25,6 +26,9 @@ class RuleTable(QTableWidget):
         self.setAcceptDrops(editor.application)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setShowGrid(False)
+        self.verticalHeader().hide()
+        self.verticalHeader().setDefaultSectionSize(48)
         self.horizontalHeader().setHighlightSections(False)
         self.verticalHeader().setHighlightSections(False)
 
@@ -75,7 +79,7 @@ class RulesEditor(QWidget):
                 self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
         self.table.setMinimumHeight(180)
         layout.addWidget(self.table)
-        buttons = QHBoxLayout()
+        buttons = ActionLayout()
         if application:
             buttons.addWidget(action(t("add_application"), self.browse))
         buttons.addWidget(action(t("add_rule"), self.add_rule))

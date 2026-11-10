@@ -3,6 +3,7 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QLabel
 import pytest
 
 from ecoflow_monitor import i18n
@@ -52,19 +53,19 @@ def test_preview_cancel_and_save_do_not_write_temporary_appearance(runtime, qapp
     runtime.open_settings()
     dashboard = runtime.dashboard
     baseline = runtime.controller.settings
-    dashboard.background_transparency.setValue(33)
+    dashboard.mini_alpha.setValue(33)
     dashboard._draft_changed()
     assert runtime.controller.settings == baseline
-    assert runtime.controller.ui_settings.background_opacity == 0.33
+    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.67)
     dashboard.reject()
     assert dashboard.gather(False) == runtime.controller.settings
     assert runtime.controller.preview is None
-    dashboard.background_transparency.setValue(41)
+    dashboard.mini_alpha.setValue(41)
     dashboard._draft_changed()
     dashboard.save()
     assert dashboard.isVisible()
-    assert runtime.controller.settings.background_opacity == 0.41
-    assert runtime.controller.store.load().background_opacity == 0.41
+    assert runtime.controller.settings.mini_transparency == pytest.approx(0.59)
+    assert runtime.controller.store.load().mini_transparency == pytest.approx(0.59)
     dashboard._draft_changed()
     assert not dashboard.save_button.isEnabled()
 
@@ -98,58 +99,58 @@ def test_zero_missing_and_stale_are_shared_by_all_views(runtime):
     controller.connection = ConnectionState.LIVE
     controller.changed.emit()
     assert metric_text(controller, "input_power") == "0\u00a0W"
-    assert runtime.window.flow.readings["input_power"].value.text() == "0\u00a0W"
+    assert runtime.dashboard.monitor_readings["input_power"].value.text() == "0\u00a0W"
     assert runtime.dashboard.monitor_readings["input_power"].value.text() == "0\u00a0W"
     assert runtime.mini.labels["input_power"].text() == "0\u00a0W"
     controller.connection = ConnectionState.STALE
     controller.changed.emit()
     assert runtime.mini.labels["output_power"].text() == "120\u00a0W"
-    assert i18n.t("stale_data") in runtime.window.status.text()
-    assert i18n.t("last_update").split("{")[0] in runtime.window.status.toolTip()
+    assert i18n.t("stale_data") in runtime.dashboard.connection_status.text()
+    assert i18n.t("last_update").split("{")[0] in runtime.dashboard.connection_status.toolTip()
     controller.telemetry = None
     controller.changed.emit()
-    assert runtime.window.flow.readings["input_power"].value.text() == "—"
+    assert runtime.dashboard.monitor_readings["input_power"].value.text() == "—"
 
 
 def test_pin_lock_and_click_through_remain_independent_and_recoverable(runtime):
-    runtime.window.overlay.change(pinned=False)
-    assert not runtime.controller.settings.main_overlay.pinned
-    runtime.window.overlay.change(position_locked=True)
-    assert runtime.controller.settings.main_overlay.position_locked
-    assert not runtime.window.overlay.change(click_through=True)
-    assert not runtime.controller.settings.main_overlay.click_through
-    runtime.controller.update_preferences(main_overlay=replace(runtime.controller.settings.main_overlay, click_through=True))
+    runtime.mini.overlay.change(pinned=False)
+    assert not runtime.controller.settings.mini_overlay.pinned
+    runtime.mini.overlay.change(position_locked=True)
+    assert runtime.controller.settings.mini_overlay.position_locked
+    assert not runtime.mini.overlay.change(click_through=True)
+    assert not runtime.controller.settings.mini_overlay.click_through
+    runtime.controller.update_preferences(mini_overlay=replace(runtime.controller.settings.mini_overlay, click_through=True))
     assert not runtime.window.windowFlags() & Qt.WindowType.WindowTransparentForInput
     runtime.recover_widgets()
-    assert not runtime.controller.settings.main_overlay.click_through
-    assert runtime.controller.settings.main_overlay.position_locked
-    assert not runtime.controller.settings.main_overlay.pinned
+    assert not runtime.controller.settings.mini_overlay.click_through
+    assert runtime.controller.settings.mini_overlay.position_locked
+    assert not runtime.controller.settings.mini_overlay.pinned
 
 
 def test_toolbar_preferences_do_not_get_overwritten_by_open_draft(runtime):
     runtime.open_settings()
     dashboard = runtime.dashboard
     dashboard.capacity.setValue(3000)
-    runtime.window.overlay.change(pinned=False)
-    assert not dashboard.overlay_fields["main"]["pinned"].isChecked()
+    runtime.mini.overlay.change(pinned=False)
+    assert not dashboard.overlay_fields["mini"]["pinned"].isChecked()
     dashboard.save()
-    assert not runtime.controller.settings.main_overlay.pinned
+    assert not runtime.controller.settings.mini_overlay.pinned
     assert runtime.controller.settings.capacity_wh == 3000
 
 
 def test_material_controls_and_keyboard_metric_order(runtime):
     runtime.open_settings()
     dashboard = runtime.dashboard
-    dashboard.materials["main"].setCurrentIndex(2)
-    assert dashboard.gather().background_opacity == 0
-    dashboard._restore_overlay("main")
-    assert dashboard.gather().background_opacity == 0.82
+    dashboard.materials["mini"].setCurrentIndex(2)
+    assert dashboard.gather().mini_transparency == 1
+    dashboard._restore_overlay("mini")
+    assert dashboard.gather().mini_transparency == pytest.approx(0.18)
     dashboard.materials["mini"].setCurrentIndex(0)
     assert dashboard.gather().mini_transparency == 0
-    dashboard.metrics.setCurrentRow(0)
-    key = dashboard.metrics.item(0).data(Qt.ItemDataRole.UserRole)
+    key = dashboard.metrics.order[0]
+    dashboard.metrics.select(key)
     dashboard._move_metric(1)
-    assert dashboard.metrics.item(1).data(Qt.ItemDataRole.UserRole) == key
+    assert dashboard.metrics.order[1] == key
     assert set(dashboard.gather().metric_order) == set(METRICS)
 
 
@@ -188,7 +189,7 @@ def test_canonical_tokens_are_packaged_and_match_reference():
 
 def test_font_fallback_renders_ukrainian_and_numbers(runtime):
     from PySide6.QtGui import QFontMetrics
-    metrics = QFontMetrics(runtime.window.title.font())
+    metrics = QFontMetrics(runtime.dashboard.brand.font())
     assert all(metrics.inFontUcs4(ord(char)) for char in "EcoFlow 72% Україна Її Єє Ґґ")
 
 
@@ -267,6 +268,260 @@ def test_reduced_motion_stops_energy_animation(runtime, qapp):
     runtime.controller.connection = ConnectionState.LIVE
     runtime.window.show()
     qapp.setProperty("system_animations", False)
-    runtime.window.flow.refresh()
-    assert not runtime.window.flow._timer.isActive()
+    runtime.dashboard.monitoring.balance.refresh()
+    assert not runtime.dashboard.monitoring.balance._timer.isActive()
     qapp.setProperty("system_animations", True)
+
+
+def test_packaged_inter_is_the_actual_font_for_controls_and_keycaps(runtime):
+    from pathlib import Path
+    from PySide6.QtGui import QFontInfo, QFontMetrics
+    from ecoflow_monitor.ui import common
+    dashboard = runtime.dashboard
+    assert (Path(common.__file__).parent / "assets/fonts/Inter.ttf").is_file()
+    assert QFontInfo(dashboard.capacity.font()).family() == "Inter"
+    assert QFontInfo(dashboard.brand.font()).family() == "Inter"
+    assert all(QFontMetrics(dashboard.brand.font()).inFontUcs4(ord(char)) for char in "ЇїЄєҐґІі 0123456789")
+    runtime.controller.apply_settings(replace(runtime.controller.settings, language="uk"))
+    editor = dashboard.hotkey_rows["recover_widgets"][1]
+    assert any(label.text() == "W" for label in editor.findChildren(QLabel))
+    header = dashboard.integrations_editor.system_rules.table.horizontalHeaderItem(0)
+    assert header.text() == i18n.t("rule_enabled")
+
+
+@pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+def test_metric_visibility_rows_and_numeric_text_fit_after_scale_change(runtime, qapp, scale):
+    dashboard = runtime.dashboard
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
+    dashboard.show()
+    qapp.processEvents()
+    dashboard.resize(round(1184 * scale), round(900 * scale))
+    dashboard.navigation.setCurrentRow(2)
+    dashboard.appearance_tabs.setCurrentIndex(1)
+    qapp.processEvents()
+    for row in dashboard.metrics.rows.values():
+        assert row.height() >= row.mode.height()
+        assert row.field.rect().contains(row.mode.geometry())
+        assert row.mode.height() >= row.mode.fontMetrics().height()
+    spin = dashboard.mini_alpha.spin
+    assert spin.lineEdit().height() >= spin.fontMetrics().height()
+    assert spin.lineEdit().width() >= spin.lineEdit().fontMetrics().horizontalAdvance(spin.text())
+    assert spin.lineEdit().text()
+    page = dashboard.tabs.currentWidget()
+    assert page.horizontalScrollBar().maximum() == 0
+    assert set(dashboard.metrics.order) == set(METRICS)
+
+
+def test_metric_reordering_does_not_move_other_groups_or_lose_draft(runtime):
+    editor = runtime.dashboard.metrics
+    editor.rows["estimated_runtime"].mode.setCurrentIndex(1)
+    editor.rows["maximum_charge_level"].mode.setCurrentIndex(1)
+    always = editor.group("always")
+    assert editor.move_before("maximum_charge_level", "estimated_runtime")
+    assert editor.group("expanded") == ("maximum_charge_level", "estimated_runtime")
+    assert editor.move_before("maximum_charge_level", "estimated_runtime", after=True)
+    assert editor.group("expanded") == ("estimated_runtime", "maximum_charge_level")
+    assert editor.group("always") == always
+    assert not editor.move_before("battery_level", "estimated_runtime")
+    runtime.dashboard.save()
+    stored = runtime.controller.store.load()
+    assert stored.mini_hidden_metrics == editor.group("expanded")
+    assert stored.mini_metrics == always
+
+
+def test_shortcut_conflict_preserves_working_combo_and_distinguishes_numpad(runtime):
+    editor = runtime.dashboard.hotkey_rows["toggle_mini"][1]
+    enabled = runtime.dashboard.hotkey_rows["toggle_mini"][2]
+    enabled.setChecked(True)
+    editor.set_combo("ctrl+f8")
+    editor.start_recording()
+    editor.assign("ctrl+alt+num5")
+    assert editor.combo() == "ctrl+f8"
+    assert editor.property("state") == "conflict"
+    editor.start_recording()
+    editor.assign("ctrl+alt+5")
+    assert editor.combo() == "ctrl+alt+5"
+    assert editor.property("state") == "assigned"
+
+
+def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
+    dashboard = runtime.dashboard
+    dashboard.show()
+    dashboard.navigation.setCurrentRow(1)
+    dashboard.activateWindow()
+    qapp.processEvents()
+    page = dashboard.tabs.currentWidget()
+    page.setFocus()
+    dashboard._focus_binding.keyboard = True
+    dashboard._focus_binding.refresh()
+    assert dashboard._focus_binding.outline.isHidden()
+    dashboard.access.setFocus(Qt.FocusReason.TabFocusReason)
+    dashboard._focus_binding.refresh()
+    assert not dashboard._focus_binding.outline.isHidden()
+    assert dashboard._focus_binding.outline.width() < page.width()
+
+
+def test_legacy_main_flags_are_retained_without_affecting_app_shell(runtime, qapp):
+    previous = runtime.controller.settings
+    settings = replace(previous, transparency=True, background_opacity=0, main_overlay=OverlayPreferences(pinned=True, position_locked=True, click_through=True))
+    runtime.controller.apply_settings(settings)
+    runtime.start()
+    dashboard = runtime.dashboard
+    assert not dashboard.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    assert not dashboard.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert dashboard.grab().toImage().pixelColor(4, dashboard.height() // 2).alpha() == 255
+    dashboard.capacity.setValue(3000)
+    dashboard.save()
+    stored = runtime.controller.store.load()
+    assert stored.main_overlay == settings.main_overlay
+    assert stored.background_opacity == 0
+    assert stored.capacity_wh == 3000
+    assert "main" not in dashboard.materials
+    assert "main" not in dashboard.overlay_fields
+
+
+def test_new_startup_has_only_app_shell_and_mini_and_no_pristine_error(runtime):
+    runtime.start()
+    windows = [widget for widget in runtime.app.topLevelWidgets() if getattr(widget, "controller", None) is runtime.controller]
+    assert set(windows) == {runtime.dashboard, runtime.mini}
+    assert runtime.window is runtime.dashboard
+    assert not runtime.dashboard.error_label.text()
+    assert not runtime.dashboard.save_button.isEnabled()
+
+
+def test_disabling_capture_restores_combo_and_unblocks_other_valid_edits(runtime):
+    dashboard = runtime.dashboard
+    editor = dashboard.hotkey_rows["toggle_monitor"][1]
+    editor.start_recording()
+    dashboard.hotkey_rows["toggle_monitor"][2].setChecked(False)
+    assert not editor.recording
+    assert editor.combo() == "ctrl+alt+num5"
+    dashboard.capacity.setValue(3000)
+    dashboard._draft_changed()
+    assert dashboard.save_button.isEnabled()
+
+
+def test_key_picker_can_change_modifiers_and_key_in_one_menu(qapp):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QCheckBox
+    editor = HotkeyComboEditor("ctrl+f8")
+    errors = []
+    def choose():
+        menu = QApplication.activePopupWidget()
+        try:
+            next(box for box in menu.findChildren(QCheckBox) if box.text() == "Alt").setChecked(True)
+            next(action for action in menu.actions() if action.text() == "F24").trigger()
+        except (StopIteration, AttributeError) as error:
+            errors.append(error)
+        finally:
+            if menu is not None:
+                menu.close()
+    try:
+        editor.show()
+        QTimer.singleShot(0, choose)
+        editor.choose_key()
+        assert not errors
+        assert editor.combo() == "ctrl+alt+f24"
+    finally:
+        editor.deleteLater()
+
+
+def test_footer_actions_stay_reachable_in_a_small_window_at_large_scale(runtime, qapp):
+    dashboard = runtime.dashboard
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3, language="uk"))
+    dashboard.show()
+    dashboard.resize(640, 480)
+    dashboard.navigation.setCurrentRow(1)
+    qapp.processEvents()
+    footer = dashboard.footer
+    footer.ensureWidgetVisible(dashboard.save_button)
+    qapp.processEvents()
+    position = dashboard.save_button.mapTo(footer.viewport(), dashboard.save_button.rect().topLeft())
+    assert footer.viewport().rect().intersects(dashboard.save_button.rect().translated(position))
+    assert footer.horizontalScrollBar().maximum() == 0
+    assert dashboard.width() <= dashboard.screen().availableGeometry().width()
+
+
+@pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+def test_all_footer_buttons_fit_reference_width_and_keep_control_height(runtime, qapp, scale):
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, language="uk"))
+    dashboard = runtime.dashboard
+    dashboard.show()
+    qapp.processEvents()
+    dashboard.resize(round(1184 * scale), round(900 * scale))
+    dashboard.navigation.setCurrentRow(1)
+    qapp.processEvents()
+    viewport = dashboard.footer.viewport()
+    assert dashboard.footer.verticalScrollBar().maximum() == 0
+    for button in dashboard.footer.buttons:
+        point = button.mapTo(viewport, button.rect().topLeft())
+        assert viewport.rect().contains(button.rect().translated(point))
+        assert 35 * scale <= button.height() <= 45 * scale
+        assert button.text()
+
+
+def test_monitoring_and_controls_share_the_shell_effective_dpi_scale(runtime, monkeypatch):
+    from PySide6.QtGui import QPaintDevice
+    from ecoflow_monitor.ui.dashboard import Dashboard
+    ratio = [2]
+    monkeypatch.setattr(Dashboard, QPaintDevice.devicePixelRatioF.__name__, lambda self: ratio[0])
+    runtime.controller.apply_settings(replace(runtime.controller.settings, scale=3))
+    dashboard = runtime.dashboard
+    assert dashboard._scale == 1.5
+    assert dashboard.monitor_readings["battery_level"].value.font().pixelSize() == 54
+    assert dashboard.capacity.font().pixelSize() == 21
+    ratio[0] = 1
+    dashboard.apply_appearance()
+    assert dashboard._scale == 3
+    assert dashboard.monitor_readings["battery_level"].value.font().pixelSize() == 108
+    assert runtime.controller.settings.scale == 3
+
+
+def test_integration_editor_accepts_command_and_profile_dialog_results(runtime, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from ecoflow_monitor.ui.integrations import CommandDialog, ProfileDialog
+    editor = runtime.dashboard.integrations_editor
+    original = editor.modules()[0]
+    def accept_command(dialog):
+        dialog.label.setText("Updated command")
+        dialog.save()
+        return QDialog.DialogCode.Accepted
+    def accept_profile(dialog):
+        dialog.label.setText("Updated profile")
+        dialog.save()
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(CommandDialog, QDialog.exec.__name__, accept_command)
+    monkeypatch.setattr(ProfileDialog, QDialog.exec.__name__, accept_profile)
+    editor.mapping.selectRow(0)
+    editor.edit_mapping(True)
+    updated = editor.modules()[0]
+    assert updated.mapping[0].label == "Updated command"
+    assert updated.mapping[0].id == original.mapping[0].id
+    editor.profiles.setCurrentRow(0)
+    editor.edit_profile(True)
+    updated = editor.modules()[0]
+    assert updated.profiles[0].label == "Updated profile"
+    assert updated.profiles[0].id == original.profiles[0].id
+    assert runtime.controller.settings.integrations[0] == original
+
+
+def test_window_geometry_is_not_persisted_by_temporary_preview(runtime):
+    dashboard = runtime.dashboard
+    baseline = runtime.controller.settings.dashboard_geometry
+    dashboard.mini_alpha.setValue(33)
+    dashboard._draft_changed()
+    assert runtime.controller.preview is not None
+    dashboard.resize(600, 650)
+    dashboard._save_geometry()
+    assert runtime.controller.settings.dashboard_geometry == baseline
+    dashboard.reject()
+    dashboard._save_geometry()
+    assert runtime.controller.settings.dashboard_geometry[2:] == (600, 650)
+
+
+def test_shutdown_saves_last_normal_geometry_without_reopening_windows(runtime):
+    dashboard = runtime.dashboard
+    dashboard.resize(600, 650)
+    runtime.stop()
+    assert runtime.controller.store.load().dashboard_geometry[2:] == (600, 650)
+    assert dashboard.isHidden() and runtime.mini.isHidden()

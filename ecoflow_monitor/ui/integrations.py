@@ -5,13 +5,14 @@ import subprocess
 import uuid
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, Reaction, afterburner_example, template_tokens
 from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_tooltip
 from ecoflow_monitor.ui.sections import CollapsibleSection
+from ecoflow_monitor.ui.components import ActionLayout, DesignDialog, FormLayout as QFormLayout, NumberField, SelectField as QComboBox, Switch
 from ecoflow_monitor.ui.rules import RulesEditor
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.metrics import metric_tooltip, rule_tooltip
@@ -39,7 +40,7 @@ class ExecutableField(QLineEdit):
             QMessageBox.warning(self, t("error_title"), t("invalid_executable"))
 
 
-class CommandDialog(QDialog):
+class CommandDialog(DesignDialog):
     def __init__(self, module, command=None, parent=None):
         super().__init__(parent)
         self.module = module
@@ -108,7 +109,7 @@ class CommandDialog(QDialog):
         self.accept()
 
 
-class ProfileDialog(QDialog):
+class ProfileDialog(DesignDialog):
     def __init__(self, module: IntegrationDefinition, profile: IntegrationProfile | None = None, parent=None):
         super().__init__(parent)
         self.module = module
@@ -128,7 +129,8 @@ class ProfileDialog(QDialog):
         self.identity = QLineEdit(profile.id if profile else uuid.uuid4().hex)
         self.identity.setReadOnly(profile is not None)
         self.label = QLineEdit(profile.label if profile else "")
-        self.slot = QSpinBox()
+        self.slot = NumberField()
+        self.slot.setDecimals(0)
         self.slot.setRange(1, 5)
         self.slot.setValue(profile.slot if profile and profile.slot else 1)
         self.technical_details = QPlainTextEdit(profile.technical_details if profile else "")
@@ -203,7 +205,7 @@ class ProfileDialog(QDialog):
     def draft_profile(self):
         reactions = {name: Reaction(toggle.isChecked(), tuple(line.strip() for line in editor.toPlainText().splitlines() if line.strip())) for name, (toggle, editor) in self.reactions.items()}
         profile = IntegrationProfile(self.identity.text().strip(), self.label.text().strip(), **reactions,
-                                     slot=self.slot.value() if self.module.driver == "afterburner" else None,
+                                     slot=int(self.slot.value()) if self.module.driver == "afterburner" else None,
                                      power_pct=self.profile.power_pct if self.profile else None,
                                      technical_details=self.technical_details.toPlainText())
         profiles = tuple(item for item in self.module.profiles if self.profile is None or item.id != self.profile.id) + (profile,)
@@ -237,13 +239,14 @@ class IntegrationsEditor(QWidget):
         self._index = -1
         self._profiles: tuple[IntegrationProfile, ...] = ()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(24)
         layout.addWidget(hint(t("integration_setup_help")))
         self.selector = QComboBox()
         self.selector.setAccessibleName(t("integrations"))
         self.selector.currentIndexChanged.connect(self.select)
         layout.addWidget(self.selector)
-        buttons = QHBoxLayout()
+        buttons = ActionLayout()
         for key, callback in (("integration_add", self.add), ("integration_import", self.import_module), ("integration_export", self.export_module), ("remove", self.remove), ("integration_restore", self.restore)):
             buttons.addWidget(action(t(key), callback))
         layout.addLayout(buttons)
@@ -258,16 +261,16 @@ class IntegrationsEditor(QWidget):
         self.identity = QLineEdit()
         self.identity.setReadOnly(True)
         self.label = QLineEdit()
-        self.enabled = QCheckBox(t("integration_enabled"))
-        self.allow_launch = QCheckBox(t("integration_allow_launch"))
+        self.enabled = Switch(t("integration_enabled"))
+        self.allow_launch = Switch(t("integration_allow_launch"))
         self.path = ExecutableField()
         path_row = QHBoxLayout()
         path_row.addWidget(self.path)
         path_row.addWidget(action(t("browse"), self.browse))
         form.addRow(t("profile_label"), self.label)
-        form.addRow(self.enabled)
+        form.addRow(t("integration_enabled"), self.enabled)
         form.addRow(t("integration_executable"), path_row)
-        form.addRow(self.allow_launch)
+        form.addRow(t("integration_allow_launch"), self.allow_launch)
         conditions_group = QGroupBox(t("integration_conditions_title"))
         conditions_form = QVBoxLayout(conditions_group)
         self.conditions = {}
@@ -297,13 +300,15 @@ class IntegrationsEditor(QWidget):
         self.mapping.horizontalHeader().setHighlightSections(False)
         self.mapping.verticalHeader().setHighlightSections(False)
         self.mapping.setAlternatingRowColors(True)
+        self.mapping.setShowGrid(False)
+        self.mapping.verticalHeader().setDefaultSectionSize(48)
         self.mapping.verticalHeader().hide()
         self.mapping.setAccessibleName(t("integration_mapping"))
         self.mapping.setHorizontalHeaderLabels([t("integration_id"), t("profile_label"), t("integration_arguments")])
         self.mapping.horizontalHeader().setStretchLastSection(True)
         self.mapping.itemChanged.connect(self.mapping_tooltip)
         self.mapping.itemDoubleClicked.connect(lambda item: self.edit_mapping(True))
-        mapping_buttons = QHBoxLayout()
+        mapping_buttons = ActionLayout()
         mapping_buttons.addWidget(action(t("integration_add_command"), lambda: self.edit_mapping(False)))
         mapping_buttons.addWidget(action(t("integration_edit_command"), lambda: self.edit_mapping(True)))
         mapping_buttons.addWidget(action(t("remove"), self.remove_mapping))
@@ -316,7 +321,7 @@ class IntegrationsEditor(QWidget):
         profiles_layout.addWidget(hint(t("integration_profile_help")))
         self.profiles = QListWidget()
         self.profiles.setAccessibleName(t("integration_profiles"))
-        profile_buttons = QHBoxLayout()
+        profile_buttons = ActionLayout()
         profile_buttons.addWidget(action(t("integration_add_profile"), lambda: self.edit_profile(False)))
         profile_buttons.addWidget(action(t("integration_edit_profile"), lambda: self.edit_profile(True)))
         profile_buttons.addWidget(action(t("remove"), self.remove_profile))

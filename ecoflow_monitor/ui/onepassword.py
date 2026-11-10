@@ -1,5 +1,5 @@
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLineEdit, QTabBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QTabBar, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.ecoflow import Credentials
 from ecoflow_monitor.adapters.credentials import CredentialError
@@ -8,6 +8,7 @@ from ecoflow_monitor.credential_refs import normalize_secret_reference
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, hint
 from ecoflow_monitor.ui.sections import CollapsibleSection
+from ecoflow_monitor.ui.components import FormLayout as QFormLayout
 
 
 class OnePasswordPanel(QWidget):
@@ -25,6 +26,7 @@ class OnePasswordPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.source = QTabBar()
+        self.source.setDrawBase(False)
         self.source.setAccessibleName(t("credential_source"))
         self.source.setExpanding(False)
         self.source.setUsesScrollButtons(False)
@@ -49,7 +51,8 @@ class OnePasswordPanel(QWidget):
             field.textChanged.connect(self._invalidate)
         layout.addWidget(self.references)
         self.load_button = action(t("onepassword_load"), self.load_credentials)
-        layout.addWidget(self.load_button)
+        self.load_button.setMinimumWidth(320)
+        layout.addWidget(self.load_button, 0, Qt.AlignmentFlag.AlignRight)
         self.save_section = CollapsibleSection(t("onepassword_save_section"))
         save_form = QFormLayout()
         save_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)

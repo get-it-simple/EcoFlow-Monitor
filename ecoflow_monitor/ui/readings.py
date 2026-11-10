@@ -1,11 +1,11 @@
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLayout, QVBoxLayout, QWidget
 
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import metric_text, status_tooltip, update_status
+from ecoflow_monitor.ui.common import metric_text
 from ecoflow_monitor.ui.metrics import metric_label, metric_tooltip
-from ecoflow_monitor.ui.tokens import COLORS, RADIUS
+from ecoflow_monitor.ui.tokens import COLORS
 from ecoflow_monitor.ui.typography import ValueLabel
 
 
@@ -36,6 +36,11 @@ class MetricReading(QFrame):
         self.refresh()
 
     def configure(self, scale, size=24, clear=False, labels=True, hover=False):
+        signature = (scale, size, clear, labels, hover)
+        if getattr(self, "_configuration", None) == signature:
+            self.refresh()
+            return
+        self._configuration = signature
         self.hover_only = hover
         self.label.setVisible(labels)
         for label, pixels, weight, role in ((self.label, 12, 400, "muted"), (self.value, size, 600, TONES.get(self.key, "text"))):
@@ -122,45 +127,3 @@ class EnergyBalance(QWidget):
         if self._timer.isActive():
             painter.setBrush(QColor(COLORS["text"]))
             painter.drawEllipse(QPointF(self.width() * self.phase, self.height() / 2), 3, 3)
-
-
-class MainReadings(QWidget):
-    def __init__(self, controller, parent=None):
-        super().__init__(parent)
-        self.controller = controller
-        self.grid = QGridLayout(self)
-        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.readings = {key: MetricReading(controller, key, self) for key in ("battery_level", "estimated_runtime", "input_power", "output_power")}
-        self.grid.addWidget(self.readings["battery_level"], 0, 0, 1, 2)
-        self.grid.addWidget(self.readings["estimated_runtime"], 1, 0, 1, 2)
-        self.balance = EnergyBalance(controller, self, battery=True)
-        self.balance.setAccessibleName(t("battery_level"))
-        self.grid.addWidget(self.balance, 2, 0, 1, 2)
-        self.grid.addWidget(self.readings["input_power"], 3, 0)
-        self.grid.addWidget(self.readings["output_power"], 3, 1)
-        self.status = ValueLabel(self)
-        self.status.setWordWrap(True)
-        self.grid.addWidget(self.status, 4, 0, 1, 2)
-        self._timer = self.balance._timer
-        self.configure(1)
-
-    def configure(self, scale):
-        settings = self.controller.ui_settings
-        clear = settings.transparency and settings.background_opacity == 0
-        self.grid.setSpacing(round(8 * scale))
-        for key, reading in self.readings.items():
-            reading.configure(scale, 56 if key == "battery_level" else 24, clear, settings.monitor_labels_visible, settings.monitor_values_on_hover)
-        self.readings["estimated_runtime"].label.hide()
-        self.balance.setFixedHeight(max(8, round(12 * scale)))
-        self.status.outlined = clear
-        self.refresh()
-
-    def refresh(self):
-        for reading in self.readings.values():
-            reading.refresh()
-        telemetry = self.controller.telemetry
-        self.balance.setVisible(telemetry is not None)
-        update_status(self.status, self.controller)
-        self.status.setToolTip(status_tooltip(self.controller))
-        self.balance.refresh()

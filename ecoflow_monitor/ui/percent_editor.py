@@ -1,7 +1,8 @@
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QHBoxLayout, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QSlider, QWidget
 
 from ecoflow_monitor.i18n import t
+from ecoflow_monitor.ui.components import NumberField
 
 
 class PercentEditor(QWidget):
@@ -9,7 +10,8 @@ class PercentEditor(QWidget):
 
     def __init__(self, minimum=0, maximum=100, decimals=0, optional=False, default=0, compact=False, parent=None):
         super().__init__(parent)
-        self.spin = QDoubleSpinBox()
+        self.setProperty("wide_field", not compact)
+        self.spin = NumberField()
         self.spin.setRange(minimum, maximum)
         self.spin.setDecimals(decimals)
         self.spin.setSuffix(" %")
@@ -19,22 +21,22 @@ class PercentEditor(QWidget):
         self.slider.setValue(round(self.spin.value()))
         self.slider.setMinimumWidth(80)
         self.slider.setAccessibleName(t("percent_quick_select"))
-        self.toggle = QCheckBox(t("percent_enabled")) if optional else None
+        self.toggle = QCheckBox() if optional else None
         if self.toggle is not None:
             self.toggle.setToolTip(t("percent_enabled"))
             self.toggle.setAccessibleName(t("percent_enabled"))
             if compact:
                 self.toggle.setText("")
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-        row = QHBoxLayout()
+        layout.setSpacing(16)
         if self.toggle is not None:
-            row.addWidget(self.toggle)
+            layout.addWidget(self.toggle)
             self.toggle.toggled.connect(self._enabled_changed)
-        row.addWidget(self.spin, 1)
-        layout.addLayout(row)
-        layout.addWidget(self.slider)
+        layout.addWidget(self.spin, 1)
+        layout.addWidget(self.slider, 2)
+        if compact:
+            self.slider.hide()
         self.setFocusProxy(self.spin)
         self.spin.valueChanged.connect(self._spin_changed)
         self.slider.valueChanged.connect(self.spin.setValue)

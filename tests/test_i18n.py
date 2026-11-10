@@ -35,7 +35,7 @@ def test_packaged_english_content_and_initial_languages():
     assert translator.translate("dc_output") == "12 V"
     assert translator.translate("estimated_runtime") == "Time remaining"
     assert translator.translate("automatic_mode") == "Auto"
-    assert translator.translate("reset") == "Revert changes"
+    assert translator.translate("reset") == "Restore saved"
     assert translator.translate("last_update").format(timestamp="2026-01-01") == (
         "Last successful update: 2026-01-01"
     )

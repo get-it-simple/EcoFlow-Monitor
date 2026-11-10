@@ -1,185 +1,191 @@
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QMessageBox, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QScrollArea, QToolButton, QVBoxLayout, QWidget
 
-from ecoflow_monitor import __version__
-from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import action, clamp_window, hint, number, status_tooltip, update_status
-from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
+from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, scaled_font
+from ecoflow_monitor.ui.components import Navigation, StatusBadge, TitleBar
+from ecoflow_monitor.ui.monitoring import MonitoringPage
+from ecoflow_monitor.ui.reference_style import icon_path
+from ecoflow_monitor.ui.resize import WindowResize
+from ecoflow_monitor.ui.scrollbar import install_scrollbars
 from ecoflow_monitor.ui.settings_window import SettingsWindow
 from ecoflow_monitor.ui.theme import settings_style
-from ecoflow_monitor.ui.tokens import COLORS
+from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY, RADIUS
+from ecoflow_monitor.i18n import t
 
 
 class Dashboard(SettingsWindow):
-    def __init__(self, controller, open_main, open_mini):
+    visibility_changed = Signal(bool)
+
+    def __init__(self, controller, open_mini):
         super().__init__(controller)
+        self._quitting = False
+        self._scale = 1
+        self._screen_tracker = ScreenTracker(self, self._screen_changed)
         self.setObjectName("dashboard")
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle(t("app_title"))
-        self.open_main = open_main
-        self.open_mini = open_mini
-        self.navigation = QListWidget(self)
-        self.navigation.setObjectName("navigation")
-        self.navigation.setAccessibleName(t("navigation"))
-        self.navigation.setFixedWidth(216)
-        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.tabs.tabBar().hide()
-        monitoring = self._monitoring()
-        self.tabs.insertTab(0, monitoring, t("monitoring"))
+        self.monitoring = MonitoringPage(controller, open_mini, self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.monitoring)
+        self.tabs.insertTab(0, scroll, t("monitoring"))
         self.tabs.tabBar().moveTab(2, 3)
+        self.tabs.tabBar().hide()
         self.page_keys = ("monitoring", "connection_settings", "appearance_settings", "integrations", "hotkeys_settings")
-        for key in self.page_keys:
-            self.navigation.addItem(t(key))
-        self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
-        self.tabs.currentChanged.connect(self._page_changed)
         outer = self.layout()
         outer.removeWidget(self.tabs)
-        footer_layout = outer.takeAt(outer.count() - 1).layout()
-        self.footer = QWidget(self)
-        self.footer.setLayout(footer_layout)
-        header = QHBoxLayout()
-        self.brand = QLabel(t("app_title"), self)
-        self.brand.setObjectName("section_title")
-        header.addWidget(self.brand, 1)
-        self.version = QLabel(__version__ + " · DELTA 3 Max", self)
-        self.version.setObjectName("secondary")
-        header.addWidget(self.version)
-        outer.insertLayout(0, header)
+        outer.removeWidget(self.error_label)
+        outer.takeAt(outer.count() - 1)
+        self.shell = QFrame(self)
+        self.shell.setObjectName("app_shell")
+        outer.addWidget(self.shell)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        shell_layout = QVBoxLayout(self.shell)
+        shell_layout.setContentsMargins(1, 1, 1, 1)
+        shell_layout.setSpacing(0)
+        self.titlebar = TitleBar(self)
+        self.brand = self.titlebar.title
+        self.close_button = self.titlebar.close_button
+        self.navigation_button = QToolButton(self.titlebar)
+        self.navigation_button.setIcon(QIcon(icon_path("more")))
+        self.navigation_button.setProperty("icon_button", True)
+        self.navigation_button.setAccessibleName(t("navigation"))
+        self.navigation_button.clicked.connect(self.navigation_menu)
+        self.titlebar.layout().insertWidget(0, self.navigation_button)
+        shell_layout.addWidget(self.titlebar)
         body = QHBoxLayout()
-        body.addWidget(self.navigation)
-        body.addWidget(self.tabs, 1)
-        outer.insertLayout(1, body, 1)
-        outer.addWidget(self.footer)
-        outer.setContentsMargins(24, 16, 24, 16)
-        outer.setSpacing(16)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.sidebar = QWidget(self.shell)
+        self.sidebar.setObjectName("sidebar")
+        sidebar = QVBoxLayout(self.sidebar)
+        sidebar.setContentsMargins(16, 24, 16, 16)
+        sidebar.setSpacing(8)
+        self.navigation = Navigation(self.sidebar)
+        for key in self.page_keys:
+            self.navigation.addItem(t(key))
+        sidebar.addWidget(self.navigation, 1)
+        self.device_label = QLabel("DELTA 3 Max", self.sidebar)
+        self.device_label.setObjectName("secondary")
+        sidebar.addWidget(self.device_label)
+        self.sidebar_status = StatusBadge(controller, self.sidebar)
+        sidebar.addWidget(self.sidebar_status)
+        body.addWidget(self.sidebar)
+        self.page_container = QWidget(self.shell)
+        pages = QVBoxLayout(self.page_container)
+        pages.setContentsMargins(0, 0, 0, 0)
+        pages.setSpacing(0)
+        pages.addWidget(self.tabs, 1)
+        self.error_label.setContentsMargins(32, 0, 32, 8)
+        pages.addWidget(self.error_label)
+        pages.addWidget(self.footer)
+        body.addWidget(self.page_container, 1)
+        shell_layout.addLayout(body, 1)
+        self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(self._page_changed)
         self.navigation.setCurrentRow(0)
+        self.resize_controls = WindowResize(self)
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setSingleShot(True)
+        self._geometry_timer.setInterval(500)
+        self._geometry_timer.timeout.connect(self._save_geometry)
+        self._last_language = controller.settings.language
+        controller.changed.connect(self.refresh)
+        self.monitor_readings = self.monitoring.readings
+        self.connection_status = self.monitoring.status
+        self.apply_appearance()
         x, y, width, height = controller.settings.dashboard_geometry
         self.resize(width, height)
         if x != -1 or y != -1:
             self.move(x, y)
         clamp_window(self)
-        self.setStyleSheet(settings_style())
-        self._geometry_timer = QTimer(self)
-        self._geometry_timer.setSingleShot(True)
-        self._geometry_timer.setInterval(500)
-        self._geometry_timer.timeout.connect(self._save_geometry)
-        controller.changed.connect(self.refresh_monitoring)
-        self._last_language = controller.settings.language
-        self.refresh_monitoring()
+        install_scrollbars(self)
 
-    def _monitoring(self):
-        body = QWidget(self)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(24)
-        self.heading = QLabel(t("monitoring_heading"), body)
-        self.heading.setObjectName("page_title")
-        self.heading.setWordWrap(True)
-        layout.addWidget(self.heading)
-        status_row = QHBoxLayout()
-        self.connection_status = QLabel(body)
-        self.connection_status.setWordWrap(True)
-        status_row.addWidget(self.connection_status, 1)
-        status_row.addWidget(action(t("refresh"), self.controller.refresh))
-        layout.addLayout(status_row)
-        self.metric_grid = QGridLayout()
-        self.metric_grid.setSpacing(12)
-        self.metric_cards = []
-        self.monitor_readings = {}
-        for key in ("battery_level", "input_power", "output_power", "estimated_runtime"):
-            card = QFrame(body)
-            card.setObjectName("card")
-            box = QVBoxLayout(card)
-            box.setContentsMargins(0, 0, 0, 0)
-            reading = MetricReading(self.controller, key, card)
-            reading.configure(1, 28 if key == "estimated_runtime" else 36)
-            box.addWidget(reading)
-            self.monitor_readings[key] = reading
-            self.metric_cards.append(card)
-        layout.addLayout(self.metric_grid)
-        self.balance_card = QFrame(body)
-        self.balance_card.setObjectName("card")
-        balance_layout = QVBoxLayout(self.balance_card)
-        balance_layout.setContentsMargins(0, 0, 0, 0)
-        self.balance_title = QLabel(t("energy_balance"), self.balance_card)
-        self.balance_title.setObjectName("section_title")
-        balance_layout.addWidget(self.balance_title)
-        self.balance = EnergyBalance(self.controller, self.balance_card)
-        balance_layout.addWidget(self.balance)
-        self.balance_caption = QLabel(self.balance_card)
-        self.balance_caption.setWordWrap(True)
-        balance_layout.addWidget(self.balance_caption)
-        layout.addWidget(self.balance_card)
-        self.port_card = QFrame(body)
-        self.port_card.setObjectName("card")
-        self.port_grid = QGridLayout(self.port_card)
-        self.port_grid.setContentsMargins(0, 0, 0, 0)
-        self.port_readings = {}
-        layout.addWidget(self.port_card)
-        self.monitor_limits = hint("")
-        layout.addWidget(self.monitor_limits)
-        layout.addStretch()
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        buttons.addWidget(action(t("open_main_widget"), lambda: self.open_main()))
-        buttons.addWidget(action(t("open_mini_widget"), lambda: self.open_mini()))
-        layout.addLayout(buttons)
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(body)
-        return scroll
+    def navigation_menu(self):
+        menu = QMenu(self)
+        for index, key in enumerate(self.page_keys):
+            action = menu.addAction(t(key))
+            action.setCheckable(True)
+            action.setChecked(index == self.navigation.currentRow())
+            action.triggered.connect(lambda checked=False, page=index: self.navigation.setCurrentRow(page))
+        menu.exec(self.navigation_button.mapToGlobal(self.navigation_button.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def apply_appearance(self):
+        scale = effective_scale(self, self.controller.ui_settings.scale)
+        signature = (scale, self.controller.settings.language)
+        if getattr(self, "_appearance_signature", None) == signature:
+            self.refresh()
+            return
+        self._appearance_signature = signature
+        self._scale = scale
+        self._settings_scale = scale
+        scaled_font(self, scale)
+        self.setStyleSheet(settings_style(scale=scale) + f"""
+QWidget#dashboard {{ background: transparent; }}
+QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {round(RADIUS['window'] * scale)}px; }}
+""")
+        if not hasattr(self, "sidebar"):
+            return
+        self.titlebar.setFixedHeight(round(GEOMETRY["header"] * scale))
+        self.sidebar.setFixedWidth(round(GEOMETRY["sidebar"] * scale))
+        self.sidebar.layout().setContentsMargins(round(16 * scale), round(24 * scale), round(16 * scale), round(16 * scale))
+        self.footer.configure(scale)
+        for index in range(self.tabs.count()):
+            body = self.tabs.widget(index).widget()
+            body.layout().setContentsMargins(round(32 * scale), round(24 * scale), round(32 * scale), round(24 * scale))
+            body.layout().setSpacing(round(24 * scale))
+        self.resize_controls.scale = scale
+        self.resize_controls.layout()
+        self.setMinimumSize(360, 320)
+        self.refresh()
 
     def _page_changed(self, index):
         self.navigation.setCurrentRow(index)
-        self.footer.setVisible(index != 0) if hasattr(self, "footer") else None
-        self.error_label.setVisible(index != 0)
+        if hasattr(self, "footer"):
+            self.footer.setVisible(index != 0)
+        self.error_label.setVisible(index != 0 and bool(self.error_label.text()))
         self._connect_draft()
 
-    def refresh_monitoring(self):
-        update_status(self.connection_status, self.controller)
-        self.connection_status.setText("DELTA 3 Max · " + status_tooltip(self.controller).replace("\n", " · "))
-        for reading in self.monitor_readings.values():
-            reading.refresh()
-        telemetry = self.controller.telemetry
-        ports = dict(telemetry.ports) if telemetry else {}
-        if tuple(ports) != tuple(self.port_readings):
-            while self.port_grid.count():
-                self.port_grid.takeAt(0).widget().deleteLater()
-            self.port_readings = {}
-            for index, key in enumerate(ports):
-                reading = MetricReading(self.controller, key, self.port_card)
-                reading.configure(1, 24)
-                self.port_readings[key] = reading
-                self.port_grid.addWidget(reading, index // 2, index % 2)
-        for reading in self.port_readings.values():
-            reading.refresh()
-        self.port_card.setVisible(bool(ports))
-        self.balance.refresh()
-        if telemetry:
-            delta = telemetry.input_w - telemetry.output_w
-            self.balance_caption.setText(t("power_balance").format(value=number(delta, t("unit_watt"))))
-        else:
-            self.balance_caption.setText(t("missing_data"))
-        self.monitor_limits.setText(t("minimum_discharge_level") + ": " + number(self.controller.minimum.value, "%") + " · " + t("maximum_charge_level") + ": " + number(self.controller.maximum.value, "%"))
+    def refresh(self):
+        if not hasattr(self, "monitoring"):
+            return
+        self.monitoring.refresh()
+        if hasattr(self, "sidebar_status"):
+            self.sidebar_status.refresh()
         if self._last_language != self.controller.settings.language:
             self._last_language = self.controller.settings.language
+            self._translations.refresh()
             for index, key in enumerate(self.page_keys):
                 self.navigation.item(index).setText(t(key))
-            self.heading.setText(t("monitoring_heading"))
-            self.balance_title.setText(t("energy_balance"))
+        if hasattr(self, "footer"):
+            self.footer.configure(self._scale)
+        self.error_label.setVisible(self.tabs.currentIndex() != 0 and bool(self.error_label.text()))
 
-    def _fit_content(self):
-        clamp_window(self)
+    def refresh_monitoring(self):
+        self.refresh()
+
+    def request_visibility(self, visible):
+        if self._quitting:
+            return
+        if visible:
+            self.show()
+        else:
+            self.hide()
+
+    def startup(self):
+        self.request_visibility(True)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if not hasattr(self, "metric_grid"):
+        if not hasattr(self, "sidebar"):
             return
-        columns = 4 if self.width() >= 1120 else 2 if self.width() >= 740 else 1
-        while self.metric_grid.count():
-            self.metric_grid.takeAt(0)
-        for index, card in enumerate(self.metric_cards):
-            self.metric_grid.addWidget(card, index // columns, index % columns)
+        expanded = self.width() >= round(800 * self._scale)
+        self.sidebar.setVisible(expanded)
+        self.navigation_button.setVisible(not expanded)
         if hasattr(self, "_geometry_timer"):
             self._geometry_timer.start()
 
@@ -188,10 +194,37 @@ class Dashboard(SettingsWindow):
         if hasattr(self, "_geometry_timer"):
             self._geometry_timer.start()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._screen_tracker.watch()
+        self.visibility_changed.emit(True)
+        self.monitoring.balance.refresh()
+
+    def _screen_changed(self):
+        self.apply_appearance()
+        clamp_window(self)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.monitoring.msi_section.set_expanded(False)
+        self.visibility_changed.emit(False)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            self.titlebar.system_menu()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def _save_geometry(self):
+        if self._quitting or self.controller.preview is not None or self.isMaximized() or self.isMinimized():
+            return
         geometry = (self.x(), self.y(), self.width(), self.height())
         if geometry != self.controller.settings.dashboard_geometry:
             self.controller.update_preferences(dashboard_geometry=geometry)
+
+    def _fit_content(self):
+        clamp_window(self)
 
     def reject(self):
         self.load_draft()
@@ -199,6 +232,9 @@ class Dashboard(SettingsWindow):
         self._draft_changed()
 
     def closeEvent(self, event):
+        if self._quitting:
+            event.accept()
+            return
         self._draft_changed()
         if self._dirty:
             prompt = QMessageBox(self)

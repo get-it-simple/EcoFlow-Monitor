@@ -50,8 +50,8 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 ## Everyday controls
 
 - The dashboard opens on startup. Use its sidebar for monitoring and settings,
-  and open the independent main or mini widget when needed. Closing a window
-  hides it; use the tray menu to exit.
+  and open the separate mini widget when needed. Closing the main window offers
+  to save or discard pending changes, then hides it; use the tray menu to exit.
 - Launching the application again restores and focuses the dashboard.
   Only one instance runs per user in a Windows session, even from another folder.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
@@ -59,12 +59,13 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   application is reported as unavailable.
 - Enable the mini widget in Appearance and choose which metrics stay visible,
   appear after expanding, or remain off. Reorder metrics by dragging or using
-  Move up/Move down. Drag widgets by their heading; docking and taskbar overlap
+  Move up/Move down within each visibility group. Drag the mini widget by its
+  heading; docking and taskbar overlap
   are optional.
-- Pin, position lock and click-through are independent. Click-through requires
+- Mini-widget pin, position lock and click-through are independent. Click-through requires
   the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
   controls; the tray offers the same action.
-- Expand **Integrations** in Settings to manage modules, or in the monitor to
+- Open **Integrations** to manage modules. Expand **Integrations** in Monitoring to
   select an enabled integration and profile, then click
   **Apply profile**. Manual selection turns off Auto for that integration only.
 
@@ -76,20 +77,20 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   actions, ordered rules, and global hotkeys.
 - Automatic profile selection using running applications, input power, and
   battery charge, with independent Auto controls for each integration.
-- Independent widget scale, mini-widget metrics, and background opacity.
-- Graphite surfaces, mint actions and shared controls across windows. Percentage
+- Independent interface and mini-widget scale, metric visibility, and mini-widget background opacity.
+- Graphite surfaces, bundled Inter typography, mint actions and shared controls. Percentage
   settings provide both numeric input and a slider.
 - Saved preferences, window placement, and English/Ukrainian interface languages.
 
 ### Appearance and monitoring status
 
-Choose Panel, Overlay or Clear in Appearance. **Background opacity** ranges from
+Choose Panel, Overlay or Clear for the mini widget in Appearance. **Background opacity** ranges from
 0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain
 opaque. Clear outlines text and offers a protective background if needed.
 Appearance changes preview temporarily; Save keeps them and Cancel restores the
 saved appearance. Drafts remain available when switching dashboard pages.
 
-Enable an optional charge limit with **Set value**, or disable it to leave the
+Enable an optional charge limit with its checkbox, or disable it to leave the
 limit unset. Manual limits are local fallback values and never change the station.
 
 A stale/offline status retains the last received readings. Hover over the status
@@ -202,6 +203,7 @@ change is needed. Submit the JSON file to this project on GitHub.
 | Package | Purpose |
 | --- | --- |
 | PySide6 | Desktop interface |
+| Inter | Bundled interface font; [SIL Open Font License](ecoflow_monitor/ui/assets/fonts/OFL.txt) |
 | httpx | Official EcoFlow API requests |
 | psutil | Process discovery for integrations and application rules |
 | PyInstaller | Portable builds only |
