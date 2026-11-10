@@ -213,6 +213,8 @@ class Application(QObject):
         if self._stopped:
             return
         self._stopped = True
+        if self._dialog is not None:
+            self._dialog.reject()
         self._menu_timer.stop()
         self.accent.stop()
         if getattr(self.app, "ecoflow_accent", None) is self.accent:

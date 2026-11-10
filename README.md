@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.8.0**.
+battery charge. Version **0.11.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -125,8 +125,21 @@ helper and Windows UAC prompt. Approve only trusted integrations and executables
 
 Non-secret preferences use `settings.json` beside the portable executable or
 source tree, with `%LOCALAPPDATA%/EcoFlowMonitor` fallback if the directory is not
-writable. EcoFlow keys are stored in Windows Credential Manager and never in the
-JSON file. Close the application before editing settings by hand.
+writable. Choose Windows Credential Manager or 1Password for EcoFlow keys;
+keys never go in the JSON file. Close the application before editing settings by hand.
+
+For 1Password, install its desktop app and CLI (`op` on PATH), then enable
+Windows Hello and **Settings > Developer > Integrate with 1Password CLI** in
+1Password. In EcoFlow connection settings, choose **1Password**, paste the access
+and secret fields' **Copy Secret Reference** links (`op://…`), and fill the latest
+keys before loading devices. Save settings to keep the references. Monitoring
+reads current keys from 1Password for each API request; 1Password controls approval
+and the authorization session. Existing Windows credentials are retained when switching.
+
+To store a newly entered pair, expand **Save entered keys to 1Password** while
+using Windows Credential Manager, enter the vault and item title, and create the
+item. This creates a new Login immediately; save settings to use its references.
+Canceling settings leaves the created item in your vault.
 
 Settings use **Save**, **Reset draft**, and **Cancel**. A damaged settings file is
 preserved; an explicit recovery Save creates `settings.json.bak` before replacing

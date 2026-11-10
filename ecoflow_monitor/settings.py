@@ -9,6 +9,7 @@ import tempfile
 import uuid
 
 from ecoflow_monitor.integrations import IntegrationDefinition, afterburner_example, hotkey_actions, migrate_afterburner
+from ecoflow_monitor.credential_refs import normalize_secret_reference
 
 
 METRICS = ("battery_level", "input_power", "output_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")
@@ -30,6 +31,9 @@ def default_hotkeys() -> tuple[HotkeyBinding, ...]:
 class AppSettings:
     serial: str = ""
     credential_ref: str = field(default_factory=lambda: "EcoFlowMonitor/" + uuid.uuid4().hex)
+    credential_source: str = "windows"
+    onepassword_access_ref: str = ""
+    onepassword_secret_ref: str = ""
     capacity_wh: float = 2048
     manual_min: float | None = None
     manual_max: float | None = None
@@ -56,8 +60,14 @@ class AppSettings:
     def validate(self) -> None:
         if any(type(value) is not bool for value in (self.transparency, self.animations, self.monitor_visible, self.monitor_labels_visible, self.monitor_values_on_hover, self.mini_enabled, self.mini_above_taskbar)):
             raise ValueError("Boolean preference expected")
-        if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language)):
+        if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language, self.credential_source, self.onepassword_access_ref, self.onepassword_secret_ref)):
             raise ValueError("Text preference expected")
+        if self.credential_source not in {"windows", "1password"}:
+            raise ValueError("Invalid credential source")
+        for reference in (self.onepassword_access_ref, self.onepassword_secret_ref):
+            if reference or self.credential_source == "1password":
+                if normalize_secret_reference(reference) != reference:
+                    raise ValueError("onepassword_reference_error")
         for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
                 raise ValueError("Invalid numeric setting")
@@ -94,7 +104,9 @@ class AppSettings:
         self.validate()
         return {
             "version": 2,
-            "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
+            "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
+                        "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref},
+                        "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
@@ -114,6 +126,9 @@ class AppSettings:
         mini = data.get("mini_widget", {})
         if any(not isinstance(group, dict) for group in (eco, msi, automation, appearance, mini)):
             raise ValueError("Settings groups must be objects")
+        onepassword = eco.get("onepassword", {})
+        if not isinstance(onepassword, dict):
+            raise ValueError("1Password settings must be an object")
         def boolean(group, key, fallback):
             value = group.get(key, fallback)
             if type(value) is not bool:
@@ -130,6 +145,8 @@ class AppSettings:
             bindings = [dict(binding, action=("auto:afterburner" if binding["action"] == "toggle_auto" else "profile:afterburner:" + binding["action"] if binding["action"].startswith("profile_") else binding["action"])) for binding in bindings]
         settings = cls(
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
+            credential_source=string(eco, "credential_source", "windows"),
+            onepassword_access_ref=string(onepassword, "access_ref"), onepassword_secret_ref=string(onepassword, "secret_ref"),
             capacity_wh=eco.get("capacity_wh", 2048), manual_min=eco.get("manual_min"), manual_max=eco.get("manual_max"),
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),

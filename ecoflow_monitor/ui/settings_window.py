@@ -19,6 +19,7 @@ from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
+from ecoflow_monitor.ui.onepassword import OnePasswordPanel
 
 
 class SettingsWindow(QDialog):
@@ -50,12 +51,14 @@ class SettingsWindow(QDialog):
         buttons.addStretch()
         buttons.addWidget(action(t("cancel"), self.reject))
         save_button = action(t("save"), self.save)
+        self.save_button = save_button
         save_button.setObjectName("primary")
         buttons.addWidget(save_button)
         outer.addLayout(buttons)
         controller.devices_ready.connect(self._devices)
         self.load_draft()
         controller.changed.connect(self._refresh_metric_tooltips)
+        self.finished.connect(self._close_credentials)
         install_scrollbars(self)
 
     def _tab(self, title: str):
@@ -71,15 +74,25 @@ class SettingsWindow(QDialog):
 
     def _build_connection(self):
         layout = self._tab(t("connection_settings"))
+        self.manual_credentials = QWidget(self)
+        manual_layout = QVBoxLayout(self.manual_credentials)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
         form = QFormLayout()
         self.access = QLineEdit()
         self.secret = QLineEdit()
         self.access.setEchoMode(QLineEdit.EchoMode.Password)
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.access.setAccessibleName(t("access_key"))
+        self.secret.setAccessibleName(t("secret_key"))
         form.addRow(t("access_key"), self.access)
         form.addRow(t("secret_key"), self.secret)
-        layout.addLayout(form)
-        layout.addWidget(hint(t("credentials_hint")))
+        manual_layout.addLayout(form)
+        manual_layout.addWidget(hint(t("credentials_hint")))
+        self.onepassword = OnePasswordPanel(self._entered_credentials, self.manual_credentials, self)
+        self.onepassword.source_changed.connect(self._credential_source_changed)
+        self.onepassword.credentials_ready.connect(self._fill_credentials)
+        self.onepassword.busy_changed.connect(self._credential_busy_changed)
+        layout.addWidget(self.onepassword)
         self.discover_button = action(t("load_devices"), self.discover)
         layout.addWidget(self.discover_button)
         self.devices = QComboBox()
@@ -236,6 +249,7 @@ class SettingsWindow(QDialog):
     def load_draft(self):
         settings = self.controller.settings
         self._baseline = settings
+        self.onepassword.load(settings)
         self.access.clear()
         self.secret.clear()
         self.devices.clear()
@@ -304,12 +318,43 @@ class SettingsWindow(QDialog):
                 widget.deleteLater()
 
     def _entered_credentials(self):
+        if self.onepassword.uses_onepassword:
+            return self.onepassword.credentials
         access, secret = self.access.text().strip(), self.secret.text().strip()
         if bool(access) != bool(secret):
             raise CredentialError("credentials_required")
         return Credentials(access, secret) if access else None
 
+    def _credential_source_changed(self):
+        self.access.clear()
+        self.secret.clear()
+        self.access.setReadOnly(self.onepassword.uses_onepassword)
+        self.secret.setReadOnly(self.onepassword.uses_onepassword)
+        self.manual_credentials.setVisible(not self.onepassword.uses_onepassword)
+
+    def _fill_credentials(self, credentials):
+        if credentials is not None:
+            self.access.setText(credentials.access_key)
+            self.secret.setText(credentials.secret_key)
+
+    def _credential_busy_changed(self, busy):
+        if hasattr(self, "save_button"):
+            self.save_button.setEnabled(not busy)
+        if hasattr(self, "discover_button"):
+            self.discover_button.setEnabled(not busy)
+
+    def _close_credentials(self):
+        self.onepassword.cancel(show_status=False)
+        self.onepassword.credentials = None
+        self.access.clear()
+        self.secret.clear()
+
     def discover(self):
+        if self.onepassword.busy:
+            return
+        if self.onepassword.uses_onepassword and self.onepassword.credentials is None:
+            self.onepassword.show_status(t("onepassword_load_first"))
+            return
         try:
             credentials = self._entered_credentials()
         except CredentialError as error:
@@ -319,7 +364,7 @@ class SettingsWindow(QDialog):
         self.controller.discover(credentials)
 
     def _devices(self, devices):
-        self.discover_button.setEnabled(True)
+        self.discover_button.setEnabled(not self.onepassword.busy)
         if not devices:
             QMessageBox.warning(self, t("error_title"), t(self.controller.notice or self.controller.connection.value))
             return
@@ -346,6 +391,7 @@ class SettingsWindow(QDialog):
         merged.extend(module for module in current.integrations if module.id not in baseline and module.id not in {item.id for item in modules})
         draft = replace(
             self._baseline, serial=serial or "", capacity_wh=self.capacity.value(),
+            **self.onepassword.settings_fields(),
             manual_min=self.minimum.value() if self.minimum.value() >= 0 else None,
             manual_max=self.maximum.value() if self.maximum.value() >= 0 else None,
             integrations=tuple(merged),
@@ -369,6 +415,8 @@ class SettingsWindow(QDialog):
                      if self.metrics.item(index).data(Qt.ItemDataRole.UserRole + 1) == mode)
 
     def save(self):
+        if self.onepassword.busy:
+            return
         try:
             self.controller.apply_settings(self.gather(), self._entered_credentials())
         except (ValueError, OSError, SettingsError, CredentialError) as error:

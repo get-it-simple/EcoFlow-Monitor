@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace
 import logging
+import threading
 import time
 import uuid
 from typing import Callable
@@ -10,6 +11,7 @@ from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult
 from ecoflow_monitor.adapters.credentials import CredentialError, CredentialStore
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
+from ecoflow_monitor.adapters.onepassword import read_credentials
 from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
@@ -80,6 +82,7 @@ class Controller(QObject):
         self.integration_states = {module.id: IntegrationState() for module in self.settings.integrations}
         self._generation = 0
         self._stopped = False
+        self._credential_cancelled = threading.Event()
         self._active = {}
         self._api_pending = False
         self._discovery_pending = None
@@ -127,10 +130,10 @@ class Controller(QObject):
         if "api" in self._active:
             self._discovery_pending = (supplied,)
             return
-        reference = self.settings.credential_ref
+        settings, cancelled = self.settings, self._credential_cancelled
         self._api_mode = "devices"
         def operation():
-            credentials = supplied if supplied is not None else self.credential_store.read(reference)
+            credentials = supplied if supplied is not None else self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
             return ("devices", self.client_factory(credentials).devices())
@@ -147,10 +150,11 @@ class Controller(QObject):
             self.changed.emit()
             return
         self._api_pending = False
-        serial, reference = self.settings.serial, self.settings.credential_ref
+        settings, cancelled = self.settings, self._credential_cancelled
+        serial = settings.serial
         self._api_mode = "telemetry"
         def operation():
-            credentials = self.credential_store.read(reference)
+            credentials = self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
             try:
@@ -165,16 +169,22 @@ class Controller(QObject):
         self._submit("api", operation)
         self.changed.emit()
 
+    def _read_credentials(self, settings: AppSettings, cancelled: threading.Event) -> Credentials | None:
+        if settings.credential_source == "1password":
+            return read_credentials(settings.onepassword_access_ref, settings.onepassword_secret_ref, cancelled)
+        return self.credential_store.read(settings.credential_ref)
+
     def apply_settings(self, settings: AppSettings, credentials: Credentials | None = None) -> None:
         settings.validate()
         validate_bindings(settings.hotkeys)
-        if credentials is not None:
+        write_local = credentials is not None and settings.credential_source == "windows"
+        if write_local:
             settings = replace(settings, credential_ref="EcoFlowMonitor/" + uuid.uuid4().hex)
             self.credential_store.write(settings.credential_ref, credentials)
         try:
             self.store.save(settings, explicit=True)
         except SettingsError:
-            if credentials is not None and hasattr(self.credential_store, "delete"):
+            if write_local and hasattr(self.credential_store, "delete"):
                 try:
                     self.credential_store.delete(settings.credential_ref)
                 except CredentialError:
@@ -182,12 +192,15 @@ class Controller(QObject):
             raise
         previous = self.settings
         self.settings = settings
+        self._credential_cancelled.set()
+        self._credential_cancelled = threading.Event()
         i18n.setup(settings.language)
         if hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
         self._generation += 1
         self._discovery_pending = None
-        if (previous.serial, previous.credential_ref) != (settings.serial, settings.credential_ref):
+        credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
+        if any(getattr(previous, name) != getattr(settings, name) for name in credential_fields):
             self.telemetry = None
             self.connection = ConnectionState.CONNECTING if settings.serial else ConnectionState.UNCONFIGURED
         self._next_api = 0
@@ -319,7 +332,7 @@ class Controller(QObject):
                     self.connection = ConnectionState.LIVE
                     self._next_api = self.clock() + 30
                     self._retry = 5
-                    if self.notice in {"credentials_required", "credentials_error", *(state.value for state in ConnectionState)}:
+                    if self.notice.startswith("onepassword_") or self.notice in {"credentials_required", "credentials_error", *(state.value for state in ConnectionState)}:
                         self.notice = ""
             elif kind.startswith("scan:"):
                 integration_id = kind.split(":", 1)[1]
@@ -361,6 +374,7 @@ class Controller(QObject):
 
     def stop(self) -> None:
         self._stopped = True
+        self._credential_cancelled.set()
         self._generation += 1
         self._timer.stop()
         self._pool.clear()

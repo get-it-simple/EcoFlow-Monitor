@@ -15,7 +15,7 @@ def test_settings_roundtrip_preserves_order_and_does_not_contain_credentials(tmp
     payload = json.loads(store.path.read_text(encoding="utf-8"))
     assert payload["version"] == 2
     assert payload["integrations"][0]["system_rules"][0]["id"] == "b"
-    assert set(payload["ecoflow"]) == {"serial", "credential_ref", "capacity_wh", "manual_min", "manual_max"}
+    assert set(payload["ecoflow"]) == {"serial", "credential_ref", "credential_source", "onepassword", "capacity_wh", "manual_min", "manual_max"}
 
 
 def test_invalid_file_is_preserved_until_explicit_save_with_backup(tmp_path):
