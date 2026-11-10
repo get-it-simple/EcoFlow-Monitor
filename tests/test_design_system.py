@@ -410,7 +410,8 @@ def test_key_picker_can_change_modifiers_and_key_in_one_menu(qapp):
         menu = QApplication.activePopupWidget()
         try:
             next(box for box in menu.findChildren(QCheckBox) if box.text() == "Alt").setChecked(True)
-            next(action for action in menu.actions() if action.text() == "F24").trigger()
+            menu.search.setText("F24")
+            QTest.keyClick(menu.search, Qt.Key.Key_Return)
         except (StopIteration, AttributeError) as error:
             errors.append(error)
         finally:
@@ -516,12 +517,12 @@ def test_window_geometry_is_not_persisted_by_temporary_preview(runtime):
     assert runtime.controller.settings.dashboard_geometry == baseline
     dashboard.reject()
     dashboard._save_geometry()
-    assert runtime.controller.settings.dashboard_geometry[2:] == (600, 650)
+    assert runtime.controller.settings.dashboard_geometry[2:] == (800, 650)
 
 
 def test_shutdown_saves_last_normal_geometry_without_reopening_windows(runtime):
     dashboard = runtime.dashboard
     dashboard.resize(600, 650)
     runtime.stop()
-    assert runtime.controller.store.load().dashboard_geometry[2:] == (600, 650)
+    assert runtime.controller.store.load().dashboard_geometry[2:] == (800, 650)
     assert dashboard.isHidden() and runtime.mini.isHidden()

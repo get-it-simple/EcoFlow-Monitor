@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QScrollArea, QToolButton, QVBoxLayout, QWidget
 
@@ -30,6 +30,7 @@ class Dashboard(SettingsWindow):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.monitoring)
+        scroll.viewport().installEventFilter(self.monitoring)
         self.tabs.insertTab(0, scroll, t("monitoring"))
         self.tabs.tabBar().moveTab(2, 3)
         self.tabs.tabBar().hide()
@@ -116,6 +117,7 @@ class Dashboard(SettingsWindow):
 
     def apply_appearance(self):
         scale = effective_scale(self, self.controller.ui_settings.scale)
+        self._apply_minimum(scale)
         signature = (scale, self.controller.settings.language)
         if getattr(self, "_appearance_signature", None) == signature:
             self.refresh()
@@ -140,8 +142,24 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
             body.layout().setSpacing(round(24 * scale))
         self.resize_controls.scale = scale
         self.resize_controls.layout()
-        self.setMinimumSize(360, 320)
+        self._update_navigation_layout()
         self.refresh()
+
+    def _apply_minimum(self, scale):
+        area = self.screen().availableGeometry()
+        context = (scale, area.width(), area.height())
+        if getattr(self, "_minimum_context", None) == context:
+            return
+        self._minimum_context = context
+        size = self.size()
+        constrained = getattr(self, "_size_constraint", None)
+        preferred = constrained[0] if constrained is not None and size == constrained[1] else size
+        minimum = QSize(round(GEOMETRY["dashboard_min_width"] * scale), round(GEOMETRY["dashboard_min_height"] * scale)).boundedTo(area.size())
+        target = preferred.expandedTo(minimum).boundedTo(area.size())
+        self.setMinimumSize(minimum)
+        if not self.isMaximized() and not self.isMinimized():
+            self.resize(target)
+            self._size_constraint = (preferred, target) if preferred != target else None
 
     def _page_changed(self, index):
         self.navigation.setCurrentRow(index)
@@ -183,11 +201,14 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
         super().resizeEvent(event)
         if not hasattr(self, "sidebar"):
             return
+        self._update_navigation_layout()
+        if hasattr(self, "_geometry_timer"):
+            self._geometry_timer.start()
+
+    def _update_navigation_layout(self):
         expanded = self.width() >= round(800 * self._scale)
         self.sidebar.setVisible(expanded)
         self.navigation_button.setVisible(not expanded)
-        if hasattr(self, "_geometry_timer"):
-            self._geometry_timer.start()
 
     def moveEvent(self, event):
         super().moveEvent(event)

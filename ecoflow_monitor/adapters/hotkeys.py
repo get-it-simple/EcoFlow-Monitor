@@ -1,6 +1,7 @@
 import ctypes
 from ctypes import wintypes
 import sys
+from dataclasses import dataclass
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Signal
 from PySide6.QtWidgets import QApplication
@@ -16,15 +17,43 @@ def parse_combo(combo: str) -> tuple[int, int]:
     return combo_to_hotkey(combo)
 
 
-def validate_bindings(bindings: tuple[HotkeyBinding, ...]) -> None:
-    used = set()
+@dataclass(frozen=True)
+class HotkeyIssue:
+    action: str
+    combo: str
+    reason: str
+    other_action: str = ""
+    winerror: int = 0
+
+
+class HotkeyError(ValueError):
+    def __init__(self, issues: tuple[HotkeyIssue, ...]):
+        self.issues = issues
+        super().__init__(issues[0].reason)
+
+
+def binding_issues(bindings: tuple[HotkeyBinding, ...]) -> tuple[HotkeyIssue, ...]:
+    used = {}
+    issues = []
     for binding in bindings:
-        if not binding.enabled or not binding.combo:
+        if not binding.enabled:
             continue
-        parsed = parse_combo(binding.combo)
+        try:
+            parsed = parse_combo(binding.combo)
+        except ValueError:
+            issues.append(HotkeyIssue(binding.action, binding.combo, "invalid_hotkey"))
+            continue
         if parsed in used:
-            raise ValueError("hotkey_conflict")
-        used.add(parsed)
+            issues.append(HotkeyIssue(binding.action, binding.combo, "hotkey_conflict", used[parsed]))
+        else:
+            used[parsed] = binding.action
+    return tuple(issues)
+
+
+def validate_bindings(bindings: tuple[HotkeyBinding, ...]) -> None:
+    issues = binding_issues(bindings)
+    if issues:
+        raise HotkeyError(issues)
 
 
 class HotkeyManager(QObject, QAbstractNativeEventFilter):
@@ -37,6 +66,7 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         self._combos = {}
         self._next_id = 1
         self._installed = False
+        self.issues: tuple[HotkeyIssue, ...] = ()
 
     def stop(self) -> None:
         if sys.platform == "win32":
@@ -53,28 +83,18 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
         self._installed = False
 
     def configure(self, bindings: tuple[HotkeyBinding, ...], enabled_actions: set[str]) -> tuple[str, ...]:
+        active = tuple(binding for binding in bindings if binding.action in enabled_actions)
+        self.issues = binding_issues(active)
+        if self.issues:
+            return tuple(issue.action for issue in self.issues)
         if sys.platform != "win32":
+            self.issues = tuple(HotkeyIssue(binding.action, binding.combo, "hotkeys_unavailable") for binding in active if binding.enabled)
             return ("hotkeys_unavailable",)
-        user = ctypes.WinDLL("user32")
+        user = ctypes.WinDLL("user32", use_last_error=True)
         user.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
         user.RegisterHotKey.restype = wintypes.BOOL
         failures = []
-        used = set()
-        requested = []
-        for binding in bindings:
-            if not binding.enabled or not binding.combo or binding.action not in enabled_actions:
-                continue
-            try:
-                modifiers, key = parse_combo(binding.combo)
-                if (modifiers, key) in used:
-                    raise ValueError("hotkey_conflict")
-            except ValueError:
-                failures.append(binding.action)
-                continue
-            used.add((modifiers, key))
-            requested.append((binding.action, modifiers, key))
-        if failures:
-            return tuple(failures)
+        requested = [(binding.action, *parse_combo(binding.combo)) for binding in active if binding.enabled]
         existing = {combo: identifier for identifier, combo in self._combos.items()}
         registered = {}
         bindings_by_id = {}
@@ -86,6 +106,8 @@ class HotkeyManager(QObject, QAbstractNativeEventFilter):
                 identifier = self._next_id
                 self._next_id += 1
                 if not user.RegisterHotKey(None, identifier, modifiers | MOD_NOREPEAT, key):
+                    binding = next(item for item in active if item.action == action)
+                    self.issues = (HotkeyIssue(action, binding.combo, "hotkey_registration_failed", winerror=ctypes.get_last_error()),)
                     failures.append(action)
                     break
                 registered[identifier] = combo

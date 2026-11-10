@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.credentials import CredentialError
 from ecoflow_monitor.adapters.ecoflow import Credentials
+from ecoflow_monitor.adapters.hotkeys import HotkeyError, validate_bindings
 from ecoflow_monitor.integrations import hotkey_actions, hotkey_label
 from ecoflow_monitor.ui.integrations import IntegrationsEditor
 from ecoflow_monitor.i18n import t
@@ -16,7 +17,7 @@ from ecoflow_monitor.ui.common import action, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import optional_percent
 from ecoflow_monitor.ui.components import ActionFooter, FormLayout as QFormLayout, NumberField, SelectField as QComboBox, SettingRow, Switch
 from ecoflow_monitor.ui.metric_visibility import MetricVisibilityEditor
-from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor
+from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor, hotkey_error_text
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.percent_editor import PercentEditor
 from ecoflow_monitor.ui.sections import CollapsibleSection
@@ -91,6 +92,7 @@ class SettingsWindow(QDialog):
         self._draft_changed()
         self._focus_binding = FocusBinding(self)
         self._translations = TranslationBinding(self)
+        controller.runtime_preferences_changed.connect(self.sync_runtime_preferences)
         install_scrollbars(self)
 
     def _tab(self, title: str):
@@ -554,23 +556,22 @@ class SettingsWindow(QDialog):
         try:
             draft = self.gather(False)
             draft.validate()
-            from ecoflow_monitor.adapters.hotkey_binding import validate_bindings
-            validate_bindings([{"enabled": binding.enabled, "combo": binding.combo} for binding in draft.hotkeys])
-            if any(binding.enabled and not binding.combo for binding in draft.hotkeys):
-                raise ValueError("hotkey_conflict")
+            validate_bindings(draft.hotkeys)
             self._entered_credentials()
             self._dirty = draft != self.controller.settings or bool(self.access.text().strip() or self.secret.text().strip())
             recording = any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values())
             self.save_button.setEnabled(self._dirty and not self.onepassword.busy and not recording)
             self.error_label.clear()
+            self._show_hotkey_issues(())
             if self._dirty:
                 self.preview_changed.emit(draft)
             else:
                 self.preview_changed.emit(None)
-        except (ValueError, OSError, SettingsError, CredentialError):
+        except (ValueError, OSError, SettingsError, CredentialError) as error:
             self._dirty = True
             self.save_button.setEnabled(False)
-            self.error_label.setText(t("invalid_settings"))
+            self._show_hotkey_issues(error.issues if isinstance(error, HotkeyError) else ())
+            self.error_label.setText(hotkey_error_text(error, self.integrations_editor.modules()) if isinstance(error, HotkeyError) else t("invalid_settings"))
         self.error_label.setVisible(bool(self.error_label.text()) and (not hasattr(self, "navigation") or self.tabs.currentIndex() != 0))
 
     def _metric_group(self, mode):
@@ -582,6 +583,7 @@ class SettingsWindow(QDialog):
         rollback: Callable[[], None] | None = None
         try:
             draft = self.gather()
+            validate_bindings(draft.hotkeys)
             if self.preflight is not None:
                 rollback = self.preflight(draft)
             self.controller.apply_settings(draft, self._entered_credentials())
@@ -589,12 +591,44 @@ class SettingsWindow(QDialog):
             if rollback is not None:
                 rollback()
             key = str(error)
-            QMessageBox.warning(self, t("error_title"), t(key) if t(key) != key else t("invalid_settings"))
+            if isinstance(error, HotkeyError):
+                message = hotkey_error_text(error, self.integrations_editor.modules())
+                self._show_hotkey_issues(error.issues)
+                self.error_label.setText(message)
+                self.error_label.show()
+            else:
+                message = t(key) if t(key) != key else t("invalid_settings")
+            QMessageBox.warning(self, t("error_title"), message)
             return
         self.preview_changed.emit(None)
         self._translations.refresh()
         self.load_draft()
         self.error_label.setText(t("settings_saved"))
+
+    def _show_hotkey_issues(self, issues):
+        for name, (_, editor, _) in self.hotkey_rows.items():
+            matching = tuple(issue for issue in issues if name in (issue.action, issue.other_action))
+            editor.set_validation_error(hotkey_error_text(HotkeyError(matching), self.integrations_editor.modules()) if matching else "")
+
+    def sync_runtime_preferences(self, changes):
+        if self._loading or not ({"mini_enabled", "mini_overlay"} & changes.keys()):
+            return
+        self._loading = True
+        try:
+            if "mini_enabled" in changes:
+                with QSignalBlocker(self.mini_enabled):
+                    self.mini_enabled.setChecked(changes["mini_enabled"])
+                self._baseline = replace(self._baseline, mini_enabled=changes["mini_enabled"])
+            if "mini_overlay" in changes:
+                current = changes["mini_overlay"]
+                for name, control in self.overlay_fields["mini"].items():
+                    if name in changes["mini_overlay_fields"]:
+                        with QSignalBlocker(control):
+                            control.setChecked(getattr(current, name))
+                self._baseline = replace(self._baseline, mini_overlay=current)
+        finally:
+            self._loading = False
+        self._draft_changed()
 
     def sync_runtime_overlays(self):
         try:

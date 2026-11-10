@@ -31,6 +31,35 @@ class RuleTable(QTableWidget):
         self.verticalHeader().setDefaultSectionSize(48)
         self.horizontalHeader().setHighlightSections(False)
         self.verticalHeader().setHighlightSections(False)
+        self._fitting = False
+
+    def fit_columns(self):
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            self.resizeRowsToContents()
+            if self.editor.application:
+                return
+            columns = [index for index in range(1, self.columnCount()) if not self.isColumnHidden(index)]
+            if not columns:
+                return
+            minimums = {index: max(self.sizeHintForColumn(index), self.horizontalHeader().sectionSizeHint(index)) for index in columns}
+            extra = max(0, self.viewport().width() - self.columnWidth(0) - sum(minimums.values()))
+            share, remainder = divmod(extra, len(columns))
+            for position, index in enumerate(columns):
+                self.setColumnWidth(index, minimums[index] + share + int(position < remainder))
+        finally:
+            self._fitting = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_fitting"):
+            self.fit_columns()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_columns()
 
     def dragEnterEvent(self, event):
         if self.editor.application and event.mimeData().hasUrls():
@@ -76,7 +105,7 @@ class RulesEditor(QWidget):
             self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         else:
             for index in range(1, self.table.columnCount()):
-                self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
+                self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
         self.table.setMinimumHeight(180)
         layout.addWidget(self.table)
         buttons = ActionLayout()
@@ -100,6 +129,7 @@ class RulesEditor(QWidget):
         self.table.setColumnHidden(column + 1, "soc" not in conditions)
         self.table.setColumnHidden(column + 2, "soc" not in conditions)
         self.setVisible(not self.application or "application" in conditions)
+        self.table.fit_columns()
 
     def set_rules(self, rules: tuple[IntegrationRule, ...]) -> None:
         self.table.setRowCount(0)
@@ -140,7 +170,7 @@ class RulesEditor(QWidget):
         profile.setToolTip(profile.currentData(Qt.ItemDataRole.ToolTipRole) or "")
         self.table.setCellWidget(row, column + 3, profile)
         self.table.selectRow(row)
-        self.table.resizeRowsToContents()
+        self.table.fit_columns()
 
     def rules(self, validate_paths: bool = False) -> tuple[IntegrationRule, ...]:
         result = []

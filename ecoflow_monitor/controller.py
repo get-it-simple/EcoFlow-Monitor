@@ -60,6 +60,7 @@ class IntegrationState:
 class Controller(QObject):
     changed = Signal()
     preferences_changed = Signal()
+    runtime_preferences_changed = Signal(object)
     devices_ready = Signal(object)
     elevation_needed = Signal(str)
 
@@ -228,8 +229,12 @@ class Controller(QObject):
         self.preferences_changed.emit()
         self.changed.emit()
 
-    def update_preferences(self, **changes) -> None:
-        settings = replace(self.settings, **changes)
+    def update_preferences(self, *, mini_overlay_fields: tuple[str, ...] = (), **changes) -> None:
+        previous = self.settings
+        settings = replace(previous, **changes)
+        overlay_edits = {}
+        if "mini_overlay" in changes:
+            overlay_edits = {name: getattr(settings.mini_overlay, name) for name in settings.mini_overlay.__dataclass_fields__ if name in mini_overlay_fields or getattr(previous.mini_overlay, name) != getattr(settings.mini_overlay, name)}
         try:
             self.store.save(settings)
         except SettingsError as error:
@@ -237,6 +242,12 @@ class Controller(QObject):
         self.settings = settings
         if "integrations" in changes and hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
+        if self.preview is not None:
+            immediate = {name: value for name, value in changes.items() if name in {"mini_enabled", "mini_position"}}
+            if overlay_edits:
+                immediate["mini_overlay"] = replace(self.preview.mini_overlay, **overlay_edits)
+            self.preview = replace(self.preview, **immediate)
+        self.runtime_preferences_changed.emit({**changes, "mini_overlay_fields": tuple(overlay_edits)})
         if set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
             self.preferences_changed.emit()
         self.changed.emit()

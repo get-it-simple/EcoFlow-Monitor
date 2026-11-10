@@ -296,6 +296,7 @@ class IntegrationsEditor(QWidget):
         mapping_body = QWidget()
         mapping_layout = QVBoxLayout(mapping_body)
         self.mapping = QTableWidget(0, 3)
+        self.mapping.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.mapping.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.mapping.horizontalHeader().setHighlightSections(False)
         self.mapping.verticalHeader().setHighlightSections(False)

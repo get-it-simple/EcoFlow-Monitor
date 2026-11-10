@@ -1,16 +1,17 @@
 from datetime import datetime
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtWidgets import QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, effective_scale, hint, number, profile_tooltip
-from ecoflow_monitor.ui.components import SelectField as QComboBox, SettingRow, StatusBadge, Switch
+from ecoflow_monitor.ui.components import ActionLayout, SelectField as QComboBox, SettingRow, StatusBadge, Switch
 from ecoflow_monitor.ui.limits import ChargeLimits
 from ecoflow_monitor.ui.metrics import metric_label
 from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
+from ecoflow_monitor.ui.tokens import GEOMETRY
 
 
 class MonitoringPage(QWidget):
@@ -21,7 +22,7 @@ class MonitoringPage(QWidget):
         self.box = QVBoxLayout(self)
         self.box.setContentsMargins(32, 24, 32, 32)
         self.box.setSpacing(24)
-        heading_row = QHBoxLayout()
+        self.heading_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         title_box = QVBoxLayout()
         self.heading = QLabel(t("monitoring_heading"), self)
         self.heading.setObjectName("page_title")
@@ -29,13 +30,17 @@ class MonitoringPage(QWidget):
         self.updated = hint("")
         title_box.addWidget(self.heading)
         title_box.addWidget(self.updated)
-        heading_row.addLayout(title_box, 1)
+        self.heading_row.addLayout(title_box, 1)
+        badges = QWidget(self)
+        badge_row = QHBoxLayout(badges)
+        badge_row.setContentsMargins(0, 0, 0, 0)
         self.status = StatusBadge(controller, self)
-        heading_row.addWidget(self.status, 0, Qt.AlignmentFlag.AlignTop)
+        badge_row.addWidget(self.status)
         self.notifications = NotificationIndicator(self)
         self.notifications.setProperty("icon_button", True)
-        heading_row.addWidget(self.notifications, 0, Qt.AlignmentFlag.AlignTop)
-        self.box.addLayout(heading_row)
+        badge_row.addWidget(self.notifications)
+        self.heading_row.addWidget(badges, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.box.addLayout(self.heading_row)
         self.metric_grid = QGridLayout()
         self.metric_grid.setSpacing(8)
         self.cards = []
@@ -84,7 +89,7 @@ class MonitoringPage(QWidget):
         self.port_hint = hint(t("outputs_read_only"))
         self.port_box.addWidget(self.port_hint)
         self.box.addLayout(self.details)
-        bottom = QHBoxLayout()
+        bottom = ActionLayout()
         self.limits = ChargeLimits(controller, self)
         bottom.addWidget(self.limits, 1)
         self.open_mini_button = action(t("open_mini_widget"), open_mini)
@@ -154,7 +159,9 @@ class MonitoringPage(QWidget):
 
     def reflow(self):
         scale = getattr(self.window(), "_scale", effective_scale(self, self.controller.ui_settings.scale))
-        width = max(1, self.width() - 64 * scale)
+        available = min(self.width(), self.parentWidget().width()) if self.parentWidget() is not None else self.width()
+        width = max(1, available - 64 * scale)
+        self.heading_row.setDirection(QBoxLayout.Direction.TopToBottom if width < GEOMETRY["form_breakpoint"] * scale else QBoxLayout.Direction.LeftToRight)
         columns = 4 if width >= 840 * scale else 2 if width >= 420 * scale else 1
         if columns == self._columns:
             return
@@ -174,6 +181,11 @@ class MonitoringPage(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "readings"):
             self.reflow()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize:
+            self.reflow()
+        return super().eventFilter(watched, event)
 
     def refresh_integrations(self):
         modules = tuple(module for module in self.controller.settings.integrations if module.enabled)

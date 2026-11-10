@@ -5,19 +5,19 @@ from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from ecoflow_monitor.adapters.hotkeys import HotkeyManager
+from ecoflow_monitor.adapters.hotkeys import HotkeyError, HotkeyIssue, HotkeyManager, validate_bindings
 from ecoflow_monitor.adapters.accent import AccentWatcher
 from ecoflow_monitor.adapters.motion import MotionPreference
 from ecoflow_monitor.adapters.windows import activate_window
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
-from ecoflow_monitor.integrations import hotkey_label
 from ecoflow_monitor.ui.common import app_icon, elevation_prompt, font_family
 from ecoflow_monitor.ui.mini import MiniWidget
 from ecoflow_monitor.ui.dashboard import Dashboard
 from ecoflow_monitor.ui.components import DialogChrome
 from ecoflow_monitor.ui.theme import menu_style
+from ecoflow_monitor.ui.hotkey_editor import hotkey_error_text
 
 
 class Application(QObject):
@@ -119,16 +119,12 @@ class Application(QObject):
         self.menu.addSeparator()
         self.menu.addAction(t("exit"), self.app.quit)
         self.tray.setToolTip(t("app_title"))
-        enabled_actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
-        for module in self.controller.settings.integrations:
-            if module.enabled:
-                enabled_actions.add("auto:" + module.id)
-                enabled_actions.update("profile:" + module.id + ":" + profile.id for profile in module.profiles)
+        enabled_actions = self._enabled_hotkey_actions(self.controller.settings)
         signature = (self.controller.settings.hotkeys, frozenset(enabled_actions), self.controller.settings.language)
         if self.native and signature != self._hotkey_signature:
             self._hotkey_signature = signature
             failures = self.hotkeys.configure(self.controller.settings.hotkeys, enabled_actions)
-            self._hotkey_notice = t("hotkey_failed").format(actions=", ".join(hotkey_label(action, self.controller.settings.integrations) for action in failures)) if failures else ""
+            self._hotkey_notice = self._registration_error(failures, self.controller.settings) if failures else ""
         recovery = next((binding for binding in self.controller.settings.hotkeys if binding.action == "recover_widgets"), None)
         ready = self.native and self.tray.isVisible() and recovery is not None and recovery.enabled and bool(recovery.combo) and "recover_widgets" in self.hotkeys._bindings.values()
         if self._started and not ready and self.controller.settings.mini_overlay.click_through:
@@ -258,40 +254,61 @@ class Application(QObject):
 
     def preflight_settings(self, settings):
         previous = self.controller.settings
-        actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
-        for module in settings.integrations:
-            if module.enabled:
-                actions.add("auto:" + module.id)
-                actions.update("profile:" + module.id + ":" + profile.id for profile in module.profiles)
+        validate_bindings(settings.hotkeys)
+        actions = self._enabled_hotkey_actions(settings)
         wants_passthrough = settings.mini_overlay.click_through
         if wants_passthrough and (not self.native or not self.tray.isVisible()):
             raise ValueError("click_through_unavailable")
         binding = next((item for item in settings.hotkeys if item.action == "recover_widgets"), None)
         if wants_passthrough and (binding is None or not binding.enabled or not binding.combo):
             raise ValueError("click_through_unavailable")
-        if self.native:
+        old_modules = {(module.id, tuple(profile.id for profile in module.profiles)) for module in previous.integrations if module.enabled}
+        new_modules = {(module.id, tuple(profile.id for profile in module.profiles)) for module in settings.integrations if module.enabled}
+        registration_changed = set(settings.hotkeys) != set(previous.hotkeys) or old_modules != new_modules
+        needs_recovery = wants_passthrough and not previous.mini_overlay.click_through
+        configured = self.native and (registration_changed or needs_recovery)
+        if configured:
             failures = self.hotkeys.configure(settings.hotkeys, actions)
             if failures:
-                raise ValueError("hotkey_conflict")
+                raise self._hotkey_error(failures, settings)
+        if wants_passthrough and "recover_widgets" not in self.hotkeys._bindings.values():
+            if configured:
+                self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
+            raise ValueError("click_through_unavailable")
         def rollback():
-            if self.native:
-                from ecoflow_monitor.integrations import hotkey_actions
-                self.hotkeys.configure(previous.hotkeys, set(hotkey_actions(previous.integrations)))
+            if configured:
+                self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
         return rollback
+
+    @staticmethod
+    def _enabled_hotkey_actions(settings):
+        actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
+        for module in settings.integrations:
+            if module.enabled:
+                actions.add("auto:" + module.id)
+                actions.update("profile:" + module.id + ":" + profile.id for profile in module.profiles)
+        return actions
+
+    def _hotkey_error(self, failures, settings):
+        issues = self.hotkeys.issues or tuple(HotkeyIssue(action, next((binding.combo for binding in settings.hotkeys if binding.action == action), ""), "hotkey_registration_failed") for action in failures)
+        return HotkeyError(issues)
+
+    def _registration_error(self, failures, settings):
+        return hotkey_error_text(self._hotkey_error(failures, settings), settings.integrations)
 
     def set_overlay(self, kind, preferences):
         if kind != "mini":
             return False
         settings = replace(self.controller.settings, **{kind + "_overlay": preferences})
         try:
-            rollback = self.preflight_settings(settings)
+            rollback = self.preflight_settings(settings) if preferences.click_through else lambda: None
             try:
                 self.controller.update_preferences(**{kind + "_overlay": preferences})
             except OSError:
                 rollback()
                 raise
         except (ValueError, OSError) as error:
-            self._hotkey_notice = t(str(error))
+            self._hotkey_notice = hotkey_error_text(error, settings.integrations) if isinstance(error, HotkeyError) else t(str(error))
             self.dashboard.monitoring.hotkey_notice = self._hotkey_notice
             self.dashboard.refresh()
             self.mini.overlay.apply()
@@ -299,7 +316,7 @@ class Application(QObject):
         return True
 
     def recover_widgets(self):
-        self.controller.update_preferences(mini_overlay=replace(self.controller.settings.mini_overlay, click_through=False))
+        self.controller.update_preferences(mini_overlay=replace(self.controller.settings.mini_overlay, click_through=False), mini_overlay_fields=("click_through",))
 
     def stop(self):
         if self._stopped:

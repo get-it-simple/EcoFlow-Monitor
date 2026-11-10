@@ -133,16 +133,16 @@ class SettingRow(QWidget):
         self.label.setBuddy(self.control)
 
     def minimumSizeHint(self):
-        return QSize(0, self.control.minimumSizeHint().height())
+        return QSize(0, self.heightForWidth(max(1, self.width())))
 
     def sizeHint(self):
         return QSize(600, self.heightForWidth(max(300, self.width())))
 
     def heightForWidth(self, width):
         scale = max(0.5, self.font().pixelSize() / 14)
-        control_height = self.control.sizeHint().height()
+        control_height = max(self.control.sizeHint().height(), self.control.minimumSizeHint().height())
         if width < GEOMETRY["form_breakpoint"] * scale:
-            return max(self.label.fontMetrics().height(), self.label.heightForWidth(max(1, width))) + round(8 * scale) + control_height
+            return max(self.label.minimumSizeHint().height(), self.label.sizeHint().height(), self.label.heightForWidth(max(1, width))) + round(8 * scale) + control_height
         field_width = GEOMETRY["range_width"] if self.control.property("wide_field") else GEOMETRY["field_width"]
         return max(control_height, self.label.heightForWidth(max(1, round(width - (field_width + 24) * scale))))
 
@@ -158,6 +158,7 @@ class SettingRow(QWidget):
         if isinstance(self.control, Switch):
             self.control.setMinimumWidth(0)
             self.row.setAlignment(self.control, Qt.AlignmentFlag.AlignLeft if vertical else Qt.AlignmentFlag.AlignRight)
+        self.updateGeometry()
 
 
 class FormLayout(QFormLayout):

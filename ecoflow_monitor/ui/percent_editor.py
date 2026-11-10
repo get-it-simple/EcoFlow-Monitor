@@ -1,5 +1,5 @@
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QSlider, QWidget
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, Signal
+from PySide6.QtWidgets import QCheckBox, QGridLayout, QSlider, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.components import NumberField
@@ -27,20 +27,50 @@ class PercentEditor(QWidget):
             self.toggle.setAccessibleName(t("percent_enabled"))
             if compact:
                 self.toggle.setText("")
-        layout = QHBoxLayout(self)
+        self._compact = compact
+        self._stacked = None
+        layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
         if self.toggle is not None:
-            layout.addWidget(self.toggle)
             self.toggle.toggled.connect(self._enabled_changed)
-        layout.addWidget(self.spin, 1)
-        layout.addWidget(self.slider, 2)
-        if compact:
-            self.slider.hide()
+        self._reflow()
         self.setFocusProxy(self.spin)
         self.spin.valueChanged.connect(self._spin_changed)
         self.slider.valueChanged.connect(self.spin.setValue)
         self._sync_enabled()
+
+    def _reflow(self):
+        scale = max(0.5, self.font().pixelSize() / 14)
+        self.slider.setMinimumHeight(round(24 * scale))
+        stacked = self._compact or self.width() < round(280 * scale)
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        layout = self.layout()
+        for widget in (self.toggle, self.spin, self.slider):
+            if widget is not None:
+                layout.removeWidget(widget)
+        column = int(self.toggle is not None)
+        if self.toggle is not None:
+            layout.addWidget(self.toggle, 0, 0)
+        layout.addWidget(self.spin, 0, column)
+        if stacked:
+            layout.addWidget(self.slider, 1, 0, 1, column + 1)
+        else:
+            layout.addWidget(self.slider, 0, column + 1)
+        layout.setColumnStretch(column, 1)
+        layout.setColumnStretch(column + 1, 0 if stacked else 2)
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reflow()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and hasattr(self, "_compact"):
+            self._reflow()
 
     def value(self) -> float:
         return self.spin.value() if self.toggle is None or self.toggle.isChecked() else -1

@@ -110,7 +110,7 @@ class MiniWidget(QFrame):
             self.grid.setSpacing(round(8 * scale))
             for button in (self.overlay.pin, self.overlay.menu_button, self.reveal_button, self.close_button):
                 size = round(36 * scale)
-                button.setStyleSheet(f"padding: 0; min-height: {size - 2}px; max-height: {size - 2}px; min-width: {size - 2}px; max-width: {size - 2}px;")
+                button.setStyleSheet(f"QToolButton {{ padding: 0; min-height: {size - 2}px; max-height: {size - 2}px; min-width: {size - 2}px; max-width: {size - 2}px; }} QToolButton::menu-indicator {{ image: none; }}")
                 button.setFixedSize(size, size)
                 button.setIconSize(QSize(round(20 * scale), round(20 * scale)))
             offset = 0

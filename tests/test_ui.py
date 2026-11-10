@@ -512,34 +512,37 @@ def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, 
 
 
 def test_scale_roundtrip_does_not_accumulate_window_height(runtime, qapp):
-    runtime.window.resize(600, 700)
+    runtime.window.resize(800, 700)
     for _ in range(3):
         runtime.controller.apply_settings(replace(runtime.controller.settings, scale=0.5))
         qapp.processEvents()
         runtime.controller.apply_settings(replace(runtime.controller.settings, scale=1))
         qapp.processEvents()
-    assert runtime.window.width() == 600
+    assert runtime.window.width() == 800
     assert runtime.window.height() == 700
 
 
 def test_zooming_past_screen_then_back_preserves_logical_geometry(runtime, qapp):
-    runtime.window.resize(600, 700)
+    runtime.window.resize(800, 700)
     for scale in (0.5, 3, 1):
         runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale))
         qapp.processEvents()
-    assert runtime.window.width() == 600
+    assert runtime.window.width() == 800
     assert runtime.window.height() == 700
 
 
-def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp):
+def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QScreen
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: QRect(0, 0, 2400, 1800))
     store = SettingsStore(tmp_path / "scaled.json")
     from ecoflow_monitor.settings import AppSettings
-    store.save(replace(AppSettings(), scale=1.5, dashboard_geometry=(0, 0, 700, 800)))
+    store.save(replace(AppSettings(), scale=1.5, dashboard_geometry=(0, 0, 1400, 1000)))
     controller = Controller(store, NoCredentials())
     instance = Application(store.path, native=False, controller=controller)
     try:
         qapp.processEvents()
-        assert instance.window.width() == 700 and instance.window.height() == 800
+        assert instance.window.width() == 1400 and instance.window.height() == 1000
     finally:
         instance.stop()
         instance.window.deleteLater()

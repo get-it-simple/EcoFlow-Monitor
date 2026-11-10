@@ -1,10 +1,31 @@
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QSizePolicy, QToolButton, QWidgetAction
+from PySide6.QtWidgets import QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QSizePolicy, QToolButton, QVBoxLayout
 
-from ecoflow_monitor.adapters.hotkey_binding import VALID_MODIFIERS, parse_combo
+from ecoflow_monitor.adapters.hotkey_binding import parse_combo
+from ecoflow_monitor.adapters.hotkeys import HotkeyError
+from ecoflow_monitor.integrations import hotkey_label
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.reference_style import icon_path
+from ecoflow_monitor.ui.tokens import COLORS, RADIUS
+from ecoflow_monitor.ui.scrollbar import install_scrollbars
+
+
+def hotkey_error_text(error: HotkeyError, modules) -> str:
+    messages = []
+    for issue in error.issues:
+        action = hotkey_label(issue.action, modules)
+        combo = issue.combo or t("press_shortcut")
+        if issue.reason == "hotkey_conflict":
+            message = t("hotkey_duplicate_detail").format(combo=combo, action=action, other=hotkey_label(issue.other_action, modules))
+        elif issue.reason == "hotkey_registration_failed":
+            message = t("hotkey_registration_detail").format(combo=combo, action=action)
+            if issue.winerror:
+                message += " " + t("hotkey_windows_error").format(code=issue.winerror)
+        else:
+            message = action + " (" + combo + "): " + t(issue.reason)
+        messages.append(message)
+    return "\n".join(messages)
 
 
 KEY_OPTIONS = [
@@ -27,6 +48,77 @@ KEY_EVENTS = {
 }
 
 
+class KeyPicker(QDialog):
+    def __init__(self, editor):
+        super().__init__(editor, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("key_picker")
+        self.setAccessibleName(t("choose_key"))
+        scale = max(0.5, editor.font().pixelSize() / 14)
+        self.setStyleSheet(f"QDialog#key_picker {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {round(RADIUS['control'] * scale)}px; }}")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(*([round(8 * scale)] * 4))
+        layout.setSpacing(round(8 * scale))
+        modifiers = QGridLayout()
+        tokens = parse_combo(editor.combo())
+        self.modifiers = {}
+        for index, name in enumerate(("ctrl", "alt", "shift", "win")):
+            checkbox = QCheckBox(name.title(), self)
+            checkbox.setChecked(name in tokens)
+            modifiers.addWidget(checkbox, index // 2, index % 2)
+            self.modifiers[name] = checkbox
+        layout.addLayout(modifiers)
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText(t("search_keys"))
+        self.search.setAccessibleName(t("search_keys"))
+        self.search.installEventFilter(self)
+        layout.addWidget(self.search)
+        self.keys = QListWidget(self)
+        self.keys.setAccessibleName(t("choose_key"))
+        self.keys.setMinimumSize(0, 0)
+        layout.addWidget(self.keys, 1)
+        for value, label in KEY_OPTIONS:
+            item = QListWidgetItem(label, self.keys)
+            item.setData(Qt.ItemDataRole.UserRole, value)
+            if value in tokens:
+                self.keys.setCurrentItem(item)
+        if self.keys.currentRow() < 0:
+            self.keys.setCurrentRow(0)
+        self.keys.itemClicked.connect(self._choose)
+        self.keys.itemActivated.connect(self._choose)
+        self.search.textChanged.connect(self._filter)
+        area = editor.screen().availableGeometry()
+        self.setFixedSize(min(round(280 * scale), area.width()), min(round(480 * scale), round(area.height() * 0.6)))
+        anchor = editor.record_button.mapToGlobal(editor.record_button.rect().bottomLeft())
+        y = anchor.y() if anchor.y() + self.height() <= area.bottom() + 1 else anchor.y() - editor.record_button.height() - self.height()
+        self.move(QPoint(min(max(anchor.x(), area.left()), area.right() - self.width() + 1), min(max(y, area.top()), area.bottom() - self.height() + 1)))
+        self.combo = ""
+        install_scrollbars(self)
+        self.search.setFocus()
+
+    def _filter(self, query):
+        for index in range(self.keys.count()):
+            item = self.keys.item(index)
+            item.setHidden(query.casefold() not in item.text().casefold())
+        visible = next((index for index in range(self.keys.count()) if not self.keys.item(index).isHidden()), -1)
+        self.keys.setCurrentRow(visible)
+
+    def _choose(self, item):
+        if item is None or item.isHidden():
+            return
+        self.combo = "+".join([name for name, checkbox in self.modifiers.items() if checkbox.isChecked()] + [item.data(Qt.ItemDataRole.UserRole)])
+        self.accept()
+
+    def eventFilter(self, watched, event):
+        if watched is self.search and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                self.keys.setFocus()
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._choose(self.keys.currentItem())
+                return True
+        return super().eventFilter(watched, event)
+
+
 class HotkeyComboEditor(QFrame):
     comboChanged = Signal()
 
@@ -36,6 +128,7 @@ class HotkeyComboEditor(QFrame):
         self._recording = False
         self._before_recording = combo
         self._conflict = False
+        self._validation_error = ""
         self.accept_combo = None
         self.setObjectName("hotkeyComboInput")
         self.setProperty("focus_target", True)
@@ -72,18 +165,27 @@ class HotkeyComboEditor(QFrame):
     def set_combo(self, combo):
         self._combo = "+".join(parse_combo(combo))
         self._conflict = False
+        self.set_validation_error("")
         self._render_state()
         self.comboChanged.emit()
 
     def clear(self):
         self.set_combo("")
 
+    def set_validation_error(self, message):
+        if message != self._validation_error:
+            self._validation_error = message
+            self.setToolTip(message)
+            self.setAccessibleDescription(message)
+            self._render_state()
+
     def _render_state(self):
         while self.content.count():
             widget = self.content.takeAt(0).widget()
             widget.hide()
             widget.deleteLater()
-        self.setProperty("state", "recording" if self._recording else "conflict" if self._conflict else "assigned" if self._combo else "empty")
+        conflict = self._conflict or bool(self._validation_error)
+        self.setProperty("state", "recording" if self._recording else "conflict" if conflict else "assigned" if self._combo else "empty")
         try:
             tokens = parse_combo(self._combo) if self.isEnabled() and not self._recording and not self._conflict else []
         except ValueError:
@@ -98,7 +200,7 @@ class HotkeyComboEditor(QFrame):
                 self.content.addWidget(label)
         else:
             key = "recording_shortcut" if self._recording else "hotkey_conflict" if self._conflict else "press_shortcut" if self.isEnabled() else "hotkey_disabled"
-            label = QLabel(t(key), self)
+            label = QLabel(self._validation_error or t(key), self)
             label.setWordWrap(True)
             label.setObjectName("form_error" if self._conflict else "secondary")
             self.content.addWidget(label)
@@ -177,29 +279,9 @@ class HotkeyComboEditor(QFrame):
 
     def choose_key(self):
         self._before_recording = self._combo
-        menu = QMenu(self)
-        tokens = parse_combo(self._combo)
-        for modifier in ("ctrl", "alt", "shift", "win"):
-            checkbox = QCheckBox(modifier.title(), menu)
-            checkbox.setChecked(modifier in tokens)
-            checkbox.toggled.connect(lambda checked, value=modifier: tokens.append(value) if checked else tokens.remove(value))
-            action = QWidgetAction(menu)
-            action.setDefaultWidget(checkbox)
-            menu.addAction(action)
-        menu.addSeparator()
-        search = QLineEdit(menu)
-        search.setPlaceholderText(t("search_keys"))
-        search.setAccessibleName(t("search_keys"))
-        search_action = QWidgetAction(menu)
-        search_action.setDefaultWidget(search)
-        menu.addAction(search_action)
-        actions = []
-        for value, label in KEY_OPTIONS:
-            action = menu.addAction(label)
-            action.triggered.connect(lambda checked=False, key=value: self.assign("+".join([token for token in tokens if token in VALID_MODIFIERS] + [key])))
-            actions.append(action)
-        search.textChanged.connect(lambda query: [action.setVisible(query.casefold() in action.text().casefold()) for action in actions])
-        menu.setStyleSheet(menu.styleSheet() + "QMenu { menu-scrollable: 1; }")
-        menu.exec(self.record_button.mapToGlobal(self.record_button.rect().bottomLeft()))
+        menu = KeyPicker(self)
+        if menu.exec() == QDialog.DialogCode.Accepted:
+            self.assign(menu.combo)
         menu.deleteLater()
-        self.setFocus()
+        self.window().activateWindow()
+        self.setFocus(Qt.FocusReason.PopupFocusReason)

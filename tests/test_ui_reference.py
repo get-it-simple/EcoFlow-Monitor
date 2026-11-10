@@ -83,7 +83,7 @@ def test_status_icon_and_tooltip_are_shared_by_both_widgets(runtime, qapp, state
         assert color in label.styleSheet()
         assert "\n" in label.toolTip()
         assert label.accessibleName() == label.toolTip()
-    assert runtime.window.monitoring.status.parentWidget() is runtime.window.monitoring
+    assert runtime.window.monitoring.isAncestorOf(runtime.window.monitoring.status)
 
 
 def test_hotkey_editor_keeps_reference_capture_selection_and_clear(qapp):
@@ -138,7 +138,7 @@ def test_manager_replaces_bindings_delivers_both_event_types_and_reports_conflic
         registered.pop(identifier)
         return True
     user = SimpleNamespace(RegisterHotKey=NativeFunction(register), UnregisterHotKey=NativeFunction(unregister))
-    monkeypatch.setattr(hotkeys.ctypes, "WinDLL", lambda name: user)
+    monkeypatch.setattr(hotkeys.ctypes, "WinDLL", lambda name, **kwargs: user)
     manager = hotkeys.HotkeyManager()
     received = []
     manager.triggered.connect(received.append)
