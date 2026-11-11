@@ -93,7 +93,14 @@ def normalize_telemetry(data: dict, utc: float, monotonic: float) -> Telemetry:
         device_discharge_minutes=metric(data.get("cmsDsgRemTime")),
         device_charge_minutes=metric(data.get("cmsChgRemTime")),
         charging_state=int(state) if state is not None and state.is_integer() else None,
+        ac_enabled=outlet_state(data.get("flowInfoAcOut")),
+        dc_enabled=outlet_state(data.get("flowInfo12v")),
     )
+
+
+def outlet_state(value: Any) -> bool | None:
+    number = metric(value)
+    return number != 4 if number is not None and number.is_integer() else None
 
 
 class EcoFlowClient:

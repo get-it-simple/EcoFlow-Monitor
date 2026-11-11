@@ -104,6 +104,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.window.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     qapp.processEvents()
     i18n.setup("en")
@@ -277,7 +278,7 @@ def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, langua
     dialog = runtime.dashboard
     dialog.show()
     dialog.navigation.setCurrentRow(2)
-    dialog.appearance_tabs.setCurrentIndex(1)
+    dialog.appearance_tabs.setCurrentIndex(2)
     qapp.processEvents()
     rows = list(dialog.metrics.rows.values())
     for row in rows:
@@ -445,15 +446,15 @@ def test_flow_animation_stops_when_hidden_or_stale(runtime, qapp):
     runtime.window.show()
     runtime.window.refresh()
     qapp.processEvents()
-    assert runtime.window.monitoring.balance._timer.isActive()
+    assert runtime.window.monitoring.balance.motion_active()
     controller.connection = ConnectionState.STALE
     runtime.window.refresh()
-    assert not runtime.window.monitoring.balance._timer.isActive()
+    assert not runtime.window.monitoring.balance.motion_active()
     assert metric_text(controller, "estimated_runtime") == "—"
     controller.connection = ConnectionState.LIVE
     runtime.window.refresh()
     runtime.window.hide()
-    assert not runtime.window.monitoring.balance._timer.isActive()
+    assert not runtime.motion_driver.visible(runtime.window.monitoring.balance)
 
 
 def test_requested_profile_is_not_shown_as_confirmed(runtime):
@@ -553,6 +554,7 @@ def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp, mo
         instance.stop()
         instance.window.deleteLater()
         instance.mini.deleteLater()
+        instance.main.deleteLater()
 
 
 @pytest.mark.design
@@ -656,7 +658,7 @@ def test_shutdown_prevents_later_window_show(runtime, qapp, visible):
     qapp.processEvents()
     assert window.isHidden()
     assert not window._geometry_timer.isActive()
-    assert not window.monitoring.balance._timer.isActive()
+    assert not runtime.motion_driver._timer.isActive()
 
 
 @pytest.mark.parametrize("enabled,alpha", [(True, 209), (False, 255)])

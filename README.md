@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.12.0**.
+battery charge. Version **0.13.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -50,7 +50,7 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 ## Everyday controls
 
 - The dashboard opens on startup. Use its sidebar for monitoring and settings,
-  and open the separate mini widget when needed. Closing the main window offers
+  and enable the separate Main or Mini widget when needed. Closing the main window offers
   to save or discard pending changes, then hides it; use the tray menu to exit.
 - Launching the application again restores and focuses the dashboard.
   Only one instance runs per user in a Windows session, even from another folder.
@@ -62,7 +62,7 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   Move up/Move down within each visibility group. Drag the mini widget by its
   heading; docking and taskbar overlap
   are optional.
-- Mini-widget pin, position lock and click-through are independent. Click-through requires
+- Main and Mini have independent scale, background, pin, position lock and click-through. Click-through requires
   the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
   controls; the tray offers the same action.
 - Open **Integrations** to manage modules. Expand **Integrations** in Monitoring to
@@ -84,11 +84,17 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 
 ### Appearance and monitoring status
 
-Choose Panel, Overlay or Clear for the mini widget in Appearance. **Background opacity** ranges from
+Choose Panel, Overlay or Clear for either widget in Appearance. **Background opacity** ranges from
 0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain
 opaque. Clear outlines text and offers a protective background if needed.
 Appearance changes preview temporarily; Save keeps them and Cancel restores the
 saved appearance. Drafts remain available when switching dashboard pages.
+
+Turn off **Animations** in Appearance to stop energy waves, status motion and
+animated value transitions everywhere. Windows animation preferences are also
+respected. Animation timing follows elapsed time; heavy load can reduce the number
+of displayed frames without slowing the cycle. Clear allows a faint decorative
+wave while keeping its base background at 0%.
 
 Enable an optional charge limit with its checkbox, or disable it to leave the
 limit unset. Manual limits are local fallback values and never change the station.

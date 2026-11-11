@@ -29,6 +29,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.window.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     qapp.processEvents()
 
 
@@ -57,7 +58,7 @@ def test_display_preferences_reject_non_booleans(key, invalid):
 def test_display_drafts_reset_save_cancel_and_merge(runtime):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
-        assert dialog.appearance_tabs.count() == 2
+        assert dialog.appearance_tabs.count() == 3
         dialog.appearance_tabs.setCurrentIndex(0)
         dialog.monitor_labels_visible.setChecked(False)
         dialog.monitor_values_on_hover.setChecked(True)
@@ -206,7 +207,7 @@ def test_scrollbars_grow_without_changing_viewport_and_drag_normally(runtime, qa
     try:
         dialog.show()
         dialog.tabs.setCurrentIndex(2)
-        dialog.appearance_tabs.setCurrentIndex(1)
+        dialog.appearance_tabs.setCurrentIndex(2)
         dialog.resize(600, 400)
         qapp.processEvents()
         for area in dialog.findChildren(QAbstractScrollArea):

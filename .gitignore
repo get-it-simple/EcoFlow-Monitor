@@ -19,6 +19,7 @@ venv/
 !.run/Tests (serial).run.xml
 !.run/Tests (design).run.xml
 !.run/Tests (integrations).run.xml
+!.run/Tests (motion).run.xml
 /docs/
 settings.json
 settings.json.bak

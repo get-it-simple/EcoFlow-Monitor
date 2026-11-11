@@ -60,9 +60,11 @@ def main() -> None:
         report = Path(directory) / "smoke.json"
         result = subprocess.run([str(executable), "--smoke-test", "--smoke-output", str(report)], cwd=directory, timeout=90, check=False)
         if result.returncode != 0 or not report.is_file():
-            raise RuntimeError("Executable smoke did not finish successfully")
+            details = report.read_text(encoding="utf-8") if report.is_file() else "No synthetic smoke report was written"
+            raise RuntimeError(f"Executable smoke exited {result.returncode}: {details}")
         data = json.loads(report.read_text(encoding="utf-8"))
         expected = {"version": __version__, "state": "not_configured", "main_visible": True, "msi_hidden": True, "ukrainian": True, "mini_visible": True, "integration_example": True, "custom_integration": True, "schema_roundtrip": True, "dashboard_visible": True, "design_tokens": True, "inter_font": True, "single_main_window": True}
+        expected.update(motion_tokens=True, main_overlay_default_hidden=True, main_overlay_visible=True, motion_disabled=True)
         if any(data.get(key) != value for key, value in expected.items()) or not {"en", "uk"} <= set(data.get("languages", [])):
             raise RuntimeError("Executable smoke report failed acceptance checks")
     print(f"Executable smoke passed: {__version__}, native windows, both catalogs, mini widget, MSI example, custom integration, schema migration, PE metadata and application icon")

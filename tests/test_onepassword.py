@@ -435,6 +435,7 @@ def test_application_exit_cancels_lookup_in_open_settings(controller, qapp, monk
         dialog.deleteLater()
         runtime.window.deleteLater()
         runtime.mini.deleteLater()
+        runtime.main.deleteLater()
         runtime.deleteLater()
         qapp.processEvents()
 

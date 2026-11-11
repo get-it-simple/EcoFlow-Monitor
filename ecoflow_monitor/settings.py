@@ -13,7 +13,7 @@ from ecoflow_monitor.credential_refs import normalize_secret_reference
 
 
 METRICS = ("battery_level", "input_power", "output_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")
-HOTKEY_ACTIONS = ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets")
+HOTKEY_ACTIONS = ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main")
 
 
 @dataclass(frozen=True)
@@ -86,13 +86,15 @@ class AppSettings:
     metric_order: tuple[str, ...] = METRICS
     manual_min_retained: float = 20
     manual_max_retained: float = 90
+    main_enabled: bool = False
+    main_scale: float = 1
 
     def validate(self) -> None:
         self.main_overlay.validate()
         self.mini_overlay.validate()
         if len(self.metric_order) != len(METRICS) or set(self.metric_order) != set(METRICS):
             raise ValueError("Invalid metric order")
-        if any(type(value) is not bool for value in (self.transparency, self.animations, self.monitor_visible, self.monitor_labels_visible, self.monitor_values_on_hover, self.mini_enabled, self.mini_above_taskbar)):
+        if any(type(value) is not bool for value in (self.transparency, self.animations, self.main_enabled, self.monitor_visible, self.monitor_labels_visible, self.monitor_values_on_hover, self.mini_enabled, self.mini_above_taskbar)):
             raise ValueError("Boolean preference expected")
         if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language, self.credential_source, self.onepassword_access_ref, self.onepassword_secret_ref)):
             raise ValueError("Text preference expected")
@@ -102,7 +104,7 @@ class AppSettings:
             if reference or self.credential_source == "1password":
                 if normalize_secret_reference(reference) != reference:
                     raise ValueError("onepassword_reference_error")
-        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1)):
+        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.main_scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
                 raise ValueError("Invalid numeric setting")
         for value in (self.manual_min, self.manual_max, self.manual_min_retained, self.manual_max_retained):
@@ -140,7 +142,7 @@ class AppSettings:
         self.validate()
         return {
             "version": 3,
-            "workspace": {"dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
+            "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
                         "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref},
                         "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
@@ -192,6 +194,8 @@ class AppSettings:
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),
             transparency=boolean(appearance, "transparency", True), animations=boolean(appearance, "animations", True),
+            main_enabled=boolean(workspace, "main_enabled", False),
+            main_scale=workspace.get("main_scale", appearance.get("scale", data.get("ui_scale", 1))),
             background_opacity=appearance.get("background_opacity", 140 / 255 if data.get("version", 0) < 3 else defaults.background_opacity),
             monitor_visible=boolean(appearance, "visible", True), monitor_geometry=tuple(appearance.get("geometry", defaults.monitor_geometry)),
             monitor_labels_visible=boolean(appearance, "monitor_labels_visible", True),

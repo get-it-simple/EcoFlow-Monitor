@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 TOKENS = json.loads((Path(__file__).parent / "assets" / "design-tokens.json").read_text(encoding="utf-8"))
+MOTION = json.loads((Path(__file__).parent / "assets" / "motion-tokens.json").read_text(encoding="utf-8"))
 COLORS = {name: token["$value"] for name, token in TOKENS["color"].items()}
 SPACE = TOKENS["space"]
 RADIUS = TOKENS["radius"]

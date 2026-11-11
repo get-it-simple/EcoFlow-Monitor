@@ -74,9 +74,10 @@ def run_application(app, args, settings_path, guard) -> int:
     if args.smoke_test:
         def finish():
             result = {"version": __version__, "state": runtime.controller.connection.value, "languages": list(i18n.get_available_languages()), "main_visible": runtime.dashboard.isVisible(), "msi_hidden": runtime.dashboard.monitoring.msi_section.isHidden()}
-            from ecoflow_monitor.ui.tokens import TOKENS
+            from ecoflow_monitor.ui.tokens import MOTION, TOKENS
             result["dashboard_visible"] = runtime.dashboard is not None and runtime.dashboard.isVisible()
-            result["design_tokens"] = TOKENS["version"] == "1.1.0"
+            result["design_tokens"] = TOKENS["version"] == "1.2.0"
+            result["motion_tokens"] = MOTION["version"] == "1.2.0" and MOTION["clock"] == "shared-monotonic"
             from PySide6.QtGui import QFontInfo
             result["inter_font"] = QFontInfo(runtime.dashboard.capacity.font()).family() == "Inter"
             result["single_main_window"] = runtime.window is runtime.dashboard
@@ -92,11 +93,19 @@ def run_application(app, args, settings_path, guard) -> int:
             runtime.controller.update_preferences(mini_enabled=True)
             runtime.mini.refresh()
             result["mini_visible"] = runtime.mini.isVisible()
+            result["main_overlay_default_hidden"] = not runtime.main.isVisible()
+            runtime.controller.update_preferences(main_enabled=True)
+            result["main_overlay_visible"] = runtime.main.isVisible() and runtime.main.progress.motion is runtime.motion_driver
+            runtime.dashboard.load_draft()
+            runtime.dashboard.animations.setChecked(False)
+            runtime.dashboard._draft_changed()
+            runtime.dashboard.save()
+            result["motion_disabled"] = not runtime.controller.settings.animations and not runtime.motion_driver.enabled and not runtime.motion_driver._timer.isActive()
             if args.smoke_output:
                 args.smoke_output.parent.mkdir(parents=True, exist_ok=True)
                 args.smoke_output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             runtime.stop()
-            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens", "inter_font", "single_main_window")) else 1)
+            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens", "motion_tokens", "main_overlay_default_hidden", "main_overlay_visible", "motion_disabled", "inter_font", "single_main_window")) else 1)
         QTimer.singleShot(750, finish)
     try:
         runtime.start()

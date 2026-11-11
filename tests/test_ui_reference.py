@@ -26,6 +26,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.window.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     qapp.processEvents()
 
 

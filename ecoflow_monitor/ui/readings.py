@@ -1,20 +1,21 @@
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QApplication, QFrame, QLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLayout, QVBoxLayout, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import metric_text
 from ecoflow_monitor.ui.metrics import metric_label, metric_tooltip
-from ecoflow_monitor.ui.tokens import COLORS
+from ecoflow_monitor.ui.tokens import COLORS, RADIUS
 from ecoflow_monitor.ui.typography import ValueLabel
+from ecoflow_monitor.ui.motion import MotionSurface, motion_driver, wave
 
 
 TONES = {"battery_level": "accent", "input_power": "input", "output_power": "output"}
 
 
-class MetricReading(QFrame):
+class MetricReading(MotionSurface):
     def __init__(self, controller, key, parent=None):
-        super().__init__(parent)
+        super().__init__(controller, {"battery_level": "battery", "input_power": "input", "output_power": "output"}.get(key), parent)
         self.controller = controller
         self.key = key
         self.hover_only = False
@@ -36,6 +37,7 @@ class MetricReading(QFrame):
         self.refresh()
 
     def configure(self, scale, size=24, clear=False, labels=True, hover=False):
+        self.motion_radius = RADIUS["card"] * scale
         signature = (scale, size, clear, labels, hover)
         if getattr(self, "_configuration", None) == signature:
             self.refresh()
@@ -56,6 +58,7 @@ class MetricReading(QFrame):
         self.refresh()
 
     def refresh(self):
+        self.motion.refresh()
         text = metric_text(self.controller, self.key)
         self.label.setText(metric_label(self.key))
         self.value.setText(text)
@@ -66,6 +69,9 @@ class MetricReading(QFrame):
         self.setToolTip(tooltip)
         self.setAccessibleName(metric_label(self.key) + ": " + text)
         self.value.setAccessibleName(self.accessibleName())
+        if self.key == "battery_level":
+            color = COLORS["output" if self.motion.state.mode == "discharging" else "accent"]
+            self.value.setStyleSheet(f"color: {color}; background: transparent; font-size: {self.value.font().pixelSize()}px; font-weight: 600;")
 
     def event(self, event):
         result = super().event(event)
@@ -79,23 +85,22 @@ class EnergyBalance(QWidget):
         super().__init__(parent)
         self.controller = controller
         self.battery = battery
-        self.phase = 0
-        self._timer = QTimer(self)
-        self._timer.setInterval(40)
-        self._timer.timeout.connect(self._advance)
+        self._scale = 1
+        self.motion = motion_driver(controller)
+        self.motion.add(self)
         self.setMinimumHeight(12)
 
-    def _advance(self):
-        self.phase = (self.phase + 0.02) % 1
-        self.update()
+    def configure(self, scale, material="Panel"):
+        self._scale = scale
+        self.material = material
+        self.setMinimumHeight(round(12 * scale))
+
+    def motion_active(self):
+        role, gain = self.motion.roles["battery" if self.battery else "balance"].sample(self.motion.now())
+        return role is not None or self.motion.values["soc" if self.battery else "input_share"].active(self.motion.now())
 
     def refresh(self):
-        telemetry = self.controller.telemetry
-        active = self.isVisible() and self.controller.fresh and self.controller.ui_settings.animations and QApplication.instance().property("system_animations") is not False and telemetry is not None and telemetry.input_w + telemetry.output_w > 0
-        if active:
-            self._timer.start()
-        else:
-            self._timer.stop()
+        self.motion.refresh()
         self.update()
 
     def showEvent(self, event):
@@ -103,27 +108,29 @@ class EnergyBalance(QWidget):
         self.refresh()
 
     def hideEvent(self, event):
-        self._timer.stop()
         super().hideEvent(event)
+        self.motion.schedule()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        telemetry = self.controller.telemetry
-        total = telemetry.input_w + telemetry.output_w if telemetry else 0
-        incoming = telemetry.input_w / total if total > 0 else 0
-        if self.battery:
-            incoming = max(0, min(1, telemetry.soc_pct / 100)) if telemetry else 0
-        rect = QRectF(0, self.height() / 2 - 4, self.width(), 8)
+        state = self.motion.state
+        incoming = self.motion.values["soc" if self.battery else "input_share"].value(self.motion.now())
+        known = incoming is not None
+        incoming = (incoming / 100 if self.battery else incoming) if known else 0
+        self.material = getattr(self, "material", "Panel")
+        radius = 4 * self._scale
+        rect = QRectF(0, self.height() / 2 - radius, self.width(), 2 * radius)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(COLORS["border"]))
-        painter.drawRoundedRect(rect, 4, 4)
-        if total > 0 or self.battery:
-            painter.setBrush(QColor(COLORS["accent"] if self.battery else COLORS["input"]))
-            painter.drawRoundedRect(QRectF(rect.x(), rect.y(), rect.width() * incoming, rect.height()), 4, 4)
+        painter.drawRoundedRect(rect, radius, radius)
+        if known:
+            painter.setBrush(QColor(COLORS["output" if state.mode == "discharging" else "accent"] if self.battery else COLORS["input"]))
+            painter.drawRoundedRect(QRectF(rect.x(), rect.y(), rect.width() * incoming, rect.height()), radius, radius)
             if not self.battery:
                 painter.setBrush(QColor(COLORS["output"]))
-                painter.drawRoundedRect(QRectF(rect.width() * incoming, rect.y(), rect.width() * (1 - incoming), rect.height()), 4, 4)
-        if self._timer.isActive():
-            painter.setBrush(QColor(COLORS["text"]))
-            painter.drawEllipse(QPointF(self.width() * self.phase, self.height() / 2), 3, 3)
+                painter.drawRoundedRect(QRectF(rect.width() * incoming, rect.y(), rect.width() * (1 - incoming), rect.height()), radius, radius)
+        if known and self.motion.enabled:
+            role, gain = self.motion.roles["battery" if self.battery else "balance"].sample(self.motion.now())
+            segment = QRectF(rect.x(), rect.y(), rect.width() * incoming, rect.height()) if self.battery or role == "input" else QRectF(rect.width() * incoming, rect.y(), rect.width() * (1 - incoming), rect.height())
+            wave(painter, segment, role, self.motion.phase("fieldWave" if self.battery else "balanceWave"), self.material, gain, radius)

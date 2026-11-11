@@ -14,6 +14,8 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.ui.common import app_icon, elevation_prompt, font_family
 from ecoflow_monitor.ui.mini import MiniWidget
+from ecoflow_monitor.ui.main_widget import MainWidget
+from ecoflow_monitor.ui.motion import motion_driver
 from ecoflow_monitor.ui.dashboard import Dashboard
 from ecoflow_monitor.ui.components import DialogChrome
 from ecoflow_monitor.ui.theme import menu_style
@@ -38,8 +40,11 @@ class Application(QObject):
         self.app.setWindowIcon(app_icon())
         self.motion = MotionPreference(self, native)
         self.motion.changed.connect(self.controller.changed)
+        self.motion_driver = motion_driver(self.controller, self)
         self.mini = MiniWidget(self.controller)
         self.mini.overlay.request = self.set_overlay
+        self.main = MainWidget(self.controller, self.open_dashboard)
+        self.main.overlay.request = self.set_overlay
         self.dashboard = Dashboard(self.controller, lambda: self.controller.update_preferences(mini_enabled=True))
         self.window = self.dashboard
         self.dashboard.setWindowIcon(app_icon())
@@ -99,9 +104,12 @@ class Application(QObject):
         self.mini_action = self.menu.addAction(t("toggle_mini"))
         self.mini_action.setCheckable(True)
         self.mini_action.triggered.connect(lambda checked: self.controller.update_preferences(mini_enabled=checked))
+        self.main_action = self.menu.addAction(t("toggle_main"))
+        self.main_action.setCheckable(True)
+        self.main_action.triggered.connect(lambda checked: self.controller.update_preferences(main_enabled=checked))
         self.menu.addAction(t("settings"), self.open_settings)
         self.menu.addAction(t("recover_widgets"), self.recover_widgets)
-        for kind, overlay in (("mini", self.mini.overlay),):
+        for kind, overlay in (("main", self.main.overlay), ("mini", self.mini.overlay)):
             submenu = self.menu.addMenu(t("open_main_widget" if kind == "main" else "open_mini_widget"))
             for key, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
                 control = submenu.addAction(t(label))
@@ -127,15 +135,16 @@ class Application(QObject):
             self._hotkey_notice = self._registration_error(failures, self.controller.settings) if failures else ""
         recovery = next((binding for binding in self.controller.settings.hotkeys if binding.action == "recover_widgets"), None)
         ready = self.native and self.tray.isVisible() and recovery is not None and recovery.enabled and bool(recovery.combo) and "recover_widgets" in self.hotkeys._bindings.values()
-        if self._started and not ready and self.controller.settings.mini_overlay.click_through:
+        if self._started and not ready and any(getattr(self.controller.settings, kind + "_overlay").click_through for kind in ("main", "mini")):
             self.recover_widgets()
             self._hotkey_notice = t("click_through_unavailable")
-        for overlay in (self.mini.overlay,):
+        for overlay in (self.main.overlay, self.mini.overlay):
             overlay.recovery_ready = ready
             overlay.apply()
         self.dashboard.monitoring.hotkey_notice = self._hotkey_notice
         self.dashboard.apply_appearance()
         self.mini.refresh()
+        self.main.refresh()
         if self.dashboard is not None:
             self.dashboard.sync_runtime_overlays()
         self._sync_menu()
@@ -145,6 +154,7 @@ class Application(QObject):
             return
         self.monitor_action.setChecked(self.window.isVisible())
         self.mini_action.setChecked(self.mini.isVisible())
+        self.main_action.setChecked(self.main.isVisible())
         for module in self.controller.settings.integrations:
             action = self._helper_actions.get(module.id)
             if action is not None:
@@ -218,6 +228,8 @@ class Application(QObject):
             self.window.request_visibility(not self.window.isVisible())
         elif action == "toggle_mini":
             self.controller.update_preferences(mini_enabled=not self.controller.settings.mini_enabled)
+        elif action == "toggle_main":
+            self.controller.update_preferences(main_enabled=not self.controller.settings.main_enabled)
         elif action.startswith("auto:"):
             integration_id = action.split(":", 1)[1]
             if integration_id not in self.controller.integration_states:
@@ -249,14 +261,16 @@ class Application(QObject):
         if self._stopped:
             return
         self.controller.preview = settings
+        self.motion_driver.refresh()
         self.window.apply_appearance()
         self.mini.refresh()
+        self.main.refresh()
 
     def preflight_settings(self, settings):
         previous = self.controller.settings
         validate_bindings(settings.hotkeys)
         actions = self._enabled_hotkey_actions(settings)
-        wants_passthrough = settings.mini_overlay.click_through
+        wants_passthrough = settings.mini_overlay.click_through or settings.main_overlay.click_through
         if wants_passthrough and (not self.native or not self.tray.isVisible()):
             raise ValueError("click_through_unavailable")
         binding = next((item for item in settings.hotkeys if item.action == "recover_widgets"), None)
@@ -265,7 +279,7 @@ class Application(QObject):
         old_modules = {(module.id, tuple(profile.id for profile in module.profiles)) for module in previous.integrations if module.enabled}
         new_modules = {(module.id, tuple(profile.id for profile in module.profiles)) for module in settings.integrations if module.enabled}
         registration_changed = set(settings.hotkeys) != set(previous.hotkeys) or old_modules != new_modules
-        needs_recovery = wants_passthrough and not previous.mini_overlay.click_through
+        needs_recovery = any(getattr(settings, kind + "_overlay").click_through and not getattr(previous, kind + "_overlay").click_through for kind in ("main", "mini"))
         configured = self.native and (registration_changed or needs_recovery)
         if configured:
             failures = self.hotkeys.configure(settings.hotkeys, actions)
@@ -282,7 +296,7 @@ class Application(QObject):
 
     @staticmethod
     def _enabled_hotkey_actions(settings):
-        actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
+        actions = {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main"}
         for module in settings.integrations:
             if module.enabled:
                 actions.add("auto:" + module.id)
@@ -297,7 +311,7 @@ class Application(QObject):
         return hotkey_error_text(self._hotkey_error(failures, settings), settings.integrations)
 
     def set_overlay(self, kind, preferences):
-        if kind != "mini":
+        if kind not in {"main", "mini"}:
             return False
         settings = replace(self.controller.settings, **{kind + "_overlay": preferences})
         try:
@@ -311,17 +325,18 @@ class Application(QObject):
             self._hotkey_notice = hotkey_error_text(error, settings.integrations) if isinstance(error, HotkeyError) else t(str(error))
             self.dashboard.monitoring.hotkey_notice = self._hotkey_notice
             self.dashboard.refresh()
-            self.mini.overlay.apply()
+            getattr(self, kind).overlay.apply()
             return False
         return True
 
     def recover_widgets(self):
-        self.controller.update_preferences(mini_overlay=replace(self.controller.settings.mini_overlay, click_through=False), mini_overlay_fields=("click_through",))
+        self.controller.update_preferences(main_overlay=replace(self.controller.settings.main_overlay, click_through=False), main_overlay_fields=("click_through",), mini_overlay=replace(self.controller.settings.mini_overlay, click_through=False), mini_overlay_fields=("click_through",))
 
     def stop(self):
         if self._stopped:
             return
         self._stopped = True
+        self.motion_driver.stop()
         if self.dashboard is not None:
             self.dashboard._draft_timer.stop()
             self.dashboard._geometry_timer.stop()
@@ -339,12 +354,17 @@ class Application(QObject):
         self.hotkeys.stop()
         self.dashboard._focus_binding.stop()
         self.mini._focus_binding.stop()
+        self.main._focus_binding.stop()
         self.tray.hide()
         self.dashboard._save_geometry()
         self.mini._save_position()
+        self.main._save_geometry()
+        self.main._screen_tracker.stop()
+        self.main._geometry_timer.stop()
         self.dashboard._quitting = True
         self.window._geometry_timer.stop()
         self.mini._save_timer.stop()
         self.controller.stop()
         self.window.close()
         self.mini.close()
+        self.main.close()

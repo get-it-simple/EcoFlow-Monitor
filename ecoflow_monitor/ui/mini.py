@@ -7,14 +7,15 @@ from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QL
 
 from ecoflow_monitor.adapters.windows import raise_without_focus
 from ecoflow_monitor.i18n import get_current_language, t
-from ecoflow_monitor.ui.common import DragHeader, ScreenTracker, clamp_window, effective_scale, scaled_font, status_tooltip
+from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, scaled_font, status_tooltip
 from ecoflow_monitor.ui.common import metric_text, status_color, status_text
-from ecoflow_monitor.ui.overlay import OverlayControls
+from ecoflow_monitor.ui.overlay import OverlayControls, configure_overlay_button
 from ecoflow_monitor.ui.readings import MetricReading
 from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.theme import settings_style
 from ecoflow_monitor.ui.tokens import RADIUS, surface
 from ecoflow_monitor.ui.focus import FocusBinding
+from ecoflow_monitor.ui.motion import MotionHeader, MotionSurface
 
 
 class MiniWidget(QFrame):
@@ -27,11 +28,11 @@ class MiniWidget(QFrame):
         self.setObjectName("mini")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self.shell = QFrame(self)
+        self.shell = MotionSurface(controller, "battery", self)
         self.shell.setObjectName("mini_shell")
         self._layout.addWidget(self.shell)
         self.content = QVBoxLayout(self.shell)
-        self.status = DragHeader("DELTA 3 Max", self.shell)
+        self.status = MotionHeader(controller, "DELTA 3 Max", self.shell)
         header = QHBoxLayout()
         header.addWidget(self.status, 1)
         self.overlay = OverlayControls(self, controller, "mini")
@@ -89,9 +90,14 @@ class MiniWidget(QFrame):
             self._fit_context = context
             self._fit_limit = 3
         scale = min(scale, self._fit_limit)
+        opacity = 1 - settings.mini_transparency
+        material = "Panel" if opacity == 1 else "Clear" if opacity == 0 else "Overlay"
+        self.shell.material = material
         count = max(1, min(3, largest, int((area.width() / scale - 32) / 112)))
         rows = sum(math.ceil(len(group) / count) for group in groups)
         scale *= min(1, area.width() / (max(320, count * 136 + 32) * scale), area.height() / ((rows * 72 + 60) * scale))
+        self.shell.motion_radius = RADIUS["card"] * scale
+        self.status.configure(scale)
         lengths = tuple(len(metric_text(self.controller, key)) for group in groups for key in group)
         signature = (groups, scale, settings.mini_transparency, get_current_language(), settings.mini_dock, area.width(), area.height(), lengths)
         if signature != self._signature:
@@ -109,14 +115,12 @@ class MiniWidget(QFrame):
             self.content.setSpacing(round(4 * scale))
             self.grid.setSpacing(round(8 * scale))
             for button in (self.overlay.pin, self.overlay.menu_button, self.reveal_button, self.close_button):
-                size = round(36 * scale)
-                button.setStyleSheet(f"QToolButton {{ padding: 0; min-height: {size - 2}px; max-height: {size - 2}px; min-width: {size - 2}px; max-width: {size - 2}px; }} QToolButton::menu-indicator {{ image: none; }}")
-                button.setFixedSize(size, size)
-                button.setIconSize(QSize(round(20 * scale), round(20 * scale)))
+                configure_overlay_button(button, scale)
             offset = 0
             for group in groups:
                 for index, key in enumerate(group):
                     reading = MetricReading(self.controller, key, self.body)
+                    reading.material = material
                     reading.configure(scale, 24, opacity == 0)
                     self.readings[key] = reading
                     self.labels[key] = reading.value

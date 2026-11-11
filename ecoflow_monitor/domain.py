@@ -30,6 +30,8 @@ class Telemetry:
     device_discharge_minutes: float | None = None
     device_charge_minutes: float | None = None
     charging_state: int | None = None
+    ac_enabled: bool | None = None
+    dc_enabled: bool | None = None
 
 
 @dataclass(frozen=True)

@@ -103,6 +103,7 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         dialog.deleteLater()
         runtime.window.deleteLater()
         runtime.mini.deleteLater()
+        runtime.main.deleteLater()
         qapp.processEvents()
 
 
@@ -143,6 +144,7 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         dialog.deleteLater()
         runtime.window.deleteLater()
         runtime.mini.deleteLater()
+        runtime.main.deleteLater()
         qapp.processEvents()
 
 

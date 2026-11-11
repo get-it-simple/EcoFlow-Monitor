@@ -229,12 +229,15 @@ class Controller(QObject):
         self.preferences_changed.emit()
         self.changed.emit()
 
-    def update_preferences(self, *, mini_overlay_fields: tuple[str, ...] = (), **changes) -> None:
+    def update_preferences(self, *, mini_overlay_fields: tuple[str, ...] = (), main_overlay_fields: tuple[str, ...] = (), **changes) -> None:
         previous = self.settings
         settings = replace(previous, **changes)
         overlay_edits = {}
-        if "mini_overlay" in changes:
-            overlay_edits = {name: getattr(settings.mini_overlay, name) for name in settings.mini_overlay.__dataclass_fields__ if name in mini_overlay_fields or getattr(previous.mini_overlay, name) != getattr(settings.mini_overlay, name)}
+        for kind, explicit in (("mini", mini_overlay_fields), ("main", main_overlay_fields)):
+            key = kind + "_overlay"
+            if key in changes:
+                current, old = getattr(settings, key), getattr(previous, key)
+                overlay_edits[kind] = {name: getattr(current, name) for name in current.__dataclass_fields__ if name in explicit or getattr(old, name) != getattr(current, name)}
         try:
             self.store.save(settings)
         except SettingsError as error:
@@ -243,11 +246,11 @@ class Controller(QObject):
         if "integrations" in changes and hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
         if self.preview is not None:
-            immediate = {name: value for name, value in changes.items() if name in {"mini_enabled", "mini_position"}}
-            if overlay_edits:
-                immediate["mini_overlay"] = replace(self.preview.mini_overlay, **overlay_edits)
+            immediate = {name: value for name, value in changes.items() if name in {"mini_enabled", "main_enabled", "mini_position", "monitor_geometry"}}
+            for kind, edits in overlay_edits.items():
+                immediate[kind + "_overlay"] = replace(getattr(self.preview, kind + "_overlay"), **edits)
             self.preview = replace(self.preview, **immediate)
-        self.runtime_preferences_changed.emit({**changes, "mini_overlay_fields": tuple(overlay_edits)})
+        self.runtime_preferences_changed.emit({**changes, **{kind + "_overlay_fields": tuple(overlay_edits.get(kind, {})) for kind in ("main", "mini")}})
         if set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
             self.preferences_changed.emit()
         self.changed.emit()

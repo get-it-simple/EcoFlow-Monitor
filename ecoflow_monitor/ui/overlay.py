@@ -1,11 +1,21 @@
 from dataclasses import replace
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, QSize, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QToolButton
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.reference_style import icon_path
+from ecoflow_monitor.ui.tokens import RADIUS
+
+
+def configure_overlay_button(button, scale):
+    size = round(36 * scale)
+    border = max(1, round(scale))
+    content = size - 2 * border
+    button.setStyleSheet(f"QToolButton {{ padding: 0; border-width: {border}px; min-height: {content}px; max-height: {content}px; min-width: {content}px; max-width: {content}px; border-radius: {round(RADIUS['control'] * scale)}px; }} QToolButton::menu-indicator {{ image: none; }}")
+    button.setFixedSize(size, size)
+    button.setIconSize(QSize(round(20 * scale), round(20 * scale)))
 
 
 class OverlayControls(QObject):

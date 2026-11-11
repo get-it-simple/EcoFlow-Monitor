@@ -24,6 +24,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.window.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     qapp.processEvents()
     i18n.setup("en")
 
@@ -272,7 +273,7 @@ def test_reduced_motion_stops_energy_animation(runtime, qapp):
     runtime.window.show()
     qapp.setProperty("system_animations", False)
     runtime.dashboard.monitoring.balance.refresh()
-    assert not runtime.dashboard.monitoring.balance._timer.isActive()
+    assert not runtime.motion_driver._timer.isActive()
     qapp.setProperty("system_animations", True)
 
 
@@ -302,7 +303,7 @@ def test_metric_visibility_rows_and_numeric_text_fit_after_scale_change(runtime,
     qapp.processEvents()
     dashboard.resize(round(1184 * scale), round(900 * scale))
     dashboard.navigation.setCurrentRow(2)
-    dashboard.appearance_tabs.setCurrentIndex(1)
+    dashboard.appearance_tabs.setCurrentIndex(2)
     qapp.processEvents()
     for row in dashboard.metrics.rows.values():
         assert row.height() >= row.mode.height()
@@ -367,7 +368,7 @@ def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
     assert dashboard._focus_binding.outline.width() < page.width()
 
 
-def test_legacy_main_flags_are_retained_without_affecting_app_shell(runtime, qapp):
+def test_main_flags_do_not_affect_app_shell_and_recover_input_without_shortcut(runtime, qapp):
     previous = runtime.controller.settings
     settings = replace(previous, transparency=True, background_opacity=0, main_overlay=OverlayPreferences(pinned=True, position_locked=True, click_through=True))
     runtime.controller.apply_settings(settings)
@@ -378,17 +379,18 @@ def test_legacy_main_flags_are_retained_without_affecting_app_shell(runtime, qap
     dashboard.capacity.setValue(3000)
     dashboard.save()
     stored = runtime.controller.store.load()
-    assert stored.main_overlay == settings.main_overlay
+    assert stored.main_overlay == replace(settings.main_overlay, click_through=False)
     assert stored.background_opacity == 0
     assert stored.capacity_wh == 3000
-    assert "main" not in dashboard.materials
-    assert "main" not in dashboard.overlay_fields
+    assert "main" in dashboard.materials
+    assert "main" in dashboard.overlay_fields
 
 
-def test_new_startup_has_only_app_shell_and_mini_and_no_pristine_error(runtime):
+def test_new_startup_opens_only_app_shell_and_keeps_both_widgets_disabled(runtime):
     runtime.start()
     windows = [widget for widget in runtime.app.topLevelWidgets() if getattr(widget, "controller", None) is runtime.controller]
-    assert set(windows) == {runtime.dashboard, runtime.mini}
+    assert set(windows) == {runtime.dashboard, runtime.mini, runtime.main}
+    assert not runtime.main.isVisible() and not runtime.mini.isVisible()
     assert runtime.window is runtime.dashboard
     assert not runtime.dashboard.error_label.text()
     assert not runtime.dashboard.save_button.isEnabled()

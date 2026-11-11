@@ -1,6 +1,6 @@
 from typing import cast
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QBoxLayout, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit, QListWidget, QMenu, QMessageBox, QPlainTextEdit, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle, QTableWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 
@@ -8,6 +8,8 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import ActionButton, status_color, status_text, status_tooltip
 from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY
+from ecoflow_monitor.ui.motion import motion_driver, paint_status_mark, status_motion_active
+from ecoflow_monitor.ui.typography import draw_outlined
 
 
 class Switch(QCheckBox):
@@ -362,26 +364,43 @@ class StatusBadge(QLabel):
     def __init__(self, controller, parent=None):
         super().__init__(parent)
         self.controller = controller
+        self.motion = motion_driver(controller)
+        self.outlined = False
+        self.compact = False
         self.setObjectName("status_badge")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.motion.add(self)
         self.refresh()
 
     def refresh(self):
-        self.setText("●  " + status_text(self.controller))
+        self.motion.refresh()
+        self.setText("*  " + status_text(self.controller))
         self.setToolTip(status_tooltip(self.controller))
         self.setAccessibleName(status_tooltip(self.controller))
         self.setStyleSheet(f"color: {status_color(self.controller)}; background: transparent; border: none;")
+
+    def motion_active(self):
+        return status_motion_active(self.motion)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(COLORS["raised"]))
-        painter.drawRoundedRect(self.rect(), self.height() / 2, self.height() / 2)
+        if not self.compact:
+            painter.drawRoundedRect(self.rect(), self.height() / 2, self.height() / 2)
         painter.setPen(QColor(status_color(self.controller)))
         painter.setFont(self.font())
         padding = round(10 * max(0.5, self.font().pixelSize() / 12))
-        painter.drawText(self.rect().adjusted(padding, 0, -padding, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, max(1, self.width() - padding * 2)))
+        side = round(16 * max(0.5, self.font().pixelSize() / 12))
+        mark = QRectF(padding, max(0, (self.height() - side) / 2), side, side)
+        paint_status_mark(painter, mark, self.motion, self.outlined)
+        rect = self.rect().adjusted(padding + side + round(4 * side / 16), 0, -padding, 0)
+        text = self.fontMetrics().elidedText(status_text(self.controller), Qt.TextElideMode.ElideRight, max(1, rect.width()))
+        if self.outlined:
+            draw_outlined(painter, text, self.font(), rect, QColor(status_color(self.controller)), False)
+        else:
+            painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
 
 class NavigationDelegate(QStyledItemDelegate):

@@ -11,7 +11,8 @@ from ecoflow_monitor.ui.metrics import metric_label
 from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
-from ecoflow_monitor.ui.tokens import GEOMETRY
+from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS
+from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
 
 
 class MonitoringPage(QWidget):
@@ -46,14 +47,18 @@ class MonitoringPage(QWidget):
         self.cards = []
         self.readings = {}
         for key in ("battery_level", "input_power", "output_power", "estimated_runtime"):
-            card = QFrame(self)
+            card = MotionSurface(controller, {"battery_level": "battery", "input_power": "input", "output_power": "output"}.get(key), self)
             card.setObjectName("card")
             box = QVBoxLayout(card)
             box.setContentsMargins(16, 16, 16, 16)
             reading = MetricReading(controller, key, card)
+            reading.channel = None
             box.addWidget(reading)
             self.readings[key] = reading
             self.cards.append(card)
+            if key == "battery_level":
+                self.battery_progress = EnergyBalance(controller, card, battery=True)
+                box.addWidget(self.battery_progress)
         self.box.addLayout(self.metric_grid)
         self.details = QGridLayout()
         self.details.setSpacing(24)
@@ -78,6 +83,9 @@ class MonitoringPage(QWidget):
         self.balance_caption = QLabel()
         self.balance_caption.setWordWrap(True)
         balance_box.addWidget(self.balance_caption)
+        self.balance_message = MotionMessage(controller, self.balance_card)
+        self.balance_message.setWordWrap(True)
+        balance_box.addWidget(self.balance_message)
         self.port_card = QFrame(self)
         self.port_card.setObjectName("ports_card")
         self.port_box = QVBoxLayout(self.port_card)
@@ -126,32 +134,51 @@ class MonitoringPage(QWidget):
         self.notifications.refresh(self.controller, self.hotkey_notice)
         for key, reading in self.readings.items():
             reading.configure(scale, 28 if key == "estimated_runtime" else 36, labels=settings.monitor_labels_visible, hover=settings.monitor_values_on_hover)
+        for card in self.cards:
+            card.motion_radius = RADIUS["card"] * scale
         for reading in self.balance_readings.values():
             reading.configure(scale, 28)
         self.balance_title.setText(t("energy_balance"))
         self.port_title.setText(t("outputs"))
         self.port_hint.setText(t("outputs_read_only"))
         telemetry = self.controller.telemetry
+        self.balance.configure(scale)
+        self.battery_progress.configure(scale)
         self.balance.refresh()
+        self.battery_progress.refresh()
         self.balance_caption.setText(t("missing_data") if telemetry is None else t("power_balance").format(value=number(telemetry.input_w - telemetry.output_w, t("unit_watt"))))
+        self.balance_message.setText(t("motion_" + self.balance.motion.state.mode))
         ports = dict(telemetry.ports) if telemetry else {}
         keys = tuple(dict.fromkeys(("ac_output", "dc_output", *(key for key in ports if key not in {"ac_input", "pv_input"}))))
         for key in keys:
             if key not in self.port_values:
                 value = QLabel()
                 value.setObjectName("secondary")
-                row = QWidget(self.port_card)
+                row = MotionSurface(self.controller, {"ac_output": "ac", "dc_output": "dc"}.get(key), self.port_card)
                 line = QHBoxLayout(row)
                 line.setContentsMargins(0, 0, 0, 0)
                 label = QLabel(metric_label(key), row)
                 label.setWordWrap(True)
                 line.addWidget(label, 1)
                 line.addWidget(value)
+                if key in {"ac_output", "dc_output"}:
+                    state = Switch(metric_label(key))
+                    state.setEnabled(False)
+                    state.setProperty("read_only_output", True)
+                    line.addWidget(state)
+                    row.output_state = state
                 self.port_box.insertWidget(self.port_box.count() - 1, row)
                 self.port_values[key] = (row, value)
         for key, (row, value) in self.port_values.items():
+            row.motion_radius = RADIUS["control"] * scale
             row.setVisible(key in keys)
             value.setText(number(ports.get(key), t("unit_watt")))
+            if key in {"ac_output", "dc_output"}:
+                enabled = getattr(telemetry, "ac_enabled" if key == "ac_output" else "dc_enabled", None)
+                row.output_state.setVisible(enabled is not None)
+                row.output_state.setChecked(enabled is True)
+                row.output_state.setToolTip(t("outputs_read_only") + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
+                value.setText(value.text() + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
         self.limits.refresh()
         self.open_mini_button.setText(t("open_mini_widget"))
         self.refresh_integrations()

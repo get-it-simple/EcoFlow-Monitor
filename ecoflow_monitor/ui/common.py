@@ -63,13 +63,19 @@ def status_tooltip(controller) -> str:
     else:
         stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
         last = t("last_update").format(timestamp=stamp)
-    return t(controller.connection.value) + "\n" + last
+    return t(display_connection(controller).value) + "\n" + last
+
+
+def display_connection(controller):
+    return ConnectionState.STALE if controller.connection == ConnectionState.LIVE and not controller.fresh else controller.connection
 
 
 def status_color(controller) -> str:
     if controller.fresh:
         return COLORS["accent"]
-    if controller.connection in {ConnectionState.STALE, ConnectionState.CONNECTING}:
+    if controller.connection == ConnectionState.CONNECTING:
+        return COLORS["input"]
+    if controller.connection in {ConnectionState.LIVE, ConnectionState.STALE}:
         return COLORS["output"]
     if controller.connection in {ConnectionState.UNCONFIGURED, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
         return COLORS["muted"]
@@ -84,7 +90,7 @@ def update_status(label: QLabel, controller) -> None:
 
 
 def status_text(controller):
-    text = t(controller.connection.value)
+    text = t(display_connection(controller).value)
     if controller.telemetry is not None and not controller.fresh:
         text += " · " + datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%H:%M")
     return text

@@ -19,6 +19,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.dashboard.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     qapp.processEvents()
     i18n.setup("en")
 

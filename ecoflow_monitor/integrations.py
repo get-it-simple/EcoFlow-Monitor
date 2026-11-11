@@ -264,7 +264,7 @@ def migrate_afterburner(msi: dict, automation: dict) -> IntegrationDefinition:
 
 
 def hotkey_actions(modules: tuple[IntegrationDefinition, ...]) -> tuple[str, ...]:
-    actions = ["toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"]
+    actions = ["toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main"]
     for module in modules:
         actions.append(f"auto:{module.id}")
         actions.extend(f"profile:{module.id}:{profile.id}" for profile in module.profiles)

@@ -24,6 +24,7 @@ def runtime(tmp_path, qapp):
     instance.stop()
     instance.dashboard.deleteLater()
     instance.mini.deleteLater()
+    instance.main.deleteLater()
     qapp.processEvents()
     i18n.setup("en")
 
@@ -345,6 +346,7 @@ def test_saved_small_dashboard_geometry_is_raised_to_new_minimum(tmp_path, qapp)
         runtime.stop()
         runtime.dashboard.deleteLater()
         runtime.mini.deleteLater()
+        runtime.main.deleteLater()
         qapp.processEvents()
 
 

@@ -188,7 +188,7 @@ class SettingsWindow(QDialog):
         self.appearance_tabs.tabBar().setDrawBase(False)
         layout.addWidget(self.appearance_tabs)
         bodies = {}
-        for key, label in (("appearance_general", "appearance_general"), ("appearance_mini", "mini_widget")):
+        for key, label in (("appearance_general", "appearance_general"), ("appearance_main", "main_widget"), ("appearance_mini", "mini_widget")):
             body = QWidget()
             content = QVBoxLayout(body)
             content.setContentsMargins(0, 24, 0, 0)
@@ -220,6 +220,32 @@ class SettingsWindow(QDialog):
         mini.addWidget(SettingRow(t("mini_widget"), self.mini_enabled))
         self.overlay_fields = {}
         self.materials = {}
+        main = bodies["appearance_main"]
+        self.main_enabled = Switch(t("main_widget"))
+        self.main_scale = PercentEditor(50, 300)
+        self.main_alpha = PercentEditor()
+        self.main_scale.setAccessibleName(t("main_scale"))
+        self.main_alpha.setAccessibleName(t("background_opacity"))
+        main.addWidget(SettingRow(t("main_widget"), self.main_enabled))
+        main_material = QComboBox()
+        for name in ("panel", "overlay", "clear"):
+            main_material.addItem(t("material_" + name), name)
+        self.materials["main"] = main_material
+        main_material.setAccessibleName(t("widget_material"))
+        main_material.currentIndexChanged.connect(lambda: self._material_changed("main"))
+        self.main_alpha.valueChanged.connect(lambda: self._opacity_changed("main"))
+        main.addWidget(SettingRow(t("widget_material"), main_material))
+        main.addWidget(SettingRow(t("background_opacity"), self.main_alpha))
+        main.addWidget(hint(t("clear_readability")))
+        main.addWidget(action(t("restore_overlay"), lambda: self._restore_overlay("main")), 0, Qt.AlignmentFlag.AlignLeft)
+        main.addWidget(SettingRow(t("main_scale"), self.main_scale))
+        self.overlay_fields["main"] = {}
+        for name, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
+            control = Switch(t(label))
+            self.overlay_fields["main"][name] = control
+            main.addWidget(SettingRow(t(label), control))
+        main.addWidget(hint(t("click_through_hint")))
+        main.addStretch()
         material = QComboBox()
         for name in ("panel", "overlay", "clear"):
             material.addItem(t("material_" + name), name)
@@ -277,12 +303,12 @@ class SettingsWindow(QDialog):
             return
         material = self.materials[kind].currentData()
         value = {"panel": 100, "overlay": 82, "clear": 0}[material]
-        self.mini_alpha.setValue(value)
+        getattr(self, kind + "_alpha").setValue(value)
 
     def _opacity_changed(self, kind):
         if self._loading:
             return
-        value = self.mini_alpha.value()
+        value = getattr(self, kind + "_alpha").value()
         with QSignalBlocker(self.materials[kind]):
             self.materials[kind].setCurrentIndex(0 if value == 100 else 2 if value == 0 else 1)
 
@@ -376,13 +402,16 @@ class SettingsWindow(QDialog):
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
+        self.main_enabled.setChecked(settings.main_enabled)
+        self.main_scale.setValue(settings.main_scale * 100)
+        self.main_alpha.setValue((settings.background_opacity if settings.transparency else 1) * 100)
         self.monitor_labels_visible.setChecked(settings.monitor_labels_visible)
         self.monitor_values_on_hover.setChecked(settings.monitor_values_on_hover)
         self.mini_enabled.setChecked(settings.mini_enabled)
         self.mini_above.setChecked(settings.mini_above_taskbar)
         self.mini_scale.setValue(settings.mini_scale * 100)
         self.mini_alpha.setValue((1 - settings.mini_transparency) * 100)
-        for kind in ("mini",):
+        for kind in ("main", "mini"):
             preferences = getattr(settings, kind + "_overlay")
             for name, control in self.overlay_fields[kind].items():
                 control.setChecked(getattr(preferences, name))
@@ -517,6 +546,9 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             animations=self.animations.isChecked(), mini_enabled=self.mini_enabled.isChecked(),
+            main_enabled=self.main_enabled.isChecked(), main_scale=self.main_scale.value() / 100,
+            background_opacity=self._baseline.background_opacity if self.main_alpha.value() == round((self._baseline.background_opacity if self._baseline.transparency else 1) * 100) else self.main_alpha.value() / 100,
+            transparency=self._baseline.transparency if self.main_alpha.value() == round((self._baseline.background_opacity if self._baseline.transparency else 1) * 100) else True,
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
             mini_above_taskbar=self.mini_above.isChecked(), mini_scale=self.mini_scale.value() / 100,
@@ -525,7 +557,7 @@ class SettingsWindow(QDialog):
             mini_hidden_metrics=self._metric_group("expanded"),
             metric_order=tuple(self.metrics.order),
             manual_min_retained=self.minimum.spin.value(), manual_max_retained=self.maximum.spin.value(),
-            **{kind + "_overlay": self._overlay_draft(kind) for kind in ("mini",)},
+            **{kind + "_overlay": self._overlay_draft(kind) for kind in ("main", "mini")},
         )
         changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(self._baseline, name)}
         return replace(current, **changes)
@@ -613,21 +645,24 @@ class SettingsWindow(QDialog):
             editor.set_validation_error(hotkey_error_text(HotkeyError(matching), self.integrations_editor.modules()) if matching else "")
 
     def sync_runtime_preferences(self, changes):
-        if self._loading or not ({"mini_enabled", "mini_overlay"} & changes.keys()):
+        if self._loading or not ({"mini_enabled", "mini_overlay", "main_enabled", "main_overlay"} & changes.keys()):
             return
         self._loading = True
         try:
-            if "mini_enabled" in changes:
-                with QSignalBlocker(self.mini_enabled):
-                    self.mini_enabled.setChecked(changes["mini_enabled"])
-                self._baseline = replace(self._baseline, mini_enabled=changes["mini_enabled"])
-            if "mini_overlay" in changes:
-                current = changes["mini_overlay"]
-                for name, control in self.overlay_fields["mini"].items():
-                    if name in changes["mini_overlay_fields"]:
-                        with QSignalBlocker(control):
-                            control.setChecked(getattr(current, name))
-                self._baseline = replace(self._baseline, mini_overlay=current)
+            for kind in ("main", "mini"):
+                enabled = kind + "_enabled"
+                if enabled in changes:
+                    with QSignalBlocker(getattr(self, enabled)):
+                        getattr(self, enabled).setChecked(changes[enabled])
+                    self._baseline = replace(self._baseline, **{enabled: changes[enabled]})
+                key = kind + "_overlay"
+                if key in changes:
+                    current = changes[key]
+                    for name, control in self.overlay_fields[kind].items():
+                        if name in changes[key + "_fields"]:
+                            with QSignalBlocker(control):
+                                control.setChecked(getattr(current, name))
+                    self._baseline = replace(self._baseline, **{key: current})
         finally:
             self._loading = False
         self._draft_changed()
@@ -641,7 +676,7 @@ class SettingsWindow(QDialog):
             self.load_draft()
             return
         self._loading = True
-        for kind in ("mini",):
+        for kind in ("main", "mini"):
             baseline = getattr(self._baseline, kind + "_overlay")
             current = getattr(self.controller.settings, kind + "_overlay")
             for name, control in self.overlay_fields[kind].items():

@@ -540,10 +540,10 @@ def test_module_hotkey_removal_is_saved(controller: Controller, qapp, monkeypatc
     try:
         assert "profile:afterburner:profile_1" in dialog.hotkey_rows
         dialog.integrations_editor.remove()
-        assert tuple(dialog.hotkey_rows) == ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets")
+        assert tuple(dialog.hotkey_rows) == ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main")
         dialog.save()
         assert controller.store.load().integrations == ()
-        assert {binding.action for binding in controller.store.load().hotkeys} == {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets"}
+        assert {binding.action for binding in controller.store.load().hotkeys} == {"toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main"}
     finally:
         dialog.deleteLater()
 

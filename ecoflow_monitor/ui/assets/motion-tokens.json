@@ -1,0 +1,33 @@
+{
+  "version": "1.2.0",
+  "units": {"time": "ms", "opacity": "0..1", "phase": "0..1", "power": "W"},
+  "roles": {
+    "charging": {"colorToken": "accent", "direction": "left-to-right"},
+    "discharging": {"colorToken": "output", "direction": "right-to-left"},
+    "input": {"colorToken": "input", "direction": "left-to-right"},
+    "output": {"colorToken": "output", "direction": "right-to-left"},
+    "outlet": {"colorToken": "output", "direction": "toward-switch"}
+  },
+  "timing": {
+    "fieldWave": 2800, "balanceWave": 2400, "messageBreath": 3600,
+    "outletWave": 3800, "onlineMark": 4400, "staleMark": 1800,
+    "errorEntry": 1200, "connectingMark": 1800, "valueTransition": 500,
+    "directionExit": 150, "directionEnter": 200, "visibilityTransition": 180
+  },
+  "materials": {
+    "Panel": {"baseAlpha": 1, "waveMaxAlpha": 0.11, "edgeMaxAlpha": 0.85},
+    "Overlay": {"baseAlpha": 0.82, "waveMaxAlpha": 0.08, "edgeMaxAlpha": 0.8},
+    "Clear": {"baseAlpha": 0, "waveMaxAlpha": 0.04, "edgeMaxAlpha": 0.75}
+  },
+  "contentAlpha": 1,
+  "messageAlpha": [1, 0.5, 0, 0.5, 1],
+  "phaseKeys": [0, 0.25, 0.5, 0.75, 1],
+  "waveWidthFraction": 0.6,
+  "powerThresholds": {"activeAbove": 2, "enterDirectionAbove": 8, "retainDirectionAbove": 5},
+  "pauseEnergyFor": ["stale", "offline", "error", "connecting"],
+  "errorReplay": "new-error-event-only",
+  "disableMotionWhen": ["user-disabled", "system-reduced-motion", "component-not-visible"],
+  "clock": "shared-monotonic",
+  "sourceOfTruth": "MOTION_RULES.md",
+  "implementationTechnology": "unspecified"
+}
