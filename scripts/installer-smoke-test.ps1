@@ -22,8 +22,8 @@ $settingsBytes = '{"version":2,"integrations":[]}'
 [System.IO.File]::WriteAllText($settings, $settingsBytes, [System.Text.UTF8Encoding]::new($false))
 $settingsHash = (Get-FileHash -LiteralPath $settings -Algorithm SHA256).Hash
 $runningSettings = Join-Path $synthetic "running-settings.json"
-$runningSettingsBytes = '{"version":2,"integrations":[],"hotkeys":[],"language":"uk","ecoflow":{"serial":"","credential_ref":"EcoFlowMonitor/installer-smoke","capacity_wh":3072,"manual_min":15,"manual_max":85},"appearance":{"scale":0.75,"animations":false,"transparency":false}}'
-[System.IO.File]::WriteAllText($runningSettings, $runningSettingsBytes, [System.Text.UTF8Encoding]::new($false))
+& python -m scripts.installer_smoke_settings create $runningSettings
+if ($LASTEXITCODE -ne 0) { throw "Synthetic application settings creation failed" }
 
 function Assert-FilePreserved([string]$Path, [string]$ExpectedHash, [string]$Stage) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -35,22 +35,8 @@ function Assert-FilePreserved([string]$Path, [string]$ExpectedHash, [string]$Sta
 }
 
 function Assert-RunningPreferences([string]$Stage) {
-    if (-not (Test-Path -LiteralPath $runningSettings -PathType Leaf)) {
-        throw "${Stage}: application settings file was removed: $runningSettings"
-    }
-    try {
-        $saved = Get-Content -LiteralPath $runningSettings -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        throw "${Stage}: application settings could not be read as JSON"
-    }
-    if ($saved.version -ne 2 -or $saved.language -cne "uk" -or
-        $saved.integrations -isnot [array] -or $saved.integrations.Count -ne 0 -or
-        $saved.hotkeys -isnot [array] -or $saved.hotkeys.Count -ne 0 -or
-        $saved.ecoflow.serial -cne "" -or $saved.ecoflow.credential_ref -cne "EcoFlowMonitor/installer-smoke" -or
-        $saved.ecoflow.capacity_wh -ne 3072 -or $saved.ecoflow.manual_min -ne 15 -or $saved.ecoflow.manual_max -ne 85 -or
-        $saved.appearance.scale -ne 0.75 -or $saved.appearance.animations -ne $false -or $saved.appearance.transparency -ne $false) {
-        throw "${Stage}: application preferences were changed"
-    }
+    & python -m scripts.installer_smoke_settings verify $runningSettings --stage $Stage
+    if ($LASTEXITCODE -ne 0) { throw "${Stage}: application preferences verification failed" }
 }
 
 function Invoke-Setup([string]$Path, [string[]]$Arguments) {
