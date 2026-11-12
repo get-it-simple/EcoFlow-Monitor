@@ -9,6 +9,7 @@ from ecoflow_monitor.ui.components import ActionLayout, SelectField as QComboBox
 from ecoflow_monitor.ui.limits import ChargeLimits
 from ecoflow_monitor.ui.metrics import metric_label
 from ecoflow_monitor.ui.notifications import NotificationIndicator
+from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS
@@ -42,6 +43,8 @@ class MonitoringPage(QWidget):
         badge_row.addWidget(self.notifications)
         self.heading_row.addWidget(badges, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.box.addLayout(self.heading_row)
+        self.credential_renewal = CredentialRenewalBanner(controller, self)
+        self.box.addWidget(self.credential_renewal)
         self.metric_grid = QGridLayout()
         self.metric_grid.setSpacing(8)
         self.cards = []

@@ -24,6 +24,7 @@ from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
 from ecoflow_monitor.ui.onepassword import OnePasswordPanel
+from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.focus import FocusBinding
 from ecoflow_monitor.ui.localization import TranslationBinding
 from ecoflow_monitor.ui.dialogs import LanguageGuideDialog
@@ -116,6 +117,8 @@ class SettingsWindow(QDialog):
     def _build_connection(self):
         layout = self._tab(t("connection_settings"))
         layout.addWidget(hint(t("connection_description")))
+        self.credential_renewal = CredentialRenewalBanner(self.controller, self)
+        layout.addWidget(self.credential_renewal)
         self.manual_credentials = QWidget(self)
         manual_layout = QVBoxLayout(self.manual_credentials)
         manual_layout.setContentsMargins(0, 0, 0, 0)

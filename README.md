@@ -146,8 +146,10 @@ Windows Hello and **Settings > Developer > Integrate with 1Password CLI** in
 1Password. In EcoFlow connection settings, choose **1Password**, paste the access
 and secret fields' **Copy Secret Reference** links (`op://…`), and fill the latest
 keys before loading devices. Save settings to keep the references. Monitoring
-reads current keys from 1Password for each API request; 1Password controls approval
-and the authorization session. Existing Windows credentials are retained when switching.
+keeps keys encrypted in temporary Windows storage for 1–168 hours (24 by default).
+Every restart clears this cache and requests keys again. When the time expires,
+monitoring pauses and shows **Get new keys**, with a tray notification when available.
+1Password controls Windows Hello approval. Existing Windows credentials are retained when switching.
 
 To store a newly entered pair, expand **Save entered keys to 1Password** while
 using Windows Credential Manager, enter the vault and item title, and create the

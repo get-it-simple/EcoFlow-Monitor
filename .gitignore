@@ -20,6 +20,8 @@ venv/
 !.run/Tests (design).run.xml
 !.run/Tests (integrations).run.xml
 !.run/Tests (motion).run.xml
+!.run/Tests (credentials).run.xml
+!.run/Tests (credentials design).run.xml
 /docs/
 settings.json
 settings.json.bak

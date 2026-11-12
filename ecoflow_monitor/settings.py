@@ -58,6 +58,7 @@ class AppSettings:
     credential_source: str = "windows"
     onepassword_access_ref: str = ""
     onepassword_secret_ref: str = ""
+    onepassword_cache_ttl_seconds: int = 86400
     capacity_wh: float = 2048
     manual_min: float | None = None
     manual_max: float | None = None
@@ -100,6 +101,8 @@ class AppSettings:
             raise ValueError("Text preference expected")
         if self.credential_source not in {"windows", "1password"}:
             raise ValueError("Invalid credential source")
+        if type(self.onepassword_cache_ttl_seconds) is not int or not 3600 <= self.onepassword_cache_ttl_seconds <= 604800 or self.onepassword_cache_ttl_seconds % 3600:
+            raise ValueError("onepassword_cache_ttl_error")
         for reference in (self.onepassword_access_ref, self.onepassword_secret_ref):
             if reference or self.credential_source == "1password":
                 if normalize_secret_reference(reference) != reference:
@@ -144,7 +147,7 @@ class AppSettings:
             "version": 3,
             "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
-                        "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref},
+                        "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref, "cache_ttl_seconds": self.onepassword_cache_ttl_seconds},
                         "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
@@ -190,6 +193,7 @@ class AppSettings:
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
             credential_source=string(eco, "credential_source", "windows"),
             onepassword_access_ref=string(onepassword, "access_ref"), onepassword_secret_ref=string(onepassword, "secret_ref"),
+            onepassword_cache_ttl_seconds=onepassword.get("cache_ttl_seconds", 86400),
             capacity_wh=eco.get("capacity_wh", 2048), manual_min=eco.get("manual_min"), manual_max=eco.get("manual_max"),
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),

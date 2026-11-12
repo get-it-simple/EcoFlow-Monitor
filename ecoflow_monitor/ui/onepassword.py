@@ -8,7 +8,7 @@ from ecoflow_monitor.credential_refs import normalize_secret_reference
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, hint
 from ecoflow_monitor.ui.sections import CollapsibleSection
-from ecoflow_monitor.ui.components import FormLayout as QFormLayout
+from ecoflow_monitor.ui.components import FormLayout as QFormLayout, NumberField
 
 
 class OnePasswordPanel(QWidget):
@@ -49,6 +49,13 @@ class OnePasswordPanel(QWidget):
             field.setAccessibleName(t(key))
             fields.addRow(t(key), field)
             field.textChanged.connect(self._invalidate)
+        self.cache_hours = NumberField()
+        self.cache_hours.setRange(1, 168)
+        self.cache_hours.setDecimals(0)
+        self.cache_hours.setValue(24)
+        self.cache_hours.setAccessibleName(t("onepassword_cache_hours"))
+        fields.addRow(t("onepassword_cache_hours"), self.cache_hours)
+        fields.addRow(hint(t("onepassword_cache_hint")))
         layout.addWidget(self.references)
         self.load_button = action(t("onepassword_load"), self.load_credentials)
         self.load_button.setMinimumWidth(320)
@@ -111,6 +118,7 @@ class OnePasswordPanel(QWidget):
         self.source.setCurrentIndex(self._onepassword_tab if settings.credential_source == "1password" else self._windows_tab)
         self.access_ref.setText(settings.onepassword_access_ref)
         self.secret_ref.setText(settings.onepassword_secret_ref)
+        self.cache_hours.setValue(settings.onepassword_cache_ttl_seconds // 3600)
         self.credentials = None
         self.show_status("")
         self.save_section.set_expanded(False)
@@ -122,7 +130,8 @@ class OnePasswordPanel(QWidget):
             secret = normalize_secret_reference(self.secret_ref.text())
         else:
             access = secret = ""
-        return dict(credential_source=self.source.tabData(self.source.currentIndex()), onepassword_access_ref=access, onepassword_secret_ref=secret)
+        return dict(credential_source=self.source.tabData(self.source.currentIndex()), onepassword_access_ref=access, onepassword_secret_ref=secret,
+                    onepassword_cache_ttl_seconds=int(self.cache_hours.value()) * 3600)
 
     def load_credentials(self):
         if self.busy:

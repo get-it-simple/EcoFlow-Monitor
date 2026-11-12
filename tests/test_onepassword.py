@@ -57,7 +57,7 @@ def test_old_settings_default_to_windows_and_new_references_roundtrip(tmp_path):
     settings = replace(legacy, credential_source="1password", onepassword_access_ref=ACCESS_REF, onepassword_secret_ref=SECRET_REF)
     store.save(settings)
     assert store.load() == settings
-    assert json.loads(store.path.read_text(encoding="utf-8"))["ecoflow"]["onepassword"] == {"access_ref": ACCESS_REF, "secret_ref": SECRET_REF}
+    assert json.loads(store.path.read_text(encoding="utf-8"))["ecoflow"]["onepassword"] == {"access_ref": ACCESS_REF, "secret_ref": SECRET_REF, "cache_ttl_seconds": 86400}
 
 
 @pytest.mark.parametrize("changes", [dict(credential_source="other"), dict(credential_source="1password"), dict(onepassword_access_ref="plaintext"), dict(onepassword_secret_ref=12)])
@@ -179,8 +179,8 @@ class NoLocalCredentials:
 
 
 @pytest.fixture
-def controller(tmp_path, qapp):
-    instance = Controller(SettingsStore(tmp_path / "settings.json"), NoLocalCredentials())
+def controller(tmp_path, qapp, session_cache):
+    instance = Controller(SettingsStore(tmp_path / "settings.json"), NoLocalCredentials(), credential_cache=session_cache)
     yield instance
     instance.stop()
     qapp.processEvents()
@@ -190,7 +190,7 @@ def configure_onepassword(controller, **changes):
     controller.apply_settings(replace(controller.settings, credential_source="1password", onepassword_access_ref=ACCESS_REF, onepassword_secret_ref=SECRET_REF, **changes))
 
 
-def test_monitor_reads_current_keys_each_time_without_persisting_them(controller, qapp, monkeypatch):
+def test_monitor_reuses_session_keys_without_persisting_plaintext(controller, qapp, monkeypatch):
     pairs = [Credentials("access-first", "secret-first"), Credentials("access-rotated", "secret-rotated")]
     received = []
     def read(access, secret, cancelled):
@@ -210,12 +210,12 @@ def test_monitor_reads_current_keys_each_time_without_persisting_them(controller
         wait_until(qapp, lambda: "api" not in controller._active)
         assert len(received) == count
         assert controller.connection == ConnectionState.LIVE
-    assert received == pairs
+    assert received == [pairs[0], pairs[0]]
     payload = controller.store.path.read_text(encoding="utf-8")
     assert all(value not in payload for pair in pairs for value in (pair.access_key, pair.secret_key))
 
 
-def test_save_and_failed_publication_never_copy_keys_to_windows(controller, monkeypatch):
+def test_save_and_failed_publication_never_copy_keys_to_persistent_windows_store(controller, monkeypatch):
     configure_onepassword(controller)
     previous = controller.store.path.read_bytes()
     supplied = Credentials("synthetic-access", "synthetic-secret")

@@ -71,6 +71,8 @@ class Application(QObject):
         self.menu.aboutToHide.connect(self._menu_timer.stop)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
+        self.tray.messageClicked.connect(self.activate_existing_window)
+        self.controller.credentials_expired.connect(self._notify_credentials_expired)
         self.controller.preferences_changed.connect(self.preferences)
         self.controller.changed.connect(self._check_elevation)
         self.controller.changed.connect(self._sync_menu)
@@ -78,6 +80,11 @@ class Application(QObject):
         self.controller.elevation_needed.connect(self._queue_elevation)
         self.app.aboutToQuit.connect(self.stop)
         self.preferences()
+
+    def _notify_credentials_expired(self):
+        if self.native and self.tray.isVisible() and QSystemTrayIcon.supportsMessages():
+            self.tray.showMessage(t("onepassword_cache_expired_title"), t("onepassword_cache_expired"),
+                                  QSystemTrayIcon.MessageIcon.Warning, 10000)
 
     def activate_existing_window(self):
         if self._stopped:

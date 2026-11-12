@@ -14,6 +14,7 @@ from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlow
 from ecoflow_monitor.adapters.onepassword import read_credentials
 from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
+from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
@@ -27,11 +28,12 @@ class TaskSignals(QObject):
 
 
 class Task(QRunnable):
-    def __init__(self, kind: str, generation: int, operation: Callable) -> None:
+    def __init__(self, kind: str, generation: int, operation: Callable, cancelled=None) -> None:
         super().__init__()
         self.kind = kind
         self.generation = generation
         self.operation = operation
+        self.cancelled = cancelled
         self.signals = TaskSignals()
 
     def run(self) -> None:
@@ -63,14 +65,18 @@ class Controller(QObject):
     runtime_preferences_changed = Signal(object)
     devices_ready = Signal(object)
     elevation_needed = Signal(str)
+    credentials_expired = Signal()
 
-    def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic) -> None:
+    def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None) -> None:
         super().__init__()
         self.store = store
         self.credential_store = credential_store if credential_store is not None else CredentialStore()
         self.integration_adapter = integration_adapter if integration_adapter is not None else IntegrationAdapter()
         self.client_factory = client_factory if client_factory is not None else EcoFlowClient
         self.clock = clock
+        self.credential_cache = credential_cache if credential_cache is not None else SessionCredentialCache(clock=clock)
+        self.credential_renewal_required = False
+        self.credential_renewal_pending = False
         self.notice = ""
         self.preview = None
         try:
@@ -121,13 +127,20 @@ class Controller(QObject):
         return next(module for module in self.settings.integrations if module.id == integration_id)
 
     def start(self) -> None:
+        try:
+            self.credential_cache.initialize()
+        except CredentialError as error:
+            self.notice = str(error)
+            self.connection = ConnectionState.AUTH_ERROR
+            self._next_api = float("inf")
+            self.changed.emit()
         self._timer.start()
         self.tick()
 
     def _submit(self, kind: str, operation: Callable) -> None:
         if self._stopped or kind in self._active:
             return
-        task = Task(kind, self._generation, operation)
+        task = Task(kind, self._generation, operation, self._credential_cancelled if kind == "api" else None)
         task.signals.finished.connect(self._completed, Qt.ConnectionType.QueuedConnection)
         self._active[kind] = task
         self._pool.start(task)
@@ -147,6 +160,8 @@ class Controller(QObject):
 
     def refresh(self) -> None:
         if self._stopped:
+            return
+        if self._check_credential_expiry():
             return
         if "api" in self._active:
             self._api_pending = True
@@ -177,8 +192,61 @@ class Controller(QObject):
 
     def _read_credentials(self, settings: AppSettings, cancelled: threading.Event) -> Credentials | None:
         if settings.credential_source == "1password":
-            return read_credentials(settings.onepassword_access_ref, settings.onepassword_secret_ref, cancelled)
+            identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
+            return self.credential_cache.get(identity, settings.onepassword_cache_ttl_seconds, cancelled,
+                                             lambda: read_credentials(*identity, cancelled))
         return self.credential_store.read(settings.credential_ref)
+
+    def _check_credential_expiry(self) -> bool:
+        if self.settings.credential_source != "1password":
+            return False
+        if self.credential_renewal_pending:
+            return False
+        if self.credential_renewal_required:
+            self._credential_cancelled.set()
+            self._api_pending = False
+            self._next_api = float("inf")
+            self.connection = ConnectionState.AUTH_ERROR
+            if not self.notice:
+                self.notice = "onepassword_cache_expired"
+            return True
+        try:
+            if not self.credential_cache.expire(self.settings.onepassword_cache_ttl_seconds):
+                return False
+            notice = "onepassword_cache_expired"
+        except CredentialError as error:
+            notice = str(error)
+        self.credential_renewal_required = True
+        self._credential_cancelled.set()
+        self._api_pending = False
+        self._discovery_pending = None
+        self._next_api = float("inf")
+        self.connection = ConnectionState.AUTH_ERROR
+        self.notice = notice
+        self.credentials_expired.emit()
+        self.changed.emit()
+        return True
+
+    def renew_credentials(self) -> None:
+        if self._stopped or self.settings.credential_source != "1password" or "api" in self._active:
+            return
+        self._credential_cancelled.set()
+        self._credential_cancelled = threading.Event()
+        try:
+            self.credential_cache.clear()
+        except CredentialError as error:
+            self.notice = str(error)
+            self.connection = ConnectionState.AUTH_ERROR
+            self._next_api = float("inf")
+            self.changed.emit()
+            return
+        self.credential_renewal_pending = True
+        self.notice = ""
+        if self.settings.serial:
+            self.refresh()
+        else:
+            self.discover()
+            self.changed.emit()
 
     def apply_settings(self, settings: AppSettings, credentials: Credentials | None = None) -> None:
         settings.validate()
@@ -200,6 +268,7 @@ class Controller(QObject):
         self.settings = settings
         self._credential_cancelled.set()
         self._credential_cancelled = threading.Event()
+        self.credential_renewal_pending = False
         i18n.setup(settings.language)
         if hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
@@ -213,6 +282,18 @@ class Controller(QObject):
         self._api_pending = bool(settings.serial)
         self._retry = 5
         self.notice = ""
+        cache_fields = ("credential_source", "onepassword_access_ref", "onepassword_secret_ref")
+        if any(getattr(previous, name) != getattr(settings, name) for name in cache_fields):
+            try:
+                self.credential_cache.clear()
+                self.credential_renewal_required = False
+            except CredentialError as error:
+                self.notice = str(error)
+                self.credential_renewal_required = settings.credential_source == "1password"
+                self.connection = ConnectionState.AUTH_ERROR
+                self._next_api = float("inf")
+                self._api_pending = False
+        self._check_credential_expiry()
         previous_modules = {module.id: module for module in previous.integrations}
         self.integration_states = {
             module.id: self.integration_states[module.id] if previous_modules.get(module.id) == module else IntegrationState()
@@ -297,6 +378,7 @@ class Controller(QObject):
     def tick(self) -> None:
         if self._stopped:
             return
+        self._check_credential_expiry()
         now = self.clock()
         if self.connection == ConnectionState.LIVE and not self.fresh:
             self.connection = ConnectionState.STALE
@@ -325,13 +407,15 @@ class Controller(QObject):
                 self.request_profile(module.id, profile_id, automatic=True)
 
     def _completed(self, kind, generation, result, error) -> None:
-        self._active.pop(kind, None)
+        task = self._active.pop(kind, None)
         if kind.startswith("elevate:"):
             if hasattr(self.integration_adapter, "retain_sessions"):
                 self.integration_adapter.retain_sessions(() if self._stopped else self.settings.integrations)
         if self._stopped:
             return
-        if generation == self._generation:
+        if kind == "api":
+            self._check_credential_expiry()
+        if generation == self._generation and not (task is not None and task.cancelled is not None and task.cancelled.is_set()):
             if kind == "api":
                 if error is not None:
                     state = error.state if isinstance(error, EcoFlowError) else ConnectionState.AUTH_ERROR if isinstance(error, CredentialError) else ConnectionState.API_ERROR
@@ -343,6 +427,11 @@ class Controller(QObject):
                         self.connection = state
                         self._next_api = float("inf") if self.connection == ConnectionState.AUTH_ERROR else self.clock() + max(self._retry, getattr(error, "retry_after", None) or 0)
                         self._retry = min(self._retry * 2, 300)
+                    if self.settings.credential_source == "1password" and isinstance(error, EcoFlowError) and error.state == ConnectionState.AUTH_ERROR:
+                        try:
+                            self.credential_cache.clear()
+                        except CredentialError as cache_error:
+                            self.notice = str(cache_error)
                     self.devices_ready.emit(())
                 elif result[0] == "devices":
                     self.devices_ready.emit(result[1])
@@ -353,6 +442,9 @@ class Controller(QObject):
                     self._retry = 5
                     if self.notice.startswith("onepassword_") or self.notice in {"credentials_required", "credentials_error", *(state.value for state in ConnectionState)}:
                         self.notice = ""
+                if self.credential_renewal_pending:
+                    self.credential_renewal_pending = False
+                    self.credential_renewal_required = not self.credential_cache.ready
             elif kind.startswith("scan:"):
                 integration_id = kind.split(":", 1)[1]
                 self.integration_states[integration_id].observation = result if error is None else IntegrationObservation("integration_error")
@@ -390,10 +482,15 @@ class Controller(QObject):
             elif self._api_pending:
                 self._api_pending = False
                 self.refresh()
+            self.changed.emit()
 
     def stop(self) -> None:
         self._stopped = True
         self._credential_cancelled.set()
+        try:
+            self.credential_cache.close()
+        except CredentialError:
+            logger.error("The temporary 1Password credential record could not be removed")
         self._generation += 1
         self._timer.stop()
         self._pool.clear()
