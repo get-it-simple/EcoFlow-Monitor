@@ -73,6 +73,10 @@ QPushButton#primary:hover {{ background: {c['accentHover']}; }}
 QPushButton#primary:pressed {{ background: {c['accentPressed']}; }}
 QPushButton#primary:disabled {{ background: {c['raised']}; color: {c['subtle']}; border-color: {c['border']}; }}
 QPushButton#danger {{ color: {c['danger']}; background: {c['dangerSurface']}; }}
+QPushButton[link="true"] {{ background: transparent; color: {c['accent']}; border-color: transparent; text-decoration: underline; text-align: left; }}
+QPushButton[link="true"]:hover {{ background: transparent; color: {c['accentHover']}; }}
+QPushButton[link="true"]:pressed {{ background: transparent; color: {c['accentPressed']}; }}
+QPushButton[link="true"]:disabled {{ color: {c['subtle']}; }}
 QPushButton[token_chip="true"] {{ color: {c['input']}; font-size: {px(12)}px; padding: {px(4)}px {px(16)}px; }}
 QTabWidget::pane {{ border: none; background: transparent; }}
 QTabBar::tab {{ background: transparent; color: {c['muted']}; padding: {px(12)}px {px(24)}px; border-radius: {px(10)}px; }}

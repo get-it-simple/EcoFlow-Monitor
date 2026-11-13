@@ -65,6 +65,7 @@ class AppSettings:
     integrations: tuple[IntegrationDefinition, ...] = field(default_factory=lambda: (afterburner_example(),))
     hotkeys: tuple[HotkeyBinding, ...] = field(default_factory=default_hotkeys)
     language: str = "system"
+    logging_mode: str = "normal"
     scale: float = 1
     transparency: bool = True
     background_opacity: float = 0.82
@@ -93,6 +94,8 @@ class AppSettings:
     def validate(self) -> None:
         self.main_overlay.validate()
         self.mini_overlay.validate()
+        if not isinstance(self.logging_mode, str) or self.logging_mode not in {"off", "normal", "detailed"}:
+            raise ValueError("Invalid logging mode")
         if len(self.metric_order) != len(METRICS) or set(self.metric_order) != set(METRICS):
             raise ValueError("Invalid metric order")
         if any(type(value) is not bool for value in (self.transparency, self.animations, self.main_enabled, self.monitor_visible, self.monitor_labels_visible, self.monitor_values_on_hover, self.mini_enabled, self.mini_above_taskbar)):
@@ -152,6 +155,7 @@ class AppSettings:
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
+            "logging": {"mode": self.logging_mode},
             "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover},
             "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "hidden_metrics": list(self.mini_hidden_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
@@ -167,7 +171,8 @@ class AppSettings:
         appearance = data.get("appearance", {})
         mini = data.get("mini_widget", {})
         workspace = data.get("workspace", {})
-        if any(not isinstance(group, dict) for group in (eco, msi, automation, appearance, mini, workspace)):
+        diagnostics = data.get("logging", {})
+        if any(not isinstance(group, dict) for group in (eco, msi, automation, appearance, mini, workspace, diagnostics)):
             raise ValueError("Settings groups must be objects")
         onepassword = eco.get("onepassword", {})
         if not isinstance(onepassword, dict):
@@ -197,6 +202,7 @@ class AppSettings:
             capacity_wh=eco.get("capacity_wh", 2048), manual_min=eco.get("manual_min"), manual_max=eco.get("manual_max"),
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),
+            logging_mode=string(diagnostics, "mode", "normal"),
             transparency=boolean(appearance, "transparency", True), animations=boolean(appearance, "animations", True),
             main_enabled=boolean(workspace, "main_enabled", False),
             main_scale=workspace.get("main_scale", appearance.get("scale", data.get("ui_scale", 1))),

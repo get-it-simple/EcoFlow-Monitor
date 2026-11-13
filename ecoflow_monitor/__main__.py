@@ -1,7 +1,5 @@
 import argparse
 import json
-import logging
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +13,7 @@ from ecoflow_monitor.application import Application
 from ecoflow_monitor.settings import default_settings_path
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.instance_control import InstanceController
+from ecoflow_monitor.diagnostics import DiagnosticLog
 
 
 def main() -> int:
@@ -58,16 +57,12 @@ def main() -> int:
 
 
 def run_application(app, args, settings_path, guard) -> int:
-    if not args.smoke_test:
-        try:
-            directory = settings_path.parent / "logs"
-            directory.mkdir(parents=True, exist_ok=True)
-            handler = RotatingFileHandler(directory / "ecoflow-monitor.log", maxBytes=1048576, backupCount=2, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            logging.getLogger("ecoflow_monitor").addHandler(handler)
-        except OSError:
-            pass
-    runtime = Application(settings_path, native=not args.smoke_test)
+    with DiagnosticLog(settings_path.parent / "logs" / "ecoflow-monitor.log", disabled=args.smoke_test) as diagnostics:
+        return _run_application(app, args, settings_path, guard, diagnostics)
+
+
+def _run_application(app, args, settings_path, guard, diagnostics) -> int:
+    runtime = Application(settings_path, native=not args.smoke_test, diagnostics=diagnostics)
     if guard is not None:
         guard.activation_requested.connect(runtime.activate_existing_window)
         guard.shutdown_requested.connect(app.quit)

@@ -158,8 +158,13 @@ Canceling settings leaves the created item in your vault.
 
 Settings use **Save**, **Reset draft**, and **Cancel**. A damaged settings file is
 preserved; an explicit recovery Save creates `settings.json.bak` before replacing
-it. Diagnostic logs are kept in the settings directory's `logs` folder without
-keys or raw payloads.
+it. **Connection → Logging** offers Off, Normal (application actions), and Detailed
+(API responses and telemetry processing). Save to apply the mode without restarting.
+Known sensitive fields are masked while their presence remains visible; new API
+fields may need additional masking. **Show log file in Explorer** selects the current
+file. Logs stay locally in the settings directory's `logs` folder, with rotation
+limited to five files of approximately 5 MiB each. Turning logging off preserves
+existing files.
 
 ## Known limitations
 

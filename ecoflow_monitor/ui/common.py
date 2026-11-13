@@ -128,7 +128,8 @@ class ActionButton(QPushButton):
         painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
         scale = max(0.5, self.font().pixelSize() / 14)
         painter.setPen(self.palette().buttonText().color())
-        painter.drawText(self.rect().adjusted(round(20 * scale), 0, -round(20 * scale), 0), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.text())
+        alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter if self.property("link") else Qt.AlignmentFlag.AlignCenter
+        painter.drawText(self.rect().adjusted(round(20 * scale), 0, -round(20 * scale), 0), alignment | Qt.TextFlag.TextWordWrap, self.text())
 
 
 def action(text: str, callback, parent=None) -> QPushButton:

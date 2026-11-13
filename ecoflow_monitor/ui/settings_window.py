@@ -6,6 +6,7 @@ from PySide6.QtCore import QPoint, QSize, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
+from ecoflow_monitor.diagnostics import reveal_log
 from ecoflow_monitor.adapters.credentials import CredentialError
 from ecoflow_monitor.adapters.ecoflow import Credentials
 from ecoflow_monitor.adapters.hotkeys import HotkeyError, validate_bindings
@@ -15,7 +16,7 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import AppSettings, HotkeyBinding, SettingsError
 from ecoflow_monitor.ui.common import action, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import optional_percent
-from ecoflow_monitor.ui.components import ActionFooter, FormLayout as QFormLayout, NumberField, SelectField as QComboBox, SettingRow, Switch
+from ecoflow_monitor.ui.components import ActionFooter, FormLayout as QFormLayout, LinkButton, NumberField, SelectField as QComboBox, SettingRow, Switch
 from ecoflow_monitor.ui.metric_visibility import MetricVisibilityEditor
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor, hotkey_error_text
 from ecoflow_monitor.ui.theme import bind_style, settings_style
@@ -95,6 +96,12 @@ class SettingsWindow(QDialog):
         self._focus_binding = FocusBinding(self)
         self._translations = TranslationBinding(self)
         controller.runtime_preferences_changed.connect(self.sync_runtime_preferences)
+        self._log_reveal_failed = False
+        self._log_status_timer = QTimer(self)
+        self._log_status_timer.setInterval(1000)
+        self._log_status_timer.timeout.connect(self._refresh_log_status)
+        self._log_status_timer.start()
+        self._refresh_log_status()
         install_scrollbars(self)
 
     def _tab(self, title: str, show_title=True):
@@ -183,7 +190,43 @@ class SettingsWindow(QDialog):
         layout.addWidget(self.range_error)
         layout.addWidget(hint(t("capacity_hint")))
         layout.addWidget(hint(t("manual_limit_hint")))
+        logging_heading = QLabel(t("logging_title"))
+        logging_heading.setObjectName("section_title")
+        layout.addWidget(logging_heading)
+        self.logging_mode = QComboBox()
+        self.logging_mode.setAccessibleName(t("logging_mode"))
+        for mode in ("off", "normal", "detailed"):
+            self.logging_mode.addItem(t("logging_" + mode), mode)
+        layout.addWidget(SettingRow(t("logging_mode"), self.logging_mode))
+        layout.addWidget(hint(t("logging_description")))
+        self.log_link = LinkButton(t("logging_reveal"))
+        self.log_link.clicked.connect(self._reveal_log)
+        self.log_link.setAccessibleName(t("logging_reveal"))
+        layout.addWidget(self.log_link, 0, Qt.AlignmentFlag.AlignLeft)
+        self.log_status = QLabel()
+        self.log_status.setWordWrap(True)
+        self.log_status.setObjectName("form_error")
+        layout.addWidget(self.log_status)
         layout.addStretch()
+
+    def _refresh_log_status(self):
+        diagnostics = self.controller.diagnostics
+        path = self.controller.store.path.parent / "logs" / "ecoflow-monitor.log"
+        inaccessible = False
+        try:
+            exists = path.is_file()
+        except OSError:
+            exists = False
+            inaccessible = True
+        self.log_link.setEnabled(exists)
+        self.log_link.setToolTip(t("logging_reveal") if exists else t("logging_file_missing"))
+        key = "logging_unavailable" if inaccessible or (diagnostics is not None and diagnostics.failed) else "logging_reveal_failed" if self._log_reveal_failed else ""
+        self.log_status.setText(t(key) if key else "")
+
+    def _reveal_log(self):
+        path = self.controller.store.path.parent / "logs" / "ecoflow-monitor.log"
+        self._log_reveal_failed = not reveal_log(path)
+        self._refresh_log_status()
 
     def _build_appearance(self):
         layout = self._tab(t("appearance_settings"))
@@ -403,6 +446,7 @@ class SettingsWindow(QDialog):
             self.maximum.spin.setValue(settings.manual_max_retained)
         self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
+        self.logging_mode.setCurrentIndex(max(0, self.logging_mode.findData(settings.logging_mode)))
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
         self.main_enabled.setChecked(settings.main_enabled)
@@ -548,6 +592,7 @@ class SettingsWindow(QDialog):
             manual_max=self.maximum.value() if self.maximum.value() >= 0 else None,
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
+            logging_mode=self.logging_mode.currentData(),
             animations=self.animations.isChecked(), mini_enabled=self.mini_enabled.isChecked(),
             main_enabled=self.main_enabled.isChecked(), main_scale=self.main_scale.value() / 100,
             background_opacity=self._baseline.background_opacity if self.main_alpha.value() == round((self._baseline.background_opacity if self._baseline.transparency else 1) * 100) else self.main_alpha.value() / 100,

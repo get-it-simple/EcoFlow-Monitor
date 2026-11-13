@@ -23,10 +23,10 @@ from ecoflow_monitor.ui.hotkey_editor import hotkey_error_text
 
 
 class Application(QObject):
-    def __init__(self, settings_path: Path, native: bool = True, controller: Controller | None = None):
+    def __init__(self, settings_path: Path, native: bool = True, controller: Controller | None = None, diagnostics=None):
         super().__init__()
         self.native = native
-        self.controller = controller if controller is not None else Controller(SettingsStore(settings_path))
+        self.controller = controller if controller is not None else Controller(SettingsStore(settings_path), diagnostics=diagnostics)
         self.app = QApplication.instance()
         font = QFont(font_family())
         font.setPixelSize(14)
@@ -346,6 +346,7 @@ class Application(QObject):
         self.motion_driver.stop()
         if self.dashboard is not None:
             self.dashboard._draft_timer.stop()
+            self.dashboard._log_status_timer.stop()
             self.dashboard._geometry_timer.stop()
             self.dashboard._screen_tracker.stop()
             self.dashboard._close_credentials()

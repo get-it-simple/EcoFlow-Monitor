@@ -152,7 +152,7 @@ class IntegrationAdapter:
                 except ValueError:
                     return TransitionResult(False, completed, phase, index, "integration_command_failed")
                 except Exception as error:
-                    logger.error("Integration %s %s step %s failed (%s)", module.id, phase, index, type(error).__name__)
+                    logger.error("Integration %s step %s failed (%s)", phase, index, type(error).__name__)
                     return TransitionResult(False, completed, phase, index, "integration_command_failed")
                 completed += 1
         return TransitionResult(True, completed, exit_code=0 if completed else None)

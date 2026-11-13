@@ -12,6 +12,27 @@ from ecoflow_monitor.ui.motion import motion_driver, paint_status_mark, status_m
 from ecoflow_monitor.ui.typography import draw_outlined
 
 
+class LinkButton(ActionButton):
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setProperty("link", True)
+        self.setFlat(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.enable_wrapping()
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def minimumSizeHint(self):
+        return QSize(0, super().sizeHint().height())
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.wrapped_height(width)
+
+
 class Switch(QCheckBox):
     def __init__(self, text="", parent=None):
         super().__init__("", parent)
