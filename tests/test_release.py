@@ -48,9 +48,9 @@ def test_release_payload_checksums_and_machine_manifests(tmp_path, monkeypatch):
             name = f"{release.PACKAGE_ID}{suffix}.yaml"
             payload = (target / "winget" / name).read_bytes()
             lines = payload.decode("utf-8").splitlines()
-            assert lines[0] == f"# yaml-language-server: $schema=https://aka.ms/winget-manifest.{manifest_type}.1.12.0.schema.json"
+            assert lines[0] == f"# yaml-language-server: $schema=https://aka.ms/winget-manifest.{manifest_type}.1.10.0.schema.json"
             assert f"ManifestType: {manifest_type}" in lines
-            assert "ManifestVersion: 1.12.0" in lines
+            assert "ManifestVersion: 1.10.0" in lines
             assert archive.read(name) == payload
 
 
@@ -68,11 +68,11 @@ def test_release_verification_rejects_invalid_manifest_schema(tmp_path, monkeypa
     elif corruption == "header_type":
         content = content.replace(f"winget-manifest.{manifest_type}.", "winget-manifest.singleton.")
     elif corruption == "header_version":
-        content = content.replace(".1.12.0.schema.json", ".1.10.0.schema.json")
+        content = content.replace(".1.10.0.schema.json", ".1.12.0.schema.json")
     elif corruption == "manifest_type":
         content = content.replace(f"ManifestType: {manifest_type}\n", "ManifestType: singleton\n")
     else:
-        content = content.replace("ManifestVersion: 1.12.0\n", "ManifestVersion: 1.10.0\n")
+        content = content.replace("ManifestVersion: 1.10.0\n", "ManifestVersion: 1.12.0\n")
     path.write_text(content, encoding="utf-8")
     with ZipFile(target / f"{release.PACKAGE_ID}-{__version__}-winget.zip", "w") as archive:
         for manifest in sorted((target / "winget").iterdir()):
