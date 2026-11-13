@@ -7,13 +7,15 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import action, effective_scale, hint, number, profile_tooltip
 from ecoflow_monitor.ui.components import ActionLayout, SelectField as QComboBox, SettingRow, StatusBadge, Switch
 from ecoflow_monitor.ui.limits import ChargeLimits
-from ecoflow_monitor.ui.metrics import metric_label
+from ecoflow_monitor.ui.metrics import metric_label, metric_tooltip
 from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS
 from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
+from ecoflow_monitor.polling import PORT_KEYS
+from ecoflow_monitor.ui.polling import LoadingIndicator
 
 
 class MonitoringPage(QWidget):
@@ -149,13 +151,15 @@ class MonitoringPage(QWidget):
         self.battery_progress.configure(scale)
         self.balance.refresh()
         self.battery_progress.refresh()
-        self.balance_caption.setText(t("missing_data") if telemetry is None else t("power_balance").format(value=number(telemetry.input_w - telemetry.output_w, t("unit_watt"))))
+        self.balance_caption.setText(t("missing_data") if telemetry is None or telemetry.input_w is None or telemetry.output_w is None or not self.controller.fresh_for({"input_power", "output_power"}) else t("power_balance").format(value=number(telemetry.input_w - telemetry.output_w, t("unit_watt"))))
         self.balance_message.setText(t("motion_" + self.balance.motion.state.mode))
         ports = dict(telemetry.ports) if telemetry else {}
-        keys = tuple(dict.fromkeys(("ac_output", "dc_output", *(key for key in ports if key not in {"ac_input", "pv_input"}))))
+        anderson = tuple(key for key in ports if key.startswith("anderson_")) or ("anderson",)
+        keys = tuple(key for key in PORT_KEYS if key not in {"ac_input", "pv_input"}) + anderson
         for key in keys:
             if key not in self.port_values:
                 value = QLabel()
+                value.loader = LoadingIndicator(self.controller, value)
                 value.setObjectName("secondary")
                 row = MotionSurface(self.controller, {"ac_output": "ac", "dc_output": "dc"}.get(key), self.port_card)
                 line = QHBoxLayout(row)
@@ -168,20 +172,34 @@ class MonitoringPage(QWidget):
                     state = Switch(metric_label(key))
                     state.setEnabled(False)
                     state.setProperty("read_only_output", True)
+                    policy = state.sizePolicy()
+                    policy.setRetainSizeWhenHidden(True)
+                    state.setSizePolicy(policy)
                     line.addWidget(state)
                     row.output_state = state
+                    row.state_loader = LoadingIndicator(self.controller, row, state)
                 self.port_box.insertWidget(self.port_box.count() - 1, row)
                 self.port_values[key] = (row, value)
         for key, (row, value) in self.port_values.items():
             row.motion_radius = RADIUS["control"] * scale
             row.setVisible(key in keys)
             value.setText(number(ports.get(key), t("unit_watt")))
+            state = self.controller.reading_state(key)
+            value.loader.present(state, scale)
+            if state == "loading":
+                value.setText("     ")
+            tooltip = metric_tooltip(key, self.controller)
+            value.setToolTip(tooltip + "\n" + t("sensor_" + state) if state != "ready" else tooltip)
             if key in {"ac_output", "dc_output"}:
                 enabled = getattr(telemetry, "ac_enabled" if key == "ac_output" else "dc_enabled", None)
-                row.output_state.setVisible(enabled is not None)
+                outlet_state = self.controller.reading_state("ac_enabled" if key == "ac_output" else "dc_enabled")
+                row.output_state.setVisible(enabled is not None and outlet_state != "loading")
                 row.output_state.setChecked(enabled is True)
-                row.output_state.setToolTip(t("outputs_read_only") + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
-                value.setText(value.text() + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
+                outlet_tooltip = t("outputs_read_only") + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data")
+                row.output_state.setToolTip(outlet_tooltip + (" · " + t("sensor_" + outlet_state) if outlet_state != "ready" else ""))
+                row.state_loader.present(outlet_state, scale)
+                if state != "loading" and outlet_state != "loading":
+                    value.setText(value.text() + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
         self.limits.refresh()
         self.open_mini_button.setText(t("open_mini_widget"))
         self.refresh_integrations()

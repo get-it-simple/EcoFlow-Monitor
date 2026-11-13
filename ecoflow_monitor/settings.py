@@ -10,6 +10,7 @@ import uuid
 
 from ecoflow_monitor.integrations import IntegrationDefinition, afterburner_example, hotkey_actions, migrate_afterburner
 from ecoflow_monitor.credential_refs import normalize_secret_reference
+from ecoflow_monitor.polling import PollingPreferences
 
 
 METRICS = ("battery_level", "input_power", "output_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")
@@ -109,6 +110,7 @@ class WidgetPreferences:
 
 @dataclass(frozen=True)
 class AppSettings:
+    polling: PollingPreferences = field(default_factory=PollingPreferences)
     serial: str = ""
     credential_ref: str = field(default_factory=lambda: "EcoFlowMonitor/" + uuid.uuid4().hex)
     credential_source: str = "windows"
@@ -149,6 +151,9 @@ class AppSettings:
     widget: WidgetPreferences = field(default_factory=WidgetPreferences)
 
     def validate(self) -> None:
+        if not isinstance(self.polling, PollingPreferences):
+            raise ValueError("polling_interval_error")
+        self.polling.validate()
         self.widget.validate()
         self.main_overlay.validate()
         self.mini_overlay.validate()
@@ -210,7 +215,8 @@ class AppSettings:
             "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
                         "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref, "cache_ttl_seconds": self.onepassword_cache_ttl_seconds},
-                        "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max},
+                        "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max,
+                        "polling": asdict(self.polling)},
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
@@ -254,6 +260,7 @@ class AppSettings:
             existing_actions = {binding["action"] for binding in bindings}
             bindings = [*bindings, *(asdict(binding) for binding in default_hotkeys() if binding.action in {"open_dashboard", "recover_widgets"} and binding.action not in existing_actions)]
         settings = cls(
+            polling=PollingPreferences.from_dict(eco.get("polling", {})),
             widget=WidgetPreferences.from_dict(data.get("widget", {})),
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
             credential_source=string(eco, "credential_source", "windows"),

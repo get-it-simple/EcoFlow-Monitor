@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.14.0**.
+battery charge. Version **0.15.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -169,12 +169,14 @@ existing files.
 
 ## Known limitations
 
-- Only DELTA 3 Max telemetry mapping is supported. Official documentation was
-  checked, but monitoring on a real device remains unverified.
+- Only DELTA 3 Max telemetry mapping is supported. Official documentation and a
+  supplied runtime log inform the mapping; selective polling still needs live
+  device verification. Port power retains the sign supplied by the API.
 - Cloud monitoring requires internet, an authorized account-bound device, and
-  valid developer keys. Polling starts at 30 seconds; readings become stale after
-  90 seconds without a valid retrieval. API failure alone does not prove internet
-  loss.
+  valid developer keys. Connection settings provide separate update intervals and
+  loading ages for main readings, ports and charge limits. Defaults are 30 seconds,
+  one minute and five minutes. Widgets request visible readings and dependencies
+  of calculations and enabled Auto rules. API failure alone does not prove internet loss.
 - Runtime estimates use output power and charge above the discharge floor, only
   with measured zero input and the necessary fresh data. The nominal capacity is
   2048 Wh and can be overridden for local estimates.

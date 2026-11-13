@@ -44,7 +44,7 @@ class MotionDriver(QObject):
             return
         now = self.now()
         enabled = self.controller.ui_settings.animations and QApplication.instance().property("system_animations") is not False
-        key = (self.controller.telemetry, self.controller.connection, self.controller.fresh)
+        key = (self.controller.motion_telemetry, self.controller.connection, self.controller.fresh)
         if key != self._key:
             self.state = derive_motion(*key, self.state.mode, MOTION["powerThresholds"])
             self._key = key

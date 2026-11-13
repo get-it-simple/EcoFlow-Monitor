@@ -226,6 +226,7 @@ def test_expiry_notifies_once_and_tray_click_preserves_draft(controller, qapp, a
     monkeypatch.setattr("ecoflow_monitor.application.activate_window", lambda window: None)
     runtime.native = True
     try:
+        runtime.open_dashboard()
         controller.refresh()
         wait_until(qapp, lambda: "api" not in controller._active)
         runtime.dashboard.capacity.setValue(3000)

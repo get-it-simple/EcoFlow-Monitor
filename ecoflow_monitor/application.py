@@ -16,6 +16,7 @@ from ecoflow_monitor.ui.common import app_icon, elevation_prompt, font_family
 from ecoflow_monitor.ui.adaptive_widget import AdaptiveWidget
 from ecoflow_monitor.ui.motion import motion_driver
 from ecoflow_monitor.ui.dashboard import Dashboard
+from ecoflow_monitor.ui.polling import SensorDemand
 from ecoflow_monitor.ui.components import DialogChrome
 from ecoflow_monitor.ui.theme import menu_style
 from ecoflow_monitor.ui.hotkey_editor import hotkey_error_text
@@ -45,6 +46,7 @@ class Application(QObject):
         self.main = self.mini = self.widget
         self.dashboard = Dashboard(self.controller, lambda: self.controller.update_widget(enabled=True))
         self.window = self.dashboard
+        self.sensor_demand = SensorDemand(self.controller, self.dashboard, self.widget)
         self.dashboard.setWindowIcon(app_icon())
         self.dashboard.preflight = self.preflight_settings
         self.dashboard.preview_changed.connect(self.preview)
@@ -253,6 +255,7 @@ class Application(QObject):
         if page is not None:
             self.dashboard.navigation.setCurrentRow(page)
         self.dashboard.show()
+        self.sensor_demand.refresh()
         self.dashboard.raise_()
         self.dashboard.activateWindow()
 

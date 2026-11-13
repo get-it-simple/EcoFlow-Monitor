@@ -35,6 +35,14 @@ def metric_tooltip(key: str, controller=None) -> str:
     parts = [metric_label(key), fill(t(description), width=85, break_long_words=False, break_on_hyphens=False)]
     if base in API_FIELDS:
         parts.append(t("metric_api_field").format(field=API_FIELDS[base]))
+    if base in {"ac_input", "pv_input", "ac_output", "dc_output", "anderson"} or base.startswith("usb_"):
+        parts.append(t("sensor_signed_power"))
+    if controller is not None:
+        from datetime import datetime
+        from ecoflow_monitor.polling import dependencies
+        stamps = [sample.received_utc for sensor in dependencies(key) if (sample := controller.polling.samples.get(sensor)) is not None and sample.received_utc is not None]
+        if stamps:
+            parts.append(t("last_update").format(timestamp=datetime.fromtimestamp(min(stamps)).astimezone().strftime("%Y-%m-%d %H:%M:%S")))
     if controller is not None and base in {"minimum_discharge_level", "maximum_charge_level"}:
         limit = controller.minimum if base == "minimum_discharge_level" else controller.maximum
         parts.append(t("metric_source").format(source=t("source_" + limit.source), value=number(limit.value, "%")))

@@ -12,14 +12,10 @@ import httpx
 
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.diagnostics import event
+from ecoflow_monitor.polling import CORE, PORT_KEYS, SENSOR_FIELDS, TelemetryPatch
 
 
 HOST = "https://api.ecoflow.com"
-PORT_KEYS = {
-    "ac_input": "powGetAcIn", "pv_input": "powGetPv", "ac_output": "powGetAcOut",
-    "dc_output": "powGet12v", "usb_c1": "powGetTypec1", "usb_c2": "powGetTypec2",
-    "usb_c3": "powGetTypec3", "usb_a1": "powGetQcusb1", "usb_a2": "powGetQcusb2",
-}
 QUOTAS = (
     "powInSumW", "powOutSumW", "cmsBattSoc", "cmsMinDsgSoc", "cmsMaxChgSoc",
     *PORT_KEYS.values(), "powGet12vList.powGet12vItem", "flowInfoAcOut", "flowInfo12v",
@@ -68,14 +64,14 @@ def signed_headers(parameters: dict, credentials: Credentials, nonce: int, times
     return {"accessKey": credentials.access_key, "nonce": str(nonce), "timestamp": str(timestamp), "sign": signature}
 
 
-def metric(value: Any, maximum: float | None = None) -> float | None:
+def metric(value: Any, maximum: float | None = None, signed: bool = False) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
         number = float(value)
     except (ValueError, OverflowError):
         return None
-    return number if math.isfinite(number) and number >= 0 and (maximum is None or number <= maximum) else None
+    return number if math.isfinite(number) and (signed or number >= 0) and (maximum is None or number <= maximum) else None
 
 
 def normalize_telemetry(data: dict, utc: float, monotonic: float) -> Telemetry:
@@ -88,10 +84,10 @@ def normalize_telemetry(data: dict, utc: float, monotonic: float) -> Telemetry:
         event("telemetry_rejected", level=logging.DEBUG, reason="invalid_required_fields",
               fields=[key for key, value in zip(("powInSumW", "powOutSumW", "cmsBattSoc"), core) if value is None])
         raise EcoFlowError(ConnectionState.API_ERROR)
-    ports = [(name, value) for name, key in PORT_KEYS.items() if (value := metric(data.get(key))) is not None]
+    ports = [(name, value) for name, key in PORT_KEYS.items() if (value := metric(data.get(key), signed=True)) is not None]
     anderson = data.get("powGet12vList.powGet12vItem")
     if isinstance(anderson, list):
-        ports.extend((f"anderson_{index + 1}", value) for index, item in enumerate(anderson) if (value := metric(item)) is not None)
+        ports.extend((f"anderson_{index + 1}", value) for index, item in enumerate(anderson) if (value := metric(item, signed=True)) is not None)
     state = metric(data.get("cmsChgDsgState"), 2)
     snapshot = Telemetry(
         input_w=core[0], output_w=core[1], soc_pct=core[2], received_utc=utc,
@@ -105,10 +101,10 @@ def normalize_telemetry(data: dict, utc: float, monotonic: float) -> Telemetry:
     )
     ranges = {"cmsMinDsgSoc": 30, "cmsMaxChgSoc": 100, "cmsChgDsgState": 2}
     numeric_fields = {*PORT_KEYS.values(), *ranges, "cmsDsgRemTime", "cmsChgRemTime", "flowInfoAcOut", "flowInfo12v"}
-    invalid = [key for key in sorted(numeric_fields & data.keys()) if metric(data[key], ranges.get(key)) is None
+    invalid = [key for key in sorted(numeric_fields & data.keys()) if metric(data[key], ranges.get(key), signed=key in PORT_KEYS.values()) is None
                or (key in {"cmsChgDsgState", "flowInfoAcOut", "flowInfo12v"} and not float(data[key]).is_integer())]
     anderson = data.get("powGet12vList.powGet12vItem")
-    if "powGet12vList.powGet12vItem" in data and (not isinstance(anderson, list) or any(metric(item) is None for item in anderson)):
+    if "powGet12vList.powGet12vItem" in data and (not isinstance(anderson, list) or any(metric(item, signed=True) is None for item in anderson)):
         invalid.append("powGet12vList.powGet12vItem")
     event("telemetry_normalized", level=logging.DEBUG, telemetry=asdict(snapshot),
           missing_fields=[key for key in QUOTAS if key not in data], invalid_fields=invalid,
@@ -119,6 +115,36 @@ def normalize_telemetry(data: dict, utc: float, monotonic: float) -> Telemetry:
 def outlet_state(value: Any) -> bool | None:
     number = metric(value)
     return number != 4 if number is not None and number.is_integer() else None
+
+
+def normalize_partial(data: dict, quotas: tuple[str, ...]) -> TelemetryPatch:
+    requested = tuple(key for key, wire in SENSOR_FIELDS.items() if wire in quotas)
+    values, missing, invalid = [], [], []
+    ranges = {"battery_level": 100, "minimum_discharge_level": 30, "maximum_charge_level": 100, "charging_state": 2}
+    for key in requested:
+        wire = SENSOR_FIELDS[key]
+        if wire not in data:
+            missing.append(key)
+            continue
+        raw = data[wire]
+        if key == "anderson":
+            value = tuple(metric(item, signed=True) for item in raw) if isinstance(raw, list) else None
+            if value is not None and any(item is None for item in value):
+                value = None
+        elif key in {"ac_enabled", "dc_enabled"}:
+            value = outlet_state(raw)
+        else:
+            value = metric(raw, ranges.get(key), signed=key in PORT_KEYS)
+            if key == "charging_state" and value is not None:
+                value = int(value) if value.is_integer() else None
+        if value is None:
+            invalid.append(key)
+        else:
+            values.append((key, value))
+    event("telemetry_partial_normalized", level=logging.DEBUG, requested_fields=list(quotas),
+          missing_fields=[SENSOR_FIELDS[key] for key in missing], invalid_fields=[SENSOR_FIELDS[key] for key in invalid],
+          telemetry=dict(values))
+    return TelemetryPatch(requested, tuple(values), tuple(missing), tuple(invalid))
 
 
 class EcoFlowClient:
@@ -177,6 +203,32 @@ class EcoFlowClient:
         )
 
     def read(self, serial: str) -> Telemetry:
+        self._check_device(serial)
+        data = self._request("POST", "/iot-open/sign/device/quota", {"sn": serial, "params": {"quotas": list(QUOTAS)}})
+        if not isinstance(data, dict):
+            event("telemetry_rejected", level=logging.DEBUG, reason="expected_object")
+            raise EcoFlowError(ConnectionState.API_ERROR)
+        return normalize_telemetry(data, time.time(), time.monotonic())
+
+    def read_quotas(self, serial: str, select_quotas, *, verify_model: bool = False) -> TelemetryPatch:
+        self._check_device(serial)
+        quotas = tuple(select_quotas())
+        if not quotas:
+            return TelemetryPatch((), ())
+        if set(quotas) - set(SENSOR_FIELDS.values()):
+            raise ValueError("Unknown telemetry quota")
+        data = self._request("POST", "/iot-open/sign/device/quota", {"sn": serial, "params": {"quotas": list(quotas)}})
+        if not isinstance(data, dict):
+            raise EcoFlowError(ConnectionState.API_ERROR)
+        patch = normalize_partial(data, quotas)
+        if verify_model:
+            if any(SENSOR_FIELDS[key] not in data for key in CORE):
+                raise EcoFlowError(ConnectionState.UNSUPPORTED)
+            if not CORE <= dict(patch.values).keys():
+                raise EcoFlowError(ConnectionState.API_ERROR)
+        return patch
+
+    def _check_device(self, serial: str) -> None:
         devices = self.devices()
         device = next((device for device in devices if device.serial == serial), None)
         if device is None:
@@ -185,8 +237,3 @@ class EcoFlowClient:
         if not device.online:
             event("device_unavailable", reason="offline")
             raise EcoFlowError(ConnectionState.DEVICE_OFFLINE)
-        data = self._request("POST", "/iot-open/sign/device/quota", {"sn": serial, "params": {"quotas": list(QUOTAS)}})
-        if not isinstance(data, dict):
-            event("telemetry_rejected", level=logging.DEBUG, reason="expected_object")
-            raise EcoFlowError(ConnectionState.API_ERROR)
-        return normalize_telemetry(data, time.time(), time.monotonic())

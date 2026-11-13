@@ -28,6 +28,8 @@ class MetricReading(MotionSurface):
         self.label = ValueLabel(self)
         self.label.setWordWrap(True)
         self.value = ValueLabel(self)
+        from ecoflow_monitor.ui.polling import LoadingIndicator
+        self.loader = LoadingIndicator(controller, self.value)
         policy = self.value.sizePolicy()
         policy.setRetainSizeWhenHidden(True)
         self.value.setSizePolicy(policy)
@@ -65,17 +67,22 @@ class MetricReading(MotionSurface):
     def refresh(self):
         self.motion.refresh()
         text = metric_text(self.controller, self.key)
+        state = self.controller.reading_state(self.key)
+        display = " " if state == "loading" else text
         label = metric_label(self.key)
         width = getattr(self, "label_width", None)
         self.label.setText(self.label.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, width) if width is not None else label)
         self.label.setToolTip(label)
-        self.value.setText(text)
+        self.value.setText(display)
+        self._layout_loader(state)
         self.value.setVisible(not self.hover_only or self.underMouse() or self.hasFocus())
         tooltip = metric_tooltip(self.key, self.controller)
+        if state in {"loading", "refreshing", "stale"} or state == "missing" and self.controller.polling.samples:
+            tooltip += "\n" + t("sensor_" + state)
         if text == "—":
             tooltip += "\n" + t("missing_data")
         self.setToolTip(tooltip)
-        self.setAccessibleName(metric_label(self.key) + ": " + text)
+        self.setAccessibleName(metric_label(self.key) + ": " + (t("sensor_" + state) if state in {"loading", "refreshing"} else text))
         self.value.setAccessibleName(self.accessibleName())
         if self.key == "battery_level":
             color = COLORS["output" if self.motion.state.mode == "discharging" else "accent"]
@@ -86,6 +93,18 @@ class MetricReading(MotionSurface):
         if event.type() in {QEvent.Type.Enter, QEvent.Type.Leave, QEvent.Type.FocusIn, QEvent.Type.FocusOut} and hasattr(self, "value"):
             self.refresh()
         return result
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "loader"):
+            self._layout_loader(self.controller.reading_state(self.key))
+
+    def _layout_loader(self, state):
+        anchor = self if state == "refreshing" else self.value
+        if self.loader.parentWidget() is not anchor:
+            self.loader.setParent(anchor)
+        self.loader.corner = state == "refreshing"
+        self.loader.present(state, self._configuration[0])
 
 
 class EnergyBalance(QWidget):

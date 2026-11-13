@@ -1,7 +1,7 @@
 import math
 from dataclasses import replace
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLayout, QScrollArea, QToolButton, QVBoxLayout, QWidget
 
@@ -68,6 +68,8 @@ class DetailsPanel(QFrame):
 
 
 class AdaptiveWidget(QFrame):
+    composition_changed = Signal()
+
     def __init__(self, controller, open_dashboard):
         super().__init__()
         self.controller = controller
@@ -284,6 +286,10 @@ class AdaptiveWidget(QFrame):
             self._update_details()
         finally:
             self._laying_out = False
+        signature = (self.composition.visible, self.composition.details)
+        if signature != getattr(self, "_composition_signature", None):
+            self._composition_signature = signature
+            self.composition_changed.emit()
 
     def _update_details(self):
         if not hasattr(self, "composition"):

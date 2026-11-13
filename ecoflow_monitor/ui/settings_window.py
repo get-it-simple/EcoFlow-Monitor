@@ -14,6 +14,7 @@ from ecoflow_monitor.integrations import hotkey_actions, hotkey_label
 from ecoflow_monitor.ui.integrations import IntegrationsEditor
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import AppSettings, HotkeyBinding, SettingsError
+from ecoflow_monitor.polling import PollingGroup, PollingPreferences
 from ecoflow_monitor.ui.common import action, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import optional_percent
 from ecoflow_monitor.ui.components import ActionFooter, FormLayout as QFormLayout, LinkButton, NumberField, SelectField as QComboBox, SettingRow, Switch
@@ -190,6 +191,24 @@ class SettingsWindow(QDialog):
         layout.addWidget(self.range_error)
         layout.addWidget(hint(t("capacity_hint")))
         layout.addWidget(hint(t("manual_limit_hint")))
+        self.polling_section = CollapsibleSection(t("polling_title"), self)
+        layout.addWidget(self.polling_section)
+        self.polling_section.content.addWidget(hint(t("polling_description")))
+        self.polling_fields = {}
+        for name in ("primary", "ports", "limits"):
+            title = QLabel(t("polling_" + name))
+            title.setObjectName("section_title")
+            self.polling_section.content.addWidget(title)
+            controls = []
+            for label, minimum, maximum in (("polling_interval", 5, 3600), ("polling_stale", 5, 86400)):
+                control = NumberField()
+                control.setDecimals(0)
+                control.setRange(minimum, maximum)
+                control.setSuffix(" " + t("unit_seconds"))
+                control.setAccessibleName(t("polling_" + name) + ": " + t(label))
+                self.polling_section.content.addWidget(SettingRow(t(label), control))
+                controls.append(control)
+            self.polling_fields[name] = tuple(controls)
         logging_heading = QLabel(t("logging_title"))
         logging_heading.setObjectName("section_title")
         layout.addWidget(logging_heading)
@@ -430,6 +449,13 @@ class SettingsWindow(QDialog):
         self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.logging_mode.setCurrentIndex(max(0, self.logging_mode.findData(settings.logging_mode)))
+        for name, (interval, stale) in self.polling_fields.items():
+            group = getattr(settings.polling, name)
+            interval.setValue(group.interval_seconds)
+            stale.setValue(group.stale_after_seconds)
+            for control, label in ((interval, "polling_interval"), (stale, "polling_stale")):
+                control.setSuffix(" " + t("unit_seconds"))
+                control.setAccessibleName(t("polling_" + name) + ": " + t(label))
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
         self.main_enabled.setChecked(settings.widget.enabled)
@@ -577,6 +603,7 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             logging_mode=self.logging_mode.currentData(),
+            polling=PollingPreferences(**{name: PollingGroup(int(interval.value()), int(stale.value())) for name, (interval, stale) in self.polling_fields.items()}),
             animations=self.animations.isChecked(),
             widget=self._widget_draft(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
@@ -643,7 +670,7 @@ class SettingsWindow(QDialog):
             self._dirty = True
             self.save_button.setEnabled(False)
             self._show_hotkey_issues(error.issues if isinstance(error, HotkeyError) else ())
-            self.error_label.setText(hotkey_error_text(error, self.integrations_editor.modules()) if isinstance(error, HotkeyError) else t("invalid_settings"))
+            self.error_label.setText(hotkey_error_text(error, self.integrations_editor.modules()) if isinstance(error, HotkeyError) else t(str(error)) if str(error).startswith("polling_") else t("invalid_settings"))
         self.error_label.setVisible(bool(self.error_label.text()) and (not hasattr(self, "navigation") or self.tabs.currentIndex() != 0))
 
     def _metric_group(self, mode):

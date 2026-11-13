@@ -6,6 +6,7 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import number
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.tokens import COLORS
+from ecoflow_monitor.ui.polling import LoadingIndicator
 
 
 class LimitReadout(QLabel):
@@ -18,11 +19,16 @@ class LimitReadout(QLabel):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.label = ""
         self.value = ""
+        self.loader = LoadingIndicator(controller, self)
 
     def refresh(self):
         limit = self.controller.minimum if self.key == "minimum_discharge_level" else self.controller.maximum
         self.label = t("minimum_short" if self.key == "minimum_discharge_level" else "maximum_short")
         self.value = number(limit.value, "%")
+        state = self.controller.reading_state(self.key)
+        if state == "loading":
+            self.value = "     "
+        self.loader.present(state, self.font().pixelSize() / 14 if self.font().pixelSize() > 0 else 1)
         self.setText(self.label + ": " + self.value)
         self.setToolTip(metric_tooltip(self.key, self.controller))
         self.setAccessibleName(self.text())

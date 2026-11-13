@@ -19,9 +19,9 @@ class ConnectionState(str, Enum):
 
 @dataclass(frozen=True)
 class Telemetry:
-    input_w: float
-    output_w: float
-    soc_pct: float
+    input_w: float | None
+    output_w: float | None
+    soc_pct: float | None
     received_utc: float
     received_monotonic: float
     min_soc: float | None = None
@@ -78,7 +78,7 @@ def runtime_hours(telemetry: Telemetry | None, capacity_wh: float, floor: float 
     if not fresh or telemetry is None or floor is None:
         return None
     values = (capacity_wh, floor, telemetry.input_w, telemetry.output_w, telemetry.soc_pct)
-    if any(isinstance(value, bool) or not math.isfinite(value) for value in values):
+    if any(value is None or isinstance(value, bool) or not math.isfinite(value) for value in values):
         return None
     if capacity_wh <= 0 or not 0 <= floor <= 100 or not 0 <= telemetry.soc_pct <= 100:
         return None
@@ -113,6 +113,10 @@ def select_rule(telemetry: Telemetry, running: frozenset[str], application_rules
     for rules, application in ((application_rules, True), (system_rules, False)):
         for rule in rules:
             if not rule.enabled or (application and normalized_executable(rule.executable) not in paths):
+                continue
+            if rule.input_condition != "any" and telemetry.input_w is None:
+                continue
+            if (rule.min_soc is not None or rule.max_soc is not None) and telemetry.soc_pct is None:
                 continue
             if rule.input_condition == "present" and telemetry.input_w <= 0:
                 continue

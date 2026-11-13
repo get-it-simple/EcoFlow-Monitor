@@ -19,6 +19,7 @@ from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
+from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, PollingState, TelemetryPatch, dependencies
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class Controller(QObject):
     devices_ready = Signal(object)
     elevation_needed = Signal(str)
     credentials_expired = Signal()
+    quotas_started = Signal()
 
     def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None) -> None:
         super().__init__()
@@ -93,6 +95,11 @@ class Controller(QObject):
         i18n.setup(self.settings.language)
         self.connection = ConnectionState.UNCONFIGURED
         self.telemetry = None
+        self.polling = PollingState(self.settings.polling)
+        self._demands = {"dashboard": DASHBOARD_SENSORS}
+        self._polling_revision = 0
+        self.quotas_started.connect(self.changed, Qt.ConnectionType.QueuedConnection)
+        self._update_demand()
         self.integration_states = {module.id: IntegrationState() for module in self.settings.integrations}
         self._generation = 0
         self._stopped = False
@@ -115,7 +122,67 @@ class Controller(QObject):
 
     @property
     def fresh(self) -> bool:
-        return self.connection == ConnectionState.LIVE and self.telemetry is not None and self.clock() - self.telemetry.received_monotonic < 90
+        keys = self.polling.required & CORE
+        return self.fresh_for(keys or self.polling.required or CORE)
+
+    def fresh_for(self, keys) -> bool:
+        if self.connection not in {ConnectionState.LIVE, ConnectionState.STALE} or self.telemetry is None:
+            return False
+        if self.polling.samples:
+            return self.polling.fresh(keys, self.clock()) if keys else True
+        return self.connection == ConnectionState.LIVE and self.clock() - self.telemetry.received_monotonic < self.settings.polling.primary.stale_after_seconds
+
+    def set_sensor_demand(self, source: str, keys) -> None:
+        if frozenset(keys) == self._demands.get(source, frozenset()):
+            return
+        self._demands[source] = frozenset(keys)
+        self._update_demand()
+        self.changed.emit()
+
+    def _automation_sensors(self, module):
+        keys = set()
+        has_rule = False
+        if module.enabled and module.auto_enabled:
+            for rule in (*module.application_rules, *module.system_rules):
+                if rule.enabled:
+                    has_rule = True
+                    if rule.input_condition != "any":
+                        keys.add("input_power")
+                    if rule.min_soc is not None or rule.max_soc is not None:
+                        keys.add("battery_level")
+        return frozenset(keys or ({"battery_level"} if has_rule else set()))
+
+    def _update_demand(self):
+        visible = frozenset(key for keys in self._demands.values() for metric in keys for key in dependencies(metric))
+        required = set(visible)
+        for module in self.settings.integrations:
+            required.update(self._automation_sensors(module))
+        if self.polling.set_demand(visible, required, self.clock()) and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+            self._next_api = self.polling.next_due(self.clock())
+
+    def reading_state(self, key: str) -> str:
+        if not self.polling.samples and self.telemetry is not None:
+            return "ready" if self.fresh else "stale"
+        if not self.settings.serial:
+            return "missing"
+        keys = dependencies(key)
+        if key == "minimum_discharge_level" and self.minimum.source == "manual":
+            return "ready"
+        if key == "maximum_charge_level" and self.maximum.source == "manual":
+            return "ready"
+        if key == "estimated_runtime" and self.minimum.source == "manual":
+            keys = CORE
+        if self.connection == ConnectionState.AUTH_ERROR and "api" not in self._active:
+            return "stale" if any(self.polling.samples.get(sensor) is not None and self.polling.samples[sensor].value is not None for sensor in keys) else "missing"
+        return self.polling.presentation(keys, self.clock())
+
+    @property
+    def motion_telemetry(self):
+        if self.telemetry is None or not self.polling.samples:
+            return self.telemetry
+        names = {"input_power": "input_w", "output_power": "output_w", "battery_level": "soc_pct",
+                 "charging_state": "charging_state", "ac_enabled": "ac_enabled", "dc_enabled": "dc_enabled"}
+        return replace(self.telemetry, **{attribute: None for key, attribute in names.items() if not self.fresh_for({key})})
 
     @property
     def minimum(self):
@@ -127,7 +194,8 @@ class Controller(QObject):
 
     @property
     def runtime(self):
-        return runtime_hours(self.telemetry, self.settings.capacity_wh, self.minimum.value, self.fresh)
+        keys = CORE | ({"minimum_discharge_level"} if self.minimum.source != "manual" else set())
+        return runtime_hours(self.telemetry, self.settings.capacity_wh, self.minimum.value, self.fresh_for(keys))
 
     def module(self, integration_id: str) -> IntegrationDefinition:
         return next(module for module in self.settings.integrations if module.id == integration_id)
@@ -179,24 +247,46 @@ class Controller(QObject):
             self.changed.emit()
             return
         self._api_pending = False
+        self._update_demand()
+        if not self.polling.required:
+            self._next_api = float("inf")
+            return
+        if self.connection in {ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+            self.polling.retry()
+        if self.polling.samples and not self.polling.due(self.clock()):
+            self._next_api = self.polling.next_due(self.clock())
+            return
         event("telemetry_refresh_started")
         settings, cancelled = self.settings, self._credential_cancelled
         serial = settings.serial
         self._api_mode = "telemetry"
+        polling = self.polling
+        def select_quotas():
+            if cancelled.is_set():
+                return ()
+            quotas = polling.begin(self.clock())
+            self.quotas_started.emit()
+            event("telemetry_quotas_selected", level=logging.DEBUG, fields=list(quotas))
+            return quotas
         def operation():
             credentials = self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
             try:
-                return ("telemetry", self.client_factory(credentials).read(serial))
+                client = self.client_factory(credentials)
+                if hasattr(client, "read_quotas"):
+                    return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified))
+                return ("telemetry", client.read(serial))
             except EcoFlowError as error:
                 if error.state == ConnectionState.API_ERROR and internet_unavailable():
                     raise EcoFlowError(ConnectionState.NETWORK_UNAVAILABLE) from None
                 raise
         if self.telemetry is None:
             self.connection = ConnectionState.CONNECTING
-        self._next_api = self.clock() + 30
+        self._next_api = float("inf")
         self._submit("api", operation)
+        if "api" in self._active:
+            self._active["api"].polling = polling
         self.changed.emit()
 
     def _read_credentials(self, settings: AppSettings, cancelled: threading.Event) -> Credentials | None:
@@ -279,10 +369,14 @@ class Controller(QObject):
             raise
         previous = self.settings
         self.settings = settings
+        self.polling.configure(settings.polling)
         if self.diagnostics is not None:
             self.diagnostics.configure(settings.logging_mode)
         event("settings_saved")
-        if credentials is None and replace(previous, logging_mode=settings.logging_mode) == settings:
+        if credentials is None and replace(previous, logging_mode=settings.logging_mode, polling=settings.polling) == settings:
+            self._update_demand()
+            if previous.polling != settings.polling and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+                self._next_api = self.polling.next_due(self.clock())
             self.preferences_changed.emit()
             self.changed.emit()
             return
@@ -297,8 +391,10 @@ class Controller(QObject):
         credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
         if any(getattr(previous, name) != getattr(settings, name) for name in credential_fields):
             self.telemetry = None
+            self.polling = PollingState(settings.polling)
             self.connection = ConnectionState.CONNECTING if settings.serial else ConnectionState.UNCONFIGURED
         self._next_api = 0
+        self._update_demand()
         self._api_pending = bool(settings.serial)
         self._retry = 5
         self.notice = ""
@@ -347,6 +443,7 @@ class Controller(QObject):
         except SettingsError as error:
             self.notice = str(error)
         self.settings = settings
+        self._update_demand()
         if "integrations" in changes and hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
         if self.preview is not None:
@@ -414,9 +511,17 @@ class Controller(QObject):
             return
         self._check_credential_expiry()
         now = self.clock()
-        if self.connection == ConnectionState.LIVE and not self.fresh:
+        self._update_demand()
+        revision = (self.polling.revision, tuple((key, self.reading_state(key)) for key in self.polling.visible))
+        if revision != self._polling_revision:
+            self._polling_revision = revision
+            self.changed.emit()
+        if self.polling.required and self.connection == ConnectionState.LIVE and not self.fresh:
             self.connection = ConnectionState.STALE
             event("connection_changed", state=self.connection.value)
+            self.changed.emit()
+        elif self.connection == ConnectionState.STALE and self.fresh:
+            self.connection = ConnectionState.LIVE
             self.changed.emit()
         if self.settings.serial and now >= self._next_api and "api" not in self._active:
             self.refresh()
@@ -426,7 +531,7 @@ class Controller(QObject):
             if module.enabled and now >= state.next_scan and kind not in self._active:
                 state.next_scan = now + 2
                 self._submit(kind, lambda selected=module: self.integration_adapter.inspect(selected))
-            eligible = module.enabled and module.auto_enabled and self.fresh and state.observation.ready
+            eligible = module.enabled and module.auto_enabled and self.fresh_for(self._automation_sensors(module)) and state.observation.ready
             reason = "automatic_mode" if eligible else "automation_paused"
             if reason != state.auto_reason:
                 state.auto_reason = reason
@@ -452,6 +557,8 @@ class Controller(QObject):
             return
         if kind == "api":
             self._check_credential_expiry()
+            if (generation != self._generation or task is not None and task.cancelled is not None and task.cancelled.is_set()) and getattr(task, "polling", None) is self.polling:
+                self.polling.abandon()
         if generation == self._generation and not (task is not None and task.cancelled is not None and task.cancelled.is_set()):
             if kind == "api":
                 if error is not None:
@@ -463,6 +570,7 @@ class Controller(QObject):
                     elif self._api_mode == "devices":
                         self.notice = state.value
                     if self._api_mode != "devices":
+                        self.polling.fail(self.clock())
                         self.connection = state
                         self._next_api = float("inf") if self.connection == ConnectionState.AUTH_ERROR else self.clock() + max(self._retry, getattr(error, "retry_after", None) or 0)
                         self._retry = min(self._retry * 2, 300)
@@ -478,9 +586,18 @@ class Controller(QObject):
                     self.devices_ready.emit(result[1])
                 else:
                     event("telemetry_refresh_completed")
-                    self.telemetry = result[1]
-                    self.connection = ConnectionState.LIVE
-                    self._next_api = self.clock() + 30
+                    if isinstance(result[1], TelemetryPatch):
+                        patch = result[1]
+                        now, utc = self.clock(), time.time()
+                        self.polling.complete(patch, utc, now)
+                        if patch.values:
+                            self.telemetry = self.polling.snapshot(self.telemetry, utc, now)
+                            self.connection = ConnectionState.LIVE
+                        self._next_api = self.polling.next_due(now)
+                    else:
+                        self.telemetry = result[1]
+                        self.connection = ConnectionState.LIVE
+                        self._next_api = self.clock() + self.settings.polling.primary.interval_seconds
                     self._retry = 5
                     if self.notice.startswith("onepassword_") or self.notice in {"credentials_required", "credentials_error", *(state.value for state in ConnectionState)}:
                         self.notice = ""

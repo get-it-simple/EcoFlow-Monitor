@@ -26,6 +26,8 @@ venv/
 !.run/Tests (credentials design).run.xml
 !.run/Tests (logging).run.xml
 !.run/Tests (logging design).run.xml
+!.run/Tests (sensors).run.xml
+!.run/Tests (sensors design).run.xml
 /docs/
 settings.json
 settings.json.bak
