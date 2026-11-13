@@ -127,7 +127,7 @@ def test_deleted_example_stays_deleted_after_restart(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.save(replace(AppSettings(), integrations=()))
     assert store.load().integrations == ()
-    assert store.load().to_dict()["version"] == 3
+    assert store.load().to_dict()["version"] == 4
 
 
 def test_rules_use_declared_conditions_and_order():

@@ -136,7 +136,7 @@ def live(runtime, **changes):
 
 def test_single_clock_is_shared_and_delayed_frames_do_not_slow_it(runtime, qapp):
     live(runtime)
-    runtime.controller.update_preferences(main_enabled=True, mini_enabled=True)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
     runtime.open_dashboard(0)
     qapp.processEvents()
     driver = runtime.motion_driver
@@ -168,15 +168,15 @@ def test_animation_frames_never_change_readings_or_save_settings(runtime, qapp):
 
 def test_all_hidden_views_release_repaint_timer_and_resume_shared_phase(runtime, qapp):
     live(runtime)
-    runtime.controller.update_preferences(main_enabled=True, mini_enabled=True)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
     runtime.open_dashboard(0)
     qapp.processEvents()
     assert runtime.motion_driver._timer.isActive()
-    runtime.controller.update_preferences(main_enabled=False, mini_enabled=False)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=False))
     runtime.dashboard.request_visibility(False)
     qapp.processEvents()
     assert not runtime.motion_driver._timer.isActive(), [(type(view).__name__, view.window().objectName()) for view in runtime.motion_driver._views if runtime.motion_driver.visible(view)]
-    runtime.controller.update_preferences(main_enabled=True)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
     qapp.processEvents()
     assert runtime.motion_driver._timer.isActive()
 
@@ -249,28 +249,27 @@ def test_main_action_preserves_dashboard_shortcut_and_drafts(runtime, qapp):
     runtime.dashboard.capacity.setValue(3456)
     runtime.dashboard._draft_changed()
     runtime.hotkey("toggle_main")
-    assert runtime.main.isVisible() and runtime.controller.settings.main_enabled
+    assert runtime.main.isVisible() and runtime.controller.settings.widget.enabled
     assert runtime.dashboard.capacity.value() == 3456
     runtime.hotkey("toggle_monitor")
     assert not runtime.dashboard.isVisible() and runtime.main.isVisible()
     runtime.hotkey("toggle_monitor")
     assert runtime.dashboard.capacity.value() == 3456
     runtime.main.close()
-    assert not runtime.main.isVisible() and not runtime.controller.settings.main_enabled
+    assert not runtime.main.isVisible() and not runtime.controller.settings.widget.enabled
     binding = next(binding for binding in runtime.controller.settings.hotkeys if binding.action == "toggle_main")
     assert not binding.enabled and not binding.combo
 
 
 def test_main_click_through_requires_recovery_and_recovery_clears_both_drafts(runtime):
-    settings = replace(runtime.controller.settings, main_overlay=replace(runtime.controller.settings.main_overlay, click_through=True))
+    settings = replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, overlay=replace(runtime.controller.settings.widget.overlay, click_through=True)))
     with pytest.raises(ValueError, match="click_through_unavailable"):
         runtime.preflight_settings(settings)
     runtime.dashboard.overlay_fields["main"]["click_through"].setChecked(True)
     runtime.dashboard.capacity.setValue(3456)
     runtime.dashboard._draft_changed()
     runtime.recover_widgets()
-    assert not runtime.dashboard.gather(False).main_overlay.click_through
-    assert not runtime.dashboard.gather(False).mini_overlay.click_through
+    assert not runtime.dashboard.gather(False).widget.overlay.click_through
     assert runtime.dashboard.gather(False).capacity_wh == 3456
 
 
@@ -298,13 +297,14 @@ def test_packaged_motion_tokens_match_reference_when_available():
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 def test_main_composition_keeps_readings_and_controls_inside_window(runtime, qapp, opacity, scale):
     live(runtime)
-    runtime.controller.update_preferences(main_enabled=True, main_scale=scale, background_opacity=opacity, animations=False)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True, scale=scale, opacity=opacity), animations=False)
     runtime.main.resize(round(360 * scale), round(320 * scale))
     qapp.processEvents()
     assert runtime.main.rect().contains(QRect(runtime.main.close_button.mapTo(runtime.main, QPoint()), runtime.main.close_button.size()))
-    for button in (runtime.main.close_button, runtime.main.open_button, runtime.main.overlay.pin, runtime.main.overlay.menu_button):
+    for button in (runtime.main.close_button, runtime.main.reveal_button, runtime.main.overlay.pin, runtime.main.overlay.menu_button):
         assert button.width() == button.height() == round(36 * scale)
-    for reading in (runtime.main.battery, runtime.main.runtime, *runtime.main.readings.values()):
+    for key in runtime.widget.composition.visible:
+        reading = runtime.widget.readings[key]
         assert runtime.main.rect().contains(QRect(reading.mapTo(runtime.main, QPoint()), reading.size()))
         assert reading.value.isVisible()
         assert reading.value.fontMetrics().horizontalAdvance(reading.value.text()) <= reading.value.width()

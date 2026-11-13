@@ -85,12 +85,11 @@ def _run_application(app, args, settings_path, guard, diagnostics) -> int:
             i18n.setup("uk")
             runtime.window.refresh()
             result["ukrainian"] = i18n.t("input_power") != "Input"
-            runtime.controller.update_preferences(mini_enabled=True)
-            runtime.mini.refresh()
-            result["mini_visible"] = runtime.mini.isVisible()
-            result["main_overlay_default_hidden"] = not runtime.main.isVisible()
-            runtime.controller.update_preferences(main_enabled=True)
-            result["main_overlay_visible"] = runtime.main.isVisible() and runtime.main.progress.motion is runtime.motion_driver
+            result["main_overlay_default_hidden"] = not runtime.widget.isVisible()
+            runtime.controller.update_widget(enabled=True)
+            result["mini_visible"] = runtime.widget.isVisible()
+            result["main_overlay_visible"] = runtime.widget.isVisible() and runtime.widget.progress.motion is runtime.motion_driver
+            result["adaptive_widget"] = runtime.main is runtime.mini is runtime.widget and runtime.controller.settings.to_dict()["version"] == 4
             runtime.dashboard.load_draft()
             runtime.dashboard.animations.setChecked(False)
             runtime.dashboard._draft_changed()
@@ -100,7 +99,7 @@ def _run_application(app, args, settings_path, guard, diagnostics) -> int:
                 args.smoke_output.parent.mkdir(parents=True, exist_ok=True)
                 args.smoke_output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             runtime.stop()
-            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens", "motion_tokens", "main_overlay_default_hidden", "main_overlay_visible", "motion_disabled", "inter_font", "single_main_window")) else 1)
+            app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens", "motion_tokens", "main_overlay_default_hidden", "main_overlay_visible", "adaptive_widget", "motion_disabled", "inter_font", "single_main_window")) else 1)
         QTimer.singleShot(750, finish)
     try:
         runtime.start()

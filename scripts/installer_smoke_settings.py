@@ -54,7 +54,8 @@ def verify_settings(path: Path) -> None:
     except (UnicodeError, json.JSONDecodeError):
         raise ValueError("application settings could not be read as JSON") from None
     expected = legacy_preferences()
-    expected["version"] = 3
+    expected["version"] = 4
+    expected["widget"] = {"scale": 0.75, "opacity": 1, "enabled": False}
     expected["hotkeys"] = [
         {"action": "open_dashboard", "combo": "", "enabled": False},
         {"action": "recover_widgets", "combo": "ctrl+alt+w", "enabled": True},

@@ -23,20 +23,16 @@ def runtime(tmp_path, qapp):
     qapp.processEvents()
 
 
-def metric_mode(dialog, key):
-    return dialog.metrics.rows[key].mode
-
-
 def test_hidden_metrics_roundtrip_and_existing_settings():
-    settings = replace(AppSettings(), mini_metrics=("output_power",),
-                       mini_hidden_metrics=("estimated_runtime", "battery_level"))
+    settings = replace(AppSettings(), mini_metrics=("output_power",), mini_hidden_metrics=("estimated_runtime", "battery_level"))
     assert AppSettings.from_dict(settings.to_dict()) == settings
     data = settings.to_dict()
+    data["version"] = 3
     del data["mini_widget"]["hidden_metrics"]
     legacy = AppSettings.from_dict(data)
     assert legacy.mini_metrics == ("output_power",)
     assert legacy.mini_hidden_metrics == ()
-    hidden_only = replace(settings, mini_metrics=())
+    hidden_only = replace(settings, widget=replace(settings.widget, small_metrics=(), large_metrics=(), expanded_metrics=("estimated_runtime",)))
     assert AppSettings.from_dict(hidden_only.to_dict()) == hidden_only
 
 
@@ -46,7 +42,7 @@ def test_hidden_metrics_roundtrip_and_existing_settings():
 ])
 def test_hidden_metric_groups_reject_invalid_choices(visible, hidden):
     with pytest.raises(ValueError):
-        replace(AppSettings(), mini_metrics=visible, mini_hidden_metrics=hidden).validate()
+        replace(AppSettings(), widget=replace(AppSettings().widget, small_metrics=visible, large_metrics=visible, expanded_metrics=hidden)).validate()
     data = AppSettings().to_dict()
     data["mini_widget"].update(metrics=list(visible), hidden_metrics=list(hidden))
     with pytest.raises(ValueError):
@@ -57,30 +53,30 @@ def test_metric_modes_keep_drafts_and_merge_other_preferences(runtime, qapp):
     controller = runtime.controller
     dialog = SettingsWindow(controller, runtime.window)
     try:
-        assert metric_mode(dialog, "battery_level").currentData() == "always"
-        assert metric_mode(dialog, "estimated_runtime").currentData() == "off"
-        metric_mode(dialog, "estimated_runtime").setCurrentIndex(1)
-        metric_mode(dialog, "output_power").setCurrentIndex(2)
-        assert controller.settings.mini_hidden_metrics == ()
+        assert dialog.metrics.modes["battery_level"] == "small"
+        assert dialog.metrics.modes["estimated_runtime"] == "large"
+        dialog.metrics.set_mode("estimated_runtime", "expanded")
+        dialog.metrics.set_mode("output_power", "off")
+        assert controller.settings.widget.expanded_metrics == ()
         dialog.integrations_section.set_expanded(True)
         dialog.load_draft()
         assert dialog.integrations_section.header.isChecked()
-        assert metric_mode(dialog, "estimated_runtime").currentData() == "off"
-        metric_mode(dialog, "estimated_runtime").setCurrentIndex(1)
-        metric_mode(dialog, "output_power").setCurrentIndex(2)
-        controller.update_preferences(mini_dock="right")
+        assert dialog.metrics.modes["estimated_runtime"] == "large"
+        dialog.metrics.set_mode("estimated_runtime", "expanded")
+        dialog.metrics.set_mode("output_power", "off")
+        controller.update_preferences(widget=replace(controller.settings.widget, dock="right"))
         draft = dialog.gather()
-        assert draft.mini_dock == "right"
-        assert draft.mini_metrics == ("battery_level", "input_power")
-        assert draft.mini_hidden_metrics == ("estimated_runtime",)
+        assert draft.widget.dock == "right"
+        assert draft.widget.small_metrics == ("battery_level", "input_power")
+        assert draft.widget.expanded_metrics == ("estimated_runtime",)
         dialog.reject()
-        assert controller.settings.mini_hidden_metrics == ()
+        assert controller.settings.widget.expanded_metrics == ()
         dialog.save()
         stored = controller.store.load()
-        assert stored.mini_metrics == draft.mini_metrics
-        assert stored.mini_hidden_metrics == draft.mini_hidden_metrics
+        assert stored.widget.small_metrics == draft.widget.small_metrics
+        assert stored.widget.expanded_metrics == draft.widget.expanded_metrics
         dialog.load_draft()
-        assert metric_mode(dialog, "estimated_runtime").currentData() == "expanded"
+        assert dialog.metrics.modes["estimated_runtime"] == "expanded"
     finally:
         dialog.deleteLater()
         qapp.processEvents()
@@ -88,48 +84,50 @@ def test_metric_modes_keep_drafts_and_merge_other_preferences(runtime, qapp):
 
 def test_mini_expansion_updates_values_and_resets_on_reopen(runtime, qapp):
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, mini_enabled=True,
-                                      mini_metrics=("battery_level",),
-                                      mini_hidden_metrics=("output_power", "estimated_runtime")))
+    controller.apply_settings(replace(controller.settings, widget=replace(controller.settings.widget, enabled=True, small_metrics=("battery_level",), large_metrics=("battery_level",), expanded_metrics=("output_power", "estimated_runtime"))))
     mini = runtime.mini
     assert tuple(mini.labels) == ("battery_level",)
-    assert mini.reveal_button.isVisible()
+    mini.setFocus()
+    qapp.processEvents()
+    assert mini.reveal_button.isEnabled()
     mini.reveal_button.setFocus()
     QTest.keyClick(mini.reveal_button, Qt.Key.Key_Space)
     qapp.processEvents()
-    assert tuple(mini.labels) == ("battery_level", "output_power", "estimated_runtime")
+    assert tuple(mini.labels) == ("battery_level",)
+    assert mini.details.isVisible()
+    assert mini.composition.details == ("output_power", "estimated_runtime")
     assert mini.overlay.preferences.position_locked is False
     controller.telemetry = Telemetry(10, 240, 70, time.time(), time.monotonic())
     controller.connection = ConnectionState.LIVE
     controller.changed.emit()
-    assert mini.labels["output_power"].text() == "240 W"
-    assert mini.labels["output_power"].isEnabled()
+    assert mini.details.readings["output_power"].value.text() == "240 W"
+    assert mini.details.readings["output_power"].isEnabled()
     controller.connection = ConnectionState.STALE
     controller.changed.emit()
-    assert mini.labels["output_power"].isEnabled()
-    assert "Data is out of date" in mini.status.text()
+    assert mini.details.readings["output_power"].isEnabled()
+    assert "Data is out of date" in mini.status_indicator.toolTip()
     assert mini.reveal_button.isChecked()
-    controller.update_preferences(mini_enabled=False)
-    controller.update_preferences(mini_enabled=True)
+    controller.update_preferences(widget=replace(controller.settings.widget, enabled=False))
+    controller.update_preferences(widget=replace(controller.settings.widget, enabled=True))
     assert not mini.reveal_button.isChecked()
     assert tuple(mini.labels) == ("battery_level",)
-    controller.update_preferences(mini_hidden_metrics=())
-    assert mini.reveal_button.isHidden()
+    controller.update_preferences(widget=replace(controller.settings.widget, expanded_metrics=()))
+    assert not mini.reveal_button.isEnabled()
 
 
 def test_metric_reordering_keeps_modes_and_group_order(runtime, qapp):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
-        metric_mode(dialog, "output_power").setCurrentIndex(1)
-        metric_mode(dialog, "estimated_runtime").setCurrentIndex(1)
+        dialog.metrics.set_mode("output_power", "expanded")
+        dialog.metrics.set_mode("estimated_runtime", "expanded")
         assert dialog.metrics.move_before("estimated_runtime", "output_power")
         assert dialog.metrics.move_before("input_power", "battery_level")
         qapp.processEvents()
-        assert metric_mode(dialog, "estimated_runtime").currentData() == "expanded"
-        assert metric_mode(dialog, "output_power").currentData() == "expanded"
+        assert dialog.metrics.modes["estimated_runtime"] == "expanded"
+        assert dialog.metrics.modes["output_power"] == "expanded"
         draft = dialog.gather()
-        assert draft.mini_metrics == ("input_power", "battery_level")
-        assert draft.mini_hidden_metrics == ("estimated_runtime", "output_power")
+        assert draft.widget.small_metrics == ("input_power", "battery_level")
+        assert draft.widget.expanded_metrics == ("estimated_runtime", "output_power")
     finally:
         dialog.deleteLater()
         qapp.processEvents()
@@ -142,18 +140,16 @@ def test_metric_reordering_keeps_modes_and_group_order(runtime, qapp):
 def test_mini_groups_fit_work_area_in_both_states(runtime, qapp, language, dock, hidden_only):
     mini = runtime.mini
     for scale in (0.5, 1, 3):
-        runtime.controller.apply_settings(replace(runtime.controller.settings, language=language,
-                                                 mini_enabled=True, mini_dock=dock, mini_scale=scale,
-                                                 mini_metrics=() if hidden_only else METRICS[:3],
-                                                 mini_hidden_metrics=METRICS if hidden_only else METRICS[3:]))
+        runtime.controller.apply_settings(replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, enabled=True, dock=dock, scale=scale, small_metrics=() if hidden_only else METRICS[:3], large_metrics=() if hidden_only else METRICS[:3], expanded_metrics=METRICS if hidden_only else METRICS[3:]), language=language))
         for expanded in (False, True, False):
             mini.reveal_button.setChecked(expanded)
             qapp.processEvents()
-            expected = (() if hidden_only else METRICS[:3]) + (mini.controller.settings.mini_hidden_metrics if expanded else ())
-            assert tuple(mini.labels) == expected
+            assert tuple(mini.labels) == mini.composition.visible
+            assert set(mini.composition.visible) | set(mini.composition.details) == set(mini.controller.settings.widget.large_metrics) | set(mini.controller.settings.widget.expanded_metrics)
+            assert mini.details.isVisible() == expanded
             assert mini.screen().availableGeometry().contains(mini.geometry())
             assert mini.rect().contains(mini.reveal_button.geometry())
-            assert mini.status.isVisible()
+            assert mini.status.isHidden()
             for label in mini.labels.values():
                 tile = label.parentWidget()
                 assert mini.body.rect().contains(tile.geometry())

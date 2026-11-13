@@ -330,7 +330,10 @@ class Controller(QObject):
         self.preferences_changed.emit()
         self.changed.emit()
 
-    def update_preferences(self, *, mini_overlay_fields: tuple[str, ...] = (), main_overlay_fields: tuple[str, ...] = (), **changes) -> None:
+    def update_widget(self, *, overlay_fields: tuple[str, ...] = (), **changes) -> None:
+        self.update_preferences(widget=replace(self.settings.widget, **changes), widget_fields=tuple(changes), widget_overlay_fields=overlay_fields)
+
+    def update_preferences(self, *, mini_overlay_fields: tuple[str, ...] = (), main_overlay_fields: tuple[str, ...] = (), widget_fields: tuple[str, ...] = (), widget_overlay_fields: tuple[str, ...] = (), **changes) -> None:
         previous = self.settings
         settings = replace(previous, **changes)
         overlay_edits = {}
@@ -348,11 +351,19 @@ class Controller(QObject):
             self.integration_adapter.retain_sessions(settings.integrations)
         if self.preview is not None:
             immediate = {name: value for name, value in changes.items() if name in {"mini_enabled", "main_enabled", "mini_position", "monitor_geometry"}}
+            if "widget" in changes:
+                fields = widget_fields or tuple(name for name in settings.widget.__dataclass_fields__ if getattr(previous.widget, name) != getattr(settings.widget, name))
+                edits = {name: getattr(settings.widget, name) for name in fields}
+                if "overlay" in edits:
+                    overlay_names = widget_overlay_fields or tuple(name for name in settings.widget.overlay.__dataclass_fields__ if getattr(previous.widget.overlay, name) != getattr(settings.widget.overlay, name))
+                    edits["overlay"] = replace(self.preview.widget.overlay, **{name: getattr(settings.widget.overlay, name) for name in overlay_names})
+                immediate["widget"] = replace(self.preview.widget, **edits)
             for kind, edits in overlay_edits.items():
                 immediate[kind + "_overlay"] = replace(getattr(self.preview, kind + "_overlay"), **edits)
             self.preview = replace(self.preview, **immediate)
-        self.runtime_preferences_changed.emit({**changes, **{kind + "_overlay_fields": tuple(overlay_edits.get(kind, {})) for kind in ("main", "mini")}})
-        if set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
+        self.runtime_preferences_changed.emit({**changes, "widget_fields": widget_fields, "widget_overlay_fields": widget_overlay_fields, **{kind + "_overlay_fields": tuple(overlay_edits.get(kind, {})) for kind in ("main", "mini")}})
+        geometry_only = set(changes) == {"widget"} and set(widget_fields) <= {"geometry", "overlay"} and not widget_overlay_fields and settings.widget.overlay == previous.widget.overlay
+        if not geometry_only and set(changes) - {"monitor_geometry", "mini_position", "monitor_visible"}:
             self.preferences_changed.emit()
         self.changed.emit()
 

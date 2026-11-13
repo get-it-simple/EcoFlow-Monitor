@@ -134,6 +134,18 @@
     "padding": 24,
     "radius": 20
   },
-  "motionRulesFile": "motion-tokens.json"
+  "motionRulesFile": "motion-tokens.json",
+  "widget": {
+    "minimumWidth": 240, "minimumHeight": 56,
+    "smallWidth": 320, "smallHeight": 88,
+    "largeWidth": 360, "largeHeight": 320,
+    "wideWidth": 640, "maximumHeight": 480,
+    "outerPadding": 8, "gap": 8,
+    "minimalPadding": 4, "smallPadding": 8, "largePadding": 12,
+    "minimalValueSize": 16, "valueSize": 24, "heroValueSize": 56,
+    "cellWidth": 136, "smallCellWidth": 96, "minimalCellWidth": 68,
+    "detailsWidth": 320, "detailsHeight": 320,
+    "toolbarAlpha": 0.94
+  }
 }
 

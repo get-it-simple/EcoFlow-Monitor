@@ -35,7 +35,7 @@ def test_mini_close_overrides_preview_and_preserves_other_draft_edits(runtime, q
     dashboard.mini_enabled.setChecked(True)
     dashboard._draft_changed()
     assert runtime.mini.isVisible()
-    assert not runtime.controller.settings.mini_enabled
+    assert not runtime.controller.settings.widget.enabled
     QTest.mouseClick(runtime.mini.close_button, Qt.MouseButton.LeftButton)
     qapp.processEvents()
     assert not runtime.mini.isVisible()
@@ -45,18 +45,18 @@ def test_mini_close_overrides_preview_and_preserves_other_draft_edits(runtime, q
     assert not runtime.mini.isVisible()
     dashboard.save()
     stored = runtime.controller.store.load()
-    assert not stored.mini_enabled and stored.capacity_wh == 3000
+    assert not stored.widget.enabled and stored.capacity_wh == 3000
 
 
 def test_mini_runtime_actions_merge_with_preview_without_reopening(runtime, qapp):
-    runtime.controller.update_preferences(mini_enabled=True)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
     dashboard = runtime.dashboard
     dashboard.mini_alpha.setValue(40)
     dashboard._draft_changed()
     QTest.mouseClick(runtime.mini.overlay.pin, Qt.MouseButton.LeftButton)
-    assert not runtime.controller.settings.mini_overlay.pinned
+    assert not runtime.controller.settings.widget.overlay.pinned
     assert not dashboard.overlay_fields["mini"]["pinned"].isChecked()
-    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.6)
+    assert runtime.controller.ui_settings.widget.opacity == pytest.approx(0.4)
     runtime.hotkey("toggle_mini")
     qapp.processEvents()
     assert not runtime.mini.isVisible() and not dashboard.mini_enabled.isChecked()
@@ -66,7 +66,7 @@ def test_mini_runtime_actions_merge_with_preview_without_reopening(runtime, qapp
     dashboard.reject()
     assert runtime.mini.isVisible()
     assert not runtime.mini.overlay.pin.isChecked()
-    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.18)
+    assert runtime.controller.ui_settings.widget.opacity == pytest.approx(0.82)
 
 
 def test_unrelated_save_and_mini_controls_ignore_existing_native_shortcut_failure(runtime, monkeypatch):
@@ -74,7 +74,7 @@ def test_unrelated_save_and_mini_controls_ignore_existing_native_shortcut_failur
     def failed_registration(manager, bindings, actions):
         pytest.fail("Unchanged shortcuts must not be registered for this operation")
     monkeypatch.setattr(HotkeyManager, "configure", failed_registration)
-    runtime.controller.update_preferences(mini_enabled=True)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
     assert runtime.mini.overlay.change(pinned=False)
     assert runtime.mini.overlay.change(position_locked=True)
     runtime.mini.close_button.click()
@@ -82,8 +82,8 @@ def test_unrelated_save_and_mini_controls_ignore_existing_native_shortcut_failur
     runtime.dashboard.capacity.setValue(3000)
     runtime.dashboard.save()
     assert runtime.controller.store.load().capacity_wh == 3000
-    assert not runtime.controller.settings.mini_overlay.pinned
-    assert runtime.controller.settings.mini_overlay.position_locked
+    assert not runtime.controller.settings.widget.overlay.pinned
+    assert runtime.controller.settings.widget.overlay.position_locked
 
 
 def test_recovery_registration_failure_retains_pointer_control_and_working_bindings(runtime, monkeypatch):
@@ -95,7 +95,7 @@ def test_recovery_registration_failure_retains_pointer_control_and_working_bindi
         return ("recover_widgets",)
     monkeypatch.setattr(HotkeyManager, "configure", fail)
     assert not runtime.mini.overlay.change(click_through=True)
-    assert not runtime.controller.settings.mini_overlay.click_through
+    assert not runtime.controller.settings.widget.overlay.click_through
     assert not runtime.mini.windowFlags() & Qt.WindowType.WindowTransparentForInput
     assert runtime.hotkeys._bindings == {77: "toggle_monitor"}
     assert "ctrl+alt+w" in runtime._hotkey_notice and "1409" in runtime._hotkey_notice
@@ -255,14 +255,14 @@ def test_toolbar_changes_preserve_other_overlay_drafts_and_recovery_cancels_pend
     dashboard._draft_changed()
     assert runtime.mini.overlay.change(pinned=False)
     assert dashboard.overlay_fields["mini"]["position_locked"].isChecked()
-    assert runtime.controller.ui_settings.mini_overlay.position_locked
+    assert runtime.controller.ui_settings.widget.overlay.position_locked
     runtime.recover_widgets()
     assert not dashboard.overlay_fields["mini"]["click_through"].isChecked()
-    assert not runtime.controller.ui_settings.mini_overlay.click_through
+    assert not runtime.controller.ui_settings.widget.overlay.click_through
     assert dashboard.overlay_fields["mini"]["position_locked"].isChecked()
     dashboard.save()
-    assert runtime.controller.store.load().mini_overlay.position_locked
-    assert not runtime.controller.store.load().mini_overlay.click_through
+    assert runtime.controller.store.load().widget.overlay.position_locked
+    assert not runtime.controller.store.load().widget.overlay.click_through
 
 
 def test_key_picker_escape_keeps_previous_combo(qapp):
@@ -353,7 +353,7 @@ def test_saved_small_dashboard_geometry_is_raised_to_new_minimum(tmp_path, qapp)
 @pytest.mark.parametrize("opacity", [0, 0.82, 1])
 @pytest.mark.design
 def test_mini_tooltip_and_menu_do_not_inherit_button_size(runtime, qapp, opacity):
-    runtime.controller.update_preferences(mini_enabled=True, mini_transparency=1 - opacity)
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True, opacity=1 - (1 - opacity)))
     button = runtime.mini.overlay.menu_button
     QToolTip.showText(button.mapToGlobal(QPoint(0, button.height())), "Full tooltip text for widget controls", button)
     qapp.processEvents()

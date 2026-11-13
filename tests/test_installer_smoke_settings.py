@@ -37,7 +37,7 @@ def test_installer_fixture_migrates_without_losing_preferences(tmp_path):
     ]
     store.save(loaded)
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["version"] == 3
+    assert saved["version"] == 4
     assert saved["ecoflow"]["serial"] == ""
     assert saved["ecoflow"]["capacity_wh"] == 3072
     assert saved["ecoflow"]["manual_min"] == 15

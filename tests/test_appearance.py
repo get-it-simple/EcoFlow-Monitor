@@ -130,7 +130,7 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         assert rules.rules()[0].min_soc == 15 and rules.rules()[0].max_soc == 85
         dialog.save()
         stored = runtime.controller.store.load()
-        assert (stored.scale, stored.mini_scale, stored.mini_transparency, stored.background_opacity) == (1.5, 1.25, 0.65, 0.82)
+        assert (stored.scale, stored.widget.scale, stored.widget.opacity) == (1.5, 1.25, 0.35)
         assert (stored.manual_min, stored.manual_max) == (10, 90)
         dialog.scale.slider.setValue(250)
         dialog.load_draft()

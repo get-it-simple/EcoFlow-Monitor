@@ -58,7 +58,7 @@ def test_tray_menu_does_not_inherit_widget_scale_or_theme(runtime, qapp):
     initial_font = menu.font()
     initial_size = menu.sizeHint()
     for scale in (0.5, 3, 1):
-        runtime.controller.apply_settings(replace(runtime.controller.settings, scale=scale, mini_scale=scale))
+        runtime.controller.apply_settings(replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, scale=scale), scale=scale))
         qapp.processEvents()
         assert menu.parentWidget() is None
         assert menu.font() == initial_font
@@ -182,7 +182,7 @@ def test_geometry_preference_updates_do_not_reload_global_hotkeys(runtime, monke
     monkeypatch.setattr("ecoflow_monitor.adapters.hotkeys.HotkeyManager.configure", lambda *args: calls.append(args) or ())
     runtime.native = True
     runtime.preferences()
-    runtime.controller.update_preferences(monitor_geometry=(10, 10, 600, 700))
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, geometry=(10, 10, 600, 700)))
     assert len(calls) == 1
     runtime.controller.update_preferences(integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),))
     assert len(calls) == 2
@@ -221,7 +221,7 @@ def test_rapid_scale_changes_settle_at_final_scale(runtime, qapp):
 def test_all_mini_metrics_fit_work_area_and_small_scale_labels(runtime, qapp, dock):
     from ecoflow_monitor.settings import METRICS
     for scale in (0.5, 3, 1):
-        runtime.controller.apply_settings(replace(runtime.controller.settings, mini_enabled=True, mini_metrics=METRICS, mini_scale=scale, mini_dock=dock))
+        runtime.controller.apply_settings(replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, enabled=True, small_metrics=METRICS, large_metrics=METRICS, scale=scale, dock=dock)))
         qapp.processEvents()
         mini = runtime.mini
         assert mini.screen().availableGeometry().contains(mini.geometry())

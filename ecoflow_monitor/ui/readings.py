@@ -36,13 +36,18 @@ class MetricReading(MotionSurface):
         self.configure(1)
         self.refresh()
 
-    def configure(self, scale, size=24, clear=False, labels=True, hover=False):
+    def configure(self, scale, size=24, clear=False, labels=True, hover=False, padding=0, minimum_width=100, label_width=None):
         self.motion_radius = RADIUS["card"] * scale
-        signature = (scale, size, clear, labels, hover)
+        signature = (scale, size, clear, labels, hover, padding, minimum_width, label_width)
         if getattr(self, "_configuration", None) == signature:
             self.refresh()
             return
         self._configuration = signature
+        self.label_width = label_width
+        self.label.setWordWrap(label_width is None)
+        inset = round(padding * scale)
+        self.box.setContentsMargins(inset, inset, inset, inset)
+        self.box.setSpacing(round(4 * scale))
         self.hover_only = hover
         self.label.setVisible(labels)
         for label, pixels, weight, role in ((self.label, 12, 400, "muted"), (self.value, size, 600, TONES.get(self.key, "text"))):
@@ -54,13 +59,16 @@ class MetricReading(MotionSurface):
             label.outlined = clear
             label.ensurePolished()
             label.setMinimumHeight(max(round(pixels * 1.25 * scale), label.fontMetrics().height()))
-        self.setMinimumWidth(round(100 * scale))
+        self.setMinimumWidth(round(minimum_width * scale))
         self.refresh()
 
     def refresh(self):
         self.motion.refresh()
         text = metric_text(self.controller, self.key)
-        self.label.setText(metric_label(self.key))
+        label = metric_label(self.key)
+        width = getattr(self, "label_width", None)
+        self.label.setText(self.label.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, width) if width is not None else label)
+        self.label.setToolTip(label)
         self.value.setText(text)
         self.value.setVisible(not self.hover_only or self.underMouse() or self.hasFocus())
         tooltip = metric_tooltip(self.key, self.controller)

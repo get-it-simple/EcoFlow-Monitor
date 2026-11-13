@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import json
 import math
 import os
@@ -52,6 +52,62 @@ class OverlayPreferences:
 
 
 @dataclass(frozen=True)
+class WidgetPreferences:
+    enabled: bool = False
+    scale: float = 1
+    opacity: float = 0.82
+    geometry: tuple[int, int, int, int] = (-1, -1, 512, 350)
+    overlay: OverlayPreferences = field(default_factory=OverlayPreferences)
+    dock: str = ""
+    above_taskbar: bool = False
+    show_device_name: bool = False
+    show_connection_status: bool = False
+    labels_visible: bool = True
+    values_on_hover: bool = False
+    small_metrics: tuple[str, ...] = METRICS[:3]
+    large_metrics: tuple[str, ...] = METRICS
+    expanded_metrics: tuple[str, ...] = ()
+    metric_order: tuple[str, ...] = METRICS
+
+    def validate(self) -> None:
+        if not isinstance(self.overlay, OverlayPreferences):
+            raise ValueError("Invalid widget overlay preferences")
+        self.overlay.validate()
+        if any(type(value) is not bool for value in (self.enabled, self.above_taskbar, self.show_device_name, self.show_connection_status, self.labels_visible, self.values_on_hover)):
+            raise ValueError("Boolean widget preference expected")
+        for value, lower, upper in ((self.scale, 0.5, 3), (self.opacity, 0, 1)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
+                raise ValueError("Invalid widget appearance")
+        if self.dock not in {"", "left", "right", "top", "bottom"}:
+            raise ValueError("Invalid widget docking")
+        if not isinstance(self.geometry, tuple) or len(self.geometry) != 4 or any(type(value) is not int for value in self.geometry) or min(self.geometry[2:]) <= 0:
+            raise ValueError("Invalid widget geometry")
+        for group in (self.small_metrics, self.large_metrics, self.expanded_metrics, self.metric_order):
+            if not isinstance(group, tuple) or any(not isinstance(key, str) for key in group) or len(set(group)) != len(group) or any(key not in METRICS for key in group):
+                raise ValueError("Invalid widget metrics")
+        if set(self.metric_order) != set(METRICS) or not set(self.small_metrics) <= set(self.large_metrics) or set(self.large_metrics) & set(self.expanded_metrics) or not (self.large_metrics or self.expanded_metrics):
+            raise ValueError("Invalid widget visibility hierarchy")
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("Widget preferences must be an object")
+        values = dict(data)
+        values["overlay"] = OverlayPreferences.from_dict(values.get("overlay", {}))
+        for key in ("geometry", "small_metrics", "large_metrics", "expanded_metrics", "metric_order"):
+            if key in values:
+                if not isinstance(values[key], (list, tuple)):
+                    raise ValueError("Widget sequences must be arrays")
+                values[key] = tuple(values[key])
+        try:
+            result = cls(**values)
+        except TypeError as error:
+            raise ValueError("Invalid widget preferences") from error
+        result.validate()
+        return result
+
+
+@dataclass(frozen=True)
 class AppSettings:
     serial: str = ""
     credential_ref: str = field(default_factory=lambda: "EcoFlowMonitor/" + uuid.uuid4().hex)
@@ -90,8 +146,10 @@ class AppSettings:
     manual_max_retained: float = 90
     main_enabled: bool = False
     main_scale: float = 1
+    widget: WidgetPreferences = field(default_factory=WidgetPreferences)
 
     def validate(self) -> None:
+        self.widget.validate()
         self.main_overlay.validate()
         self.mini_overlay.validate()
         if not isinstance(self.logging_mode, str) or self.logging_mode not in {"off", "normal", "detailed"}:
@@ -147,7 +205,8 @@ class AppSettings:
     def to_dict(self) -> dict:
         self.validate()
         return {
-            "version": 3,
+            "version": 4,
+            "widget": asdict(self.widget),
             "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
                         "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref, "cache_ttl_seconds": self.onepassword_cache_ttl_seconds},
@@ -162,7 +221,7 @@ class AppSettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
-        if not isinstance(data, dict) or type(data.get("version", 0)) is not int or data.get("version", 0) not in (0, 1, 2, 3):
+        if not isinstance(data, dict) or type(data.get("version", 0)) is not int or data.get("version", 0) not in (0, 1, 2, 3, 4):
             raise ValueError("Unsupported settings schema")
         defaults = cls()
         eco = data.get("ecoflow", {})
@@ -195,6 +254,7 @@ class AppSettings:
             existing_actions = {binding["action"] for binding in bindings}
             bindings = [*bindings, *(asdict(binding) for binding in default_hotkeys() if binding.action in {"open_dashboard", "recover_widgets"} and binding.action not in existing_actions)]
         settings = cls(
+            widget=WidgetPreferences.from_dict(data.get("widget", {})),
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
             credential_source=string(eco, "credential_source", "windows"),
             onepassword_access_ref=string(onepassword, "access_ref"), onepassword_secret_ref=string(onepassword, "secret_ref"),
@@ -222,6 +282,20 @@ class AppSettings:
             manual_min_retained=workspace.get("manual_min_retained", eco.get("manual_min") if eco.get("manual_min") is not None else 20),
             manual_max_retained=workspace.get("manual_max_retained", eco.get("manual_max") if eco.get("manual_max") is not None else 90),
         )
+        if data.get("version", 0) < 4:
+            settings = replace(settings, widget=WidgetPreferences(
+                enabled=settings.main_enabled or settings.mini_enabled,
+                scale=settings.main_scale,
+                opacity=settings.background_opacity if settings.transparency else 1,
+                geometry=settings.monitor_geometry,
+                overlay=settings.main_overlay,
+                labels_visible=settings.monitor_labels_visible,
+                values_on_hover=settings.monitor_values_on_hover,
+                small_metrics=settings.mini_metrics,
+                large_metrics=settings.mini_metrics,
+                expanded_metrics=settings.mini_hidden_metrics,
+                metric_order=settings.metric_order,
+            ))
         settings.validate()
         return settings
 

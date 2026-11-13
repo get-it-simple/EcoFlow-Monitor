@@ -68,7 +68,7 @@ def test_cache_ttl_defaults_and_roundtrips_without_changing_schema():
     assert AppSettings.from_dict(payload).onepassword_cache_ttl_seconds == 86400
     settings = replace(AppSettings(), onepassword_cache_ttl_seconds=7200)
     assert AppSettings.from_dict(settings.to_dict()) == settings
-    assert settings.to_dict()["version"] == 3
+    assert settings.to_dict()["version"] == 4
 
 
 @pytest.mark.parametrize("ttl", [True, 0, 3599, 3601, 604801, 3600.0, "86400", None])

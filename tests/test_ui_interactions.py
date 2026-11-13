@@ -58,7 +58,7 @@ def test_display_preferences_reject_non_booleans(key, invalid):
 def test_display_drafts_reset_save_cancel_and_merge(runtime):
     dialog = SettingsWindow(runtime.controller, runtime.window)
     try:
-        assert dialog.appearance_tabs.count() == 3
+        assert dialog.appearance_tabs.count() == 2
         dialog.appearance_tabs.setCurrentIndex(0)
         dialog.monitor_labels_visible.setChecked(False)
         dialog.monitor_values_on_hover.setChecked(True)
@@ -69,14 +69,14 @@ def test_display_drafts_reset_save_cancel_and_merge(runtime):
         assert not dialog.monitor_values_on_hover.isChecked()
         dialog.monitor_labels_visible.setChecked(False)
         dialog.monitor_values_on_hover.setChecked(True)
-        runtime.controller.update_preferences(mini_enabled=True)
+        runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, enabled=True))
         draft = dialog.gather()
-        assert draft.mini_enabled and not draft.monitor_labels_visible and draft.monitor_values_on_hover
+        assert draft.widget.enabled and not draft.monitor_labels_visible and draft.monitor_values_on_hover
         dialog.reject()
         assert runtime.controller.settings.monitor_labels_visible
         dialog.save()
         stored = runtime.controller.store.load()
-        assert stored.mini_enabled and not stored.monitor_labels_visible and stored.monitor_values_on_hover
+        assert stored.widget.enabled and not stored.monitor_labels_visible and stored.monitor_values_on_hover
     finally:
         dialog.deleteLater()
 
@@ -207,7 +207,7 @@ def test_scrollbars_grow_without_changing_viewport_and_drag_normally(runtime, qa
     try:
         dialog.show()
         dialog.tabs.setCurrentIndex(2)
-        dialog.appearance_tabs.setCurrentIndex(2)
+        dialog.appearance_tabs.setCurrentIndex(1)
         dialog.resize(600, 400)
         qapp.processEvents()
         for area in dialog.findChildren(QAbstractScrollArea):
@@ -282,7 +282,7 @@ def test_tray_checks_follow_visibility_actions_and_hotkeys(runtime, qapp):
     assert runtime.mini.isVisible() and runtime.mini_action.isChecked()
     runtime.hotkey("toggle_mini")
     assert not runtime.mini.isVisible() and not runtime.mini_action.isChecked()
-    runtime.controller.apply_settings(replace(runtime.controller.settings, mini_enabled=True))
+    runtime.controller.apply_settings(replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, enabled=True)))
     assert runtime.mini_action.isChecked()
 
 

@@ -234,7 +234,7 @@ class SettingsWindow(QDialog):
         self.appearance_tabs.tabBar().setDrawBase(False)
         layout.addWidget(self.appearance_tabs)
         bodies = {}
-        for key, label in (("appearance_general", "appearance_general"), ("appearance_main", "main_widget"), ("appearance_mini", "mini_widget")):
+        for key, label in (("appearance_general", "appearance_general"), ("appearance_widget", "adaptive_widget")):
             body = QWidget()
             content = QVBoxLayout(body)
             content.setContentsMargins(0, 24, 0, 0)
@@ -242,7 +242,7 @@ class SettingsWindow(QDialog):
             self.appearance_tabs.addTab(body, t(label))
             bodies[key] = content
         general = bodies["appearance_general"]
-        mini = bodies["appearance_mini"]
+        main = bodies["appearance_widget"]
         form = QFormLayout()
         self.language = QComboBox()
         self.language.addItem(t("language_system"), "system")
@@ -261,18 +261,16 @@ class SettingsWindow(QDialog):
         for control, label in ((self.monitor_labels_visible, "monitor_labels_visible"), (self.monitor_values_on_hover, "monitor_values_on_hover"), (self.animations, "animations")):
             general.addWidget(SettingRow(t(label), control))
         general.addStretch()
-        self.mini_enabled = Switch(t("mini_widget"))
+        self.mini_enabled = Switch(t("adaptive_widget"))
         self.mini_above = Switch(t("mini_above_taskbar"))
-        mini.addWidget(SettingRow(t("mini_widget"), self.mini_enabled))
         self.overlay_fields = {}
         self.materials = {}
-        main = bodies["appearance_main"]
-        self.main_enabled = Switch(t("main_widget"))
+        self.main_enabled = self.mini_enabled
         self.main_scale = PercentEditor(50, 300)
         self.main_alpha = PercentEditor()
-        self.main_scale.setAccessibleName(t("main_scale"))
+        self.main_scale.setAccessibleName(t("widget_scale"))
         self.main_alpha.setAccessibleName(t("background_opacity"))
-        main.addWidget(SettingRow(t("main_widget"), self.main_enabled))
+        main.addWidget(SettingRow(t("adaptive_widget"), self.main_enabled))
         main_material = QComboBox()
         for name in ("panel", "overlay", "clear"):
             main_material.addItem(t("material_" + name), name)
@@ -284,55 +282,40 @@ class SettingsWindow(QDialog):
         main.addWidget(SettingRow(t("background_opacity"), self.main_alpha))
         main.addWidget(hint(t("clear_readability")))
         main.addWidget(action(t("restore_overlay"), lambda: self._restore_overlay("main")), 0, Qt.AlignmentFlag.AlignLeft)
-        main.addWidget(SettingRow(t("main_scale"), self.main_scale))
+        main.addWidget(SettingRow(t("widget_scale"), self.main_scale))
         self.overlay_fields["main"] = {}
         for name, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
             control = Switch(t(label))
             self.overlay_fields["main"][name] = control
             main.addWidget(SettingRow(t(label), control))
         main.addWidget(hint(t("click_through_hint")))
-        main.addStretch()
-        material = QComboBox()
-        for name in ("panel", "overlay", "clear"):
-            material.addItem(t("material_" + name), name)
-        material.setAccessibleName(t("widget_material"))
-        self.materials["mini"] = material
-        material.currentIndexChanged.connect(lambda: self._material_changed("mini"))
-        mini.addWidget(SettingRow(t("widget_material"), material))
-        self.mini_alpha = PercentEditor()
-        self.mini_alpha.setAccessibleName(t("mini_transparency"))
-        self.mini_alpha.valueChanged.connect(lambda: self._opacity_changed("mini"))
-        mini.addWidget(SettingRow(t("mini_transparency"), self.mini_alpha))
-        mini.addWidget(hint(t("clear_readability")))
-        restore = action(t("restore_overlay"), lambda: self._restore_overlay("mini"))
-        mini.addWidget(restore, 0, Qt.AlignmentFlag.AlignLeft)
-        self.mini_scale = PercentEditor(50, 300)
-        self.mini_scale.setAccessibleName(t("mini_scale"))
-        mini.addWidget(SettingRow(t("mini_scale"), self.mini_scale))
-        fields = {}
-        for name, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
+        self.mini_alpha = self.main_alpha
+        self.mini_scale = self.main_scale
+        self.materials["mini"] = self.materials["main"]
+        self.overlay_fields["mini"] = self.overlay_fields["main"]
+        for name, label in (("widget_device_name", "widget_device_name"), ("widget_connection_status", "widget_connection_status"), ("widget_labels", "monitor_labels_visible"), ("widget_values_hover", "monitor_values_on_hover")):
             control = Switch(t(label))
-            fields[name] = control
-            mini.addWidget(SettingRow(t(label), control))
-        self.overlay_fields["mini"] = fields
-        mini.addWidget(hint(t("click_through_hint")))
-        mini.addWidget(SettingRow(t("mini_above_taskbar"), self.mini_above))
+            setattr(self, name, control)
+            main.addWidget(SettingRow(t(label), control))
+        main.addWidget(hint(t("widget_status_hint")))
+        main.addWidget(SettingRow(t("mini_above_taskbar"), self.mini_above))
         self.dock = QComboBox()
         for key in ("", "left", "right", "top", "bottom"):
             self.dock.addItem(t("dock_" + (key or "free")), key)
-        mini.addWidget(SettingRow(t("docking"), self.dock))
+        main.addWidget(SettingRow(t("docking"), self.dock))
         heading = QLabel(t("metric_visibility_title"))
         heading.setWordWrap(True)
         heading.setObjectName("section_title")
-        mini.addWidget(heading)
+        main.addWidget(heading)
+        main.addWidget(hint(t("widget_visibility_hint")))
         self.metrics = MetricVisibilityEditor()
-        mini.addWidget(self.metrics)
+        main.addWidget(self.metrics)
         metric_buttons = QHBoxLayout()
         metric_buttons.addWidget(action(t("move_up"), lambda: self._move_metric(-1)))
         metric_buttons.addWidget(action(t("move_down"), lambda: self._move_metric(1)))
         metric_buttons.addStretch()
-        mini.addLayout(metric_buttons)
-        mini.addStretch()
+        main.addLayout(metric_buttons)
+        main.addStretch()
         layout.addStretch()
 
     def _language_guide(self):
@@ -449,22 +432,23 @@ class SettingsWindow(QDialog):
         self.logging_mode.setCurrentIndex(max(0, self.logging_mode.findData(settings.logging_mode)))
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
-        self.main_enabled.setChecked(settings.main_enabled)
-        self.main_scale.setValue(settings.main_scale * 100)
-        self.main_alpha.setValue((settings.background_opacity if settings.transparency else 1) * 100)
+        self.main_enabled.setChecked(settings.widget.enabled)
+        self.main_scale.setValue(settings.widget.scale * 100)
+        self.main_alpha.setValue(settings.widget.opacity * 100)
         self.monitor_labels_visible.setChecked(settings.monitor_labels_visible)
         self.monitor_values_on_hover.setChecked(settings.monitor_values_on_hover)
-        self.mini_enabled.setChecked(settings.mini_enabled)
-        self.mini_above.setChecked(settings.mini_above_taskbar)
-        self.mini_scale.setValue(settings.mini_scale * 100)
-        self.mini_alpha.setValue((1 - settings.mini_transparency) * 100)
-        for kind in ("main", "mini"):
-            preferences = getattr(settings, kind + "_overlay")
+        self.mini_above.setChecked(settings.widget.above_taskbar)
+        self.widget_device_name.setChecked(settings.widget.show_device_name)
+        self.widget_connection_status.setChecked(settings.widget.show_connection_status)
+        self.widget_labels.setChecked(settings.widget.labels_visible)
+        self.widget_values_hover.setChecked(settings.widget.values_on_hover)
+        for kind in ("main",):
+            preferences = settings.widget.overlay
             for name, control in self.overlay_fields[kind].items():
                 control.setChecked(getattr(preferences, name))
-            opacity = settings.background_opacity if kind == "main" and settings.transparency else 1 if kind == "main" else 1 - settings.mini_transparency
+            opacity = settings.widget.opacity
             self.materials[kind].setCurrentIndex(0 if opacity == 1 else 2 if opacity == 0 else 1)
-        self.dock.setCurrentIndex(max(0, self.dock.findData(settings.mini_dock)))
+        self.dock.setCurrentIndex(max(0, self.dock.findData(settings.widget.dock)))
         self.metrics.load(settings)
         self.metrics.refresh_tooltips(self.controller)
         self.hotkey_rows = self._reset_hotkeys()
@@ -593,28 +577,34 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             logging_mode=self.logging_mode.currentData(),
-            animations=self.animations.isChecked(), mini_enabled=self.mini_enabled.isChecked(),
-            main_enabled=self.main_enabled.isChecked(), main_scale=self.main_scale.value() / 100,
-            background_opacity=self._baseline.background_opacity if self.main_alpha.value() == round((self._baseline.background_opacity if self._baseline.transparency else 1) * 100) else self.main_alpha.value() / 100,
-            transparency=self._baseline.transparency if self.main_alpha.value() == round((self._baseline.background_opacity if self._baseline.transparency else 1) * 100) else True,
+            animations=self.animations.isChecked(),
+            widget=self._widget_draft(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
-            mini_above_taskbar=self.mini_above.isChecked(), mini_scale=self.mini_scale.value() / 100,
-            mini_transparency=self._baseline.mini_transparency if self.mini_alpha.value() == round((1 - self._baseline.mini_transparency) * 100) else 1 - self.mini_alpha.value() / 100, mini_dock=self.dock.currentData(),
-            mini_metrics=self._metric_group("always"),
-            mini_hidden_metrics=self._metric_group("expanded"),
-            metric_order=tuple(self.metrics.order),
             manual_min_retained=self.minimum.spin.value(), manual_max_retained=self.maximum.spin.value(),
-            **{kind + "_overlay": self._overlay_draft(kind) for kind in ("main", "mini")},
         )
         changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(self._baseline, name)}
         return replace(current, **changes)
 
     def _overlay_draft(self, kind):
-        baseline = getattr(self._baseline, kind + "_overlay")
-        current = getattr(self.controller.settings, kind + "_overlay")
+        baseline = self._baseline.widget.overlay
+        current = self.controller.settings.widget.overlay
         changes = {name: control.isChecked() for name, control in self.overlay_fields[kind].items() if control.isChecked() != getattr(baseline, name)}
         return replace(current, **changes)
+
+    def _widget_draft(self):
+        baseline = self._baseline.widget
+        draft = replace(
+            baseline, enabled=self.main_enabled.isChecked(), scale=self.main_scale.value() / 100,
+            opacity=baseline.opacity if self.main_alpha.value() == round(baseline.opacity * 100) else self.main_alpha.value() / 100,
+            overlay=self._overlay_draft("main"), dock=self.dock.currentData(), above_taskbar=self.mini_above.isChecked(),
+            show_device_name=self.widget_device_name.isChecked(), show_connection_status=self.widget_connection_status.isChecked(),
+            labels_visible=self.widget_labels.isChecked(), values_on_hover=self.widget_values_hover.isChecked(),
+            small_metrics=self.metrics.group("small"), large_metrics=tuple(key for key in self.metrics.order if self.metrics.modes[key] in {"small", "large"}),
+            expanded_metrics=self.metrics.group("expanded"), metric_order=tuple(self.metrics.order),
+        )
+        changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(baseline, name)}
+        return replace(self.controller.settings.widget, **changes)
 
     def _connect_draft(self):
         for widget in self.findChildren(QWidget):
@@ -693,24 +683,43 @@ class SettingsWindow(QDialog):
             editor.set_validation_error(hotkey_error_text(HotkeyError(matching), self.integrations_editor.modules()) if matching else "")
 
     def sync_runtime_preferences(self, changes):
-        if self._loading or not ({"mini_enabled", "mini_overlay", "main_enabled", "main_overlay"} & changes.keys()):
+        if self._loading or "widget" not in changes:
             return
         self._loading = True
         try:
-            for kind in ("main", "mini"):
-                enabled = kind + "_enabled"
-                if enabled in changes:
-                    with QSignalBlocker(getattr(self, enabled)):
-                        getattr(self, enabled).setChecked(changes[enabled])
-                    self._baseline = replace(self._baseline, **{enabled: changes[enabled]})
-                key = kind + "_overlay"
-                if key in changes:
-                    current = changes[key]
-                    for name, control in self.overlay_fields[kind].items():
-                        if name in changes[key + "_fields"]:
-                            with QSignalBlocker(control):
-                                control.setChecked(getattr(current, name))
-                    self._baseline = replace(self._baseline, **{key: current})
+            current = changes["widget"]
+            fields = changes.get("widget_fields") or tuple(name for name in current.__dataclass_fields__ if getattr(current, name) != getattr(self._baseline.widget, name))
+            if "enabled" in fields:
+                with QSignalBlocker(self.main_enabled):
+                    self.main_enabled.setChecked(current.enabled)
+            baseline_edits = {name: getattr(current, name) for name in fields}
+            for name, control in (("scale", self.main_scale), ("above_taskbar", self.mini_above), ("show_device_name", self.widget_device_name), ("show_connection_status", self.widget_connection_status), ("labels_visible", self.widget_labels), ("values_on_hover", self.widget_values_hover)):
+                if name in fields:
+                    with QSignalBlocker(control):
+                        if name == "scale":
+                            control.setValue(current.scale * 100)
+                        else:
+                            control.setChecked(getattr(current, name))
+            if "dock" in fields:
+                with QSignalBlocker(self.dock):
+                    self.dock.setCurrentIndex(max(0, self.dock.findData(current.dock)))
+            metric_fields = {"small_metrics", "large_metrics", "expanded_metrics", "metric_order"} & set(fields)
+            if metric_fields:
+                draft = replace(self._widget_draft(), **{name: getattr(current, name) for name in metric_fields})
+                self.metrics.load(replace(self.controller.settings, widget=draft))
+            if "overlay" in fields:
+                overlay_fields = changes.get("widget_overlay_fields") or tuple(name for name in current.overlay.__dataclass_fields__ if getattr(current.overlay, name) != getattr(self._baseline.widget.overlay, name))
+                for name, control in self.overlay_fields["main"].items():
+                    if name in overlay_fields:
+                        with QSignalBlocker(control):
+                            control.setChecked(getattr(current.overlay, name))
+                baseline_edits["overlay"] = replace(self._baseline.widget.overlay, **{name: getattr(current.overlay, name) for name in overlay_fields})
+            if "opacity" in fields:
+                with QSignalBlocker(self.main_alpha):
+                    self.main_alpha.setValue(current.opacity * 100)
+                with QSignalBlocker(self.materials["main"]):
+                    self.materials["main"].setCurrentIndex(0 if current.opacity == 1 else 2 if current.opacity == 0 else 1)
+            self._baseline = replace(self._baseline, widget=replace(self._baseline.widget, **baseline_edits))
         finally:
             self._loading = False
         self._draft_changed()
@@ -724,13 +733,13 @@ class SettingsWindow(QDialog):
             self.load_draft()
             return
         self._loading = True
-        for kind in ("main", "mini"):
-            baseline = getattr(self._baseline, kind + "_overlay")
-            current = getattr(self.controller.settings, kind + "_overlay")
+        for kind in ("main",):
+            baseline = self._baseline.widget.overlay
+            current = self.controller.settings.widget.overlay
             for name, control in self.overlay_fields[kind].items():
                 if control.isChecked() == getattr(baseline, name):
                     control.setChecked(getattr(current, name))
-            self._baseline = replace(self._baseline, **{kind + "_overlay": current})
+            self._baseline = replace(self._baseline, widget=replace(self._baseline.widget, overlay=current))
         self._loading = False
 
     def showEvent(self, event):

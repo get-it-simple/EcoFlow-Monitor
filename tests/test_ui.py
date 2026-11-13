@@ -168,7 +168,7 @@ def test_metric_sources_refresh_in_monitor_mini_and_open_settings(runtime, qapp)
     from PySide6.QtCore import Qt
     from ecoflow_monitor.settings import METRICS
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, mini_metrics=METRICS, manual_min=10))
+    controller.apply_settings(replace(controller.settings, widget=replace(controller.settings.widget, small_metrics=METRICS, large_metrics=METRICS), manual_min=10))
     dialog = SettingsWindow(controller, runtime.window)
     try:
         def tips():
@@ -278,12 +278,12 @@ def test_settings_sections_expand_without_overlapping_rows(runtime, qapp, langua
     dialog = runtime.dashboard
     dialog.show()
     dialog.navigation.setCurrentRow(2)
-    dialog.appearance_tabs.setCurrentIndex(2)
+    dialog.appearance_tabs.setCurrentIndex(1)
     qapp.processEvents()
     rows = list(dialog.metrics.rows.values())
     for row in rows:
-        assert row.height() >= row.mode.height()
-        assert row.field.rect().contains(row.mode.geometry())
+        assert all(row.height() >= control.height() for control in row.controls.values())
+        assert all(row.rect().contains(control.geometry()) for control in row.controls.values())
     for mode in ("always", "expanded", "off"):
         visible = [dialog.metrics.rows[key] for key in dialog.metrics.group(mode)]
         for above, below in zip(visible, visible[1:]):
@@ -399,7 +399,7 @@ def test_settings_are_drafts_and_reset_does_not_apply(runtime, qapp):
     dialog.scale.setValue(150)
     dialog.mini_enabled.setChecked(True)
     assert runtime.controller.settings.scale == 1
-    assert runtime.controller.settings.mini_enabled is False
+    assert runtime.controller.settings.widget.enabled is False
     dialog.load_draft()
     assert dialog.scale.value() == 100 and dialog.mini_enabled.isChecked() is False
     dialog.reject()
@@ -432,7 +432,7 @@ def test_msi_enable_reveals_only_draft_controls_until_save(runtime):
 
 def test_mini_metric_selection_and_live_language_change(runtime, qapp):
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, language="uk", mini_enabled=True, mini_metrics=("output_power", "battery_level")))
+    controller.apply_settings(replace(controller.settings, widget=replace(controller.settings.widget, enabled=True, small_metrics=("output_power", "battery_level"), large_metrics=("output_power", "battery_level"), metric_order=("output_power", "battery_level", "input_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")), language="uk"))
     assert tuple(runtime.mini.labels) == ("output_power", "battery_level")
     assert runtime.mini.isVisible()
     assert i18n.get_current_language() == "uk"
@@ -498,15 +498,17 @@ def test_every_literal_translation_key_exists_in_english():
 
 @pytest.mark.parametrize("scale", [0.5, 1, 2, 3])
 @pytest.mark.design
-def test_scale_applies_to_labels_and_preserves_mini_status_space(runtime, qapp, scale):
+def test_scale_applies_to_labels_and_keeps_widget_status_accessible(runtime, qapp, scale):
     controller = runtime.controller
-    controller.apply_settings(replace(controller.settings, scale=scale, mini_enabled=True, mini_scale=scale))
+    controller.apply_settings(replace(controller.settings, widget=replace(controller.settings.widget, enabled=True, scale=scale), scale=scale))
     runtime.window.show()
     qapp.processEvents()
     actual = runtime.window._scale
     assert actual <= effective_scale(runtime.window, scale)
     assert runtime.window.titlebar.title.font().pixelSize() == round(16 * actual)
-    assert runtime.mini.status.height() >= runtime.mini.status.fontMetrics().height()
+    assert runtime.widget.status.isHidden()
+    assert runtime.widget.status_indicator.toolTip()
+    assert runtime.widget.status_indicator.accessibleName() == runtime.widget.status_indicator.toolTip()
     dialog = SettingsWindow(controller, runtime.window)
     dialog.show()
     qapp.processEvents()
@@ -573,7 +575,7 @@ def test_first_msi_enable_fits_two_line_profile_controls(runtime, qapp):
 @pytest.mark.parametrize("enabled,opacity,alpha", [(True, 140 / 255, 140), (False, 0.25, 255), (True, 0, 0), (True, 0.25, 64), (True, 1, 255)])
 @pytest.mark.design
 def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime, qapp, enabled, opacity, alpha):
-    runtime.controller.apply_settings(replace(runtime.controller.settings, transparency=enabled, background_opacity=opacity, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
+    runtime.controller.apply_settings(replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, opacity=opacity), transparency=enabled, integrations=(replace(runtime.controller.settings.integrations[0], enabled=True),)))
     runtime.open_dashboard()
     window = runtime.dashboard
     window.monitoring.msi_section.set_expanded(True)
@@ -582,7 +584,7 @@ def test_monitor_background_rendering_includes_scroll_and_msi_containers(runtime
     assert window.windowOpacity() == 1
     assert image.pixelColor(4, window.height() // 2).alpha() == 255
     assert not window.windowFlags() & Qt.WindowType.WindowTransparentForInput
-    assert runtime.controller.settings.background_opacity == opacity
+    assert runtime.controller.settings.widget.opacity == opacity
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -592,16 +594,16 @@ def test_transparency_draft_save_reset_and_restart(runtime, qapp, enabled):
     dialog.materials["mini"].setCurrentIndex(1 if enabled else 0)
     assert runtime.controller.settings == baseline
     dialog.load_draft()
-    assert dialog.gather().mini_transparency == baseline.mini_transparency
+    assert dialog.gather().widget.opacity == baseline.widget.opacity
     dialog.materials["mini"].setCurrentIndex(1 if enabled else 0)
     dialog.save()
     stored = runtime.controller.store.load()
-    assert stored.mini_transparency == pytest.approx(0.18 if enabled else 0)
+    assert stored.widget.opacity == pytest.approx(0.82 if enabled else 1)
     assert stored.background_opacity == baseline.background_opacity
     restarted = Controller(runtime.controller.store, NoCredentials())
     try:
-        assert restarted.settings.mini_transparency == stored.mini_transparency
-        assert restarted.settings.main_overlay == baseline.main_overlay
+        assert restarted.settings.widget.opacity == stored.widget.opacity
+        assert restarted.settings.widget.overlay == baseline.widget.overlay
     finally:
         restarted.stop()
 
@@ -612,13 +614,13 @@ def test_background_transparency_draft_reset_save_and_cancel(runtime, qapp):
     dialog.mini_alpha.setValue(75)
     dialog._draft_changed()
     assert runtime.controller.settings == baseline
-    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.25)
+    assert runtime.controller.ui_settings.widget.opacity == pytest.approx(0.75)
     dialog.load_draft()
     assert runtime.controller.preview is None
     dialog.mini_alpha.setValue(75)
     dialog.save()
     stored = runtime.controller.store.load()
-    assert stored.mini_transparency == pytest.approx(0.25)
+    assert stored.widget.opacity == pytest.approx(0.75)
     assert stored.background_opacity == baseline.background_opacity
     dialog.mini_alpha.setValue(10)
     dialog.reject()

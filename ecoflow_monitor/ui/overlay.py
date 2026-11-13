@@ -39,6 +39,8 @@ class OverlayControls(QObject):
 
     @property
     def preferences(self):
+        if self.kind == "widget":
+            return self.controller.settings.widget.overlay
         return getattr(self.controller.settings, self.kind + "_overlay")
 
     def change(self, **changes):
@@ -47,7 +49,10 @@ class OverlayControls(QObject):
             return self.request(self.kind, preferences)
         if preferences.click_through:
             return False
-        self.controller.update_preferences(**{self.kind + "_overlay": preferences})
+        if self.kind == "widget":
+            self.controller.update_widget(overlay=preferences, overlay_fields=tuple(changes))
+        else:
+            self.controller.update_preferences(**{self.kind + "_overlay": preferences})
         return True
 
     def refresh_menu(self):
@@ -59,7 +64,7 @@ class OverlayControls(QObject):
             action.triggered.connect(lambda checked, name=key: self.change(**{name: checked}))
 
     def apply(self):
-        preferences = self.preferences
+        preferences = self.controller.ui_settings.widget.overlay if self.kind == "widget" else self.preferences
         self.pin.setChecked(preferences.pinned)
         self.pin.setToolTip(t("pin_widget"))
         self.pin.setAccessibleName(t("pin_widget"))

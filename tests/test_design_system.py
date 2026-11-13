@@ -57,7 +57,7 @@ def test_preview_cancel_and_save_do_not_write_temporary_appearance(runtime, qapp
     dashboard.mini_alpha.setValue(33)
     dashboard._draft_changed()
     assert runtime.controller.settings == baseline
-    assert runtime.controller.ui_settings.mini_transparency == pytest.approx(0.67)
+    assert runtime.controller.ui_settings.widget.opacity == pytest.approx(0.33)
     dashboard.reject()
     assert dashboard.gather(False) == runtime.controller.settings
     assert runtime.controller.preview is None
@@ -65,8 +65,8 @@ def test_preview_cancel_and_save_do_not_write_temporary_appearance(runtime, qapp
     dashboard._draft_changed()
     dashboard.save()
     assert dashboard.isVisible()
-    assert runtime.controller.settings.mini_transparency == pytest.approx(0.59)
-    assert runtime.controller.store.load().mini_transparency == pytest.approx(0.59)
+    assert runtime.controller.settings.widget.opacity == pytest.approx(0.41)
+    assert runtime.controller.store.load().widget.opacity == pytest.approx(0.41)
     dashboard._draft_changed()
     assert not dashboard.save_button.isEnabled()
 
@@ -90,7 +90,7 @@ def test_legacy_migration_preserves_opacity_and_explicit_empty_integrations(tmp_
     store = SettingsStore(tmp_path / "settings.json")
     store.save(settings)
     assert store.load() == settings
-    assert settings.to_dict()["version"] == 3
+    assert settings.to_dict()["version"] == 4
 
 
 def test_zero_missing_and_stale_are_shared_by_all_views(runtime):
@@ -115,17 +115,17 @@ def test_zero_missing_and_stale_are_shared_by_all_views(runtime):
 
 def test_pin_lock_and_click_through_remain_independent_and_recoverable(runtime):
     runtime.mini.overlay.change(pinned=False)
-    assert not runtime.controller.settings.mini_overlay.pinned
+    assert not runtime.controller.settings.widget.overlay.pinned
     runtime.mini.overlay.change(position_locked=True)
-    assert runtime.controller.settings.mini_overlay.position_locked
+    assert runtime.controller.settings.widget.overlay.position_locked
     assert not runtime.mini.overlay.change(click_through=True)
-    assert not runtime.controller.settings.mini_overlay.click_through
-    runtime.controller.update_preferences(mini_overlay=replace(runtime.controller.settings.mini_overlay, click_through=True))
+    assert not runtime.controller.settings.widget.overlay.click_through
+    runtime.controller.update_preferences(widget=replace(runtime.controller.settings.widget, overlay=replace(runtime.controller.settings.widget.overlay, click_through=True)))
     assert not runtime.window.windowFlags() & Qt.WindowType.WindowTransparentForInput
     runtime.recover_widgets()
-    assert not runtime.controller.settings.mini_overlay.click_through
-    assert runtime.controller.settings.mini_overlay.position_locked
-    assert not runtime.controller.settings.mini_overlay.pinned
+    assert not runtime.controller.settings.widget.overlay.click_through
+    assert runtime.controller.settings.widget.overlay.position_locked
+    assert not runtime.controller.settings.widget.overlay.pinned
 
 
 def test_toolbar_preferences_do_not_get_overwritten_by_open_draft(runtime):
@@ -135,7 +135,7 @@ def test_toolbar_preferences_do_not_get_overwritten_by_open_draft(runtime):
     runtime.mini.overlay.change(pinned=False)
     assert not dashboard.overlay_fields["mini"]["pinned"].isChecked()
     dashboard.save()
-    assert not runtime.controller.settings.mini_overlay.pinned
+    assert not runtime.controller.settings.widget.overlay.pinned
     assert runtime.controller.settings.capacity_wh == 3000
 
 
@@ -143,16 +143,16 @@ def test_material_controls_and_keyboard_metric_order(runtime):
     runtime.open_settings()
     dashboard = runtime.dashboard
     dashboard.materials["mini"].setCurrentIndex(2)
-    assert dashboard.gather().mini_transparency == 1
+    assert dashboard.gather().widget.opacity == 0
     dashboard._restore_overlay("mini")
-    assert dashboard.gather().mini_transparency == pytest.approx(0.18)
+    assert dashboard.gather().widget.opacity == pytest.approx(0.82)
     dashboard.materials["mini"].setCurrentIndex(0)
-    assert dashboard.gather().mini_transparency == 0
+    assert dashboard.gather().widget.opacity == 1
     key = dashboard.metrics.order[0]
     dashboard.metrics.select(key)
     dashboard._move_metric(1)
     assert dashboard.metrics.order[1] == key
-    assert set(dashboard.gather().metric_order) == set(METRICS)
+    assert set(dashboard.gather().widget.metric_order) == set(METRICS)
 
 
 def test_hotkey_recording_escape_preserves_previous_shortcut(qapp):
@@ -172,14 +172,15 @@ def test_hotkey_recording_escape_preserves_previous_shortcut(qapp):
 @pytest.mark.parametrize("scale", [0.5, 1, 1.25, 1.5, 2, 3])
 @pytest.mark.design
 def test_widgets_fit_screen_with_all_metrics(runtime, qapp, language, scale):
-    settings = replace(runtime.controller.settings, language=language, scale=scale, mini_scale=scale, mini_enabled=True, mini_metrics=METRICS[:3], mini_hidden_metrics=METRICS[3:])
+    settings = replace(runtime.controller.settings, widget=replace(runtime.controller.settings.widget, scale=scale, enabled=True, small_metrics=METRICS[:3], large_metrics=METRICS[:3], expanded_metrics=METRICS[3:]), language=language, scale=scale)
     runtime.controller.apply_settings(settings)
     runtime.window.show()
     runtime.mini.reveal_button.setChecked(True)
     qapp.processEvents()
     for window in (runtime.window, runtime.mini):
         assert window.screen().availableGeometry().contains(window.geometry())
-    for reading in runtime.mini.readings.values():
+    for key in runtime.widget.composition.visible:
+        reading = runtime.widget.readings[key]
         assert runtime.mini.body.rect().contains(reading.geometry())
 
 
@@ -303,12 +304,12 @@ def test_metric_visibility_rows_and_numeric_text_fit_after_scale_change(runtime,
     qapp.processEvents()
     dashboard.resize(round(1184 * scale), round(900 * scale))
     dashboard.navigation.setCurrentRow(2)
-    dashboard.appearance_tabs.setCurrentIndex(2)
+    dashboard.appearance_tabs.setCurrentIndex(1)
     qapp.processEvents()
     for row in dashboard.metrics.rows.values():
-        assert row.height() >= row.mode.height()
-        assert row.field.rect().contains(row.mode.geometry())
-        assert row.mode.height() >= row.mode.fontMetrics().height()
+        for control in row.controls.values():
+            assert row.rect().contains(control.geometry())
+            assert control.height() >= control.fontMetrics().height()
     spin = dashboard.mini_alpha.spin
     assert spin.lineEdit().height() >= spin.fontMetrics().height()
     assert spin.lineEdit().width() >= spin.lineEdit().fontMetrics().horizontalAdvance(spin.text())
@@ -320,19 +321,21 @@ def test_metric_visibility_rows_and_numeric_text_fit_after_scale_change(runtime,
 
 def test_metric_reordering_does_not_move_other_groups_or_lose_draft(runtime):
     editor = runtime.dashboard.metrics
-    editor.rows["estimated_runtime"].mode.setCurrentIndex(1)
-    editor.rows["maximum_charge_level"].mode.setCurrentIndex(1)
+    editor.set_mode("estimated_runtime", "expanded")
+    editor.set_mode("maximum_charge_level", "expanded")
     always = editor.group("always")
     assert editor.move_before("maximum_charge_level", "estimated_runtime")
     assert editor.group("expanded") == ("maximum_charge_level", "estimated_runtime")
     assert editor.move_before("maximum_charge_level", "estimated_runtime", after=True)
     assert editor.group("expanded") == ("estimated_runtime", "maximum_charge_level")
     assert editor.group("always") == always
-    assert not editor.move_before("battery_level", "estimated_runtime")
+    assert editor.move_before("battery_level", "estimated_runtime")
+    assert editor.modes["battery_level"] == "small"
+    assert editor.modes["estimated_runtime"] == "expanded"
     runtime.dashboard.save()
     stored = runtime.controller.store.load()
-    assert stored.mini_hidden_metrics == editor.group("expanded")
-    assert stored.mini_metrics == always
+    assert stored.widget.expanded_metrics == editor.group("expanded")
+    assert stored.widget.small_metrics == editor.group("small")
 
 
 def test_shortcut_conflict_preserves_working_combo_and_distinguishes_numpad(runtime):
@@ -370,7 +373,7 @@ def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
 
 def test_main_flags_do_not_affect_app_shell_and_recover_input_without_shortcut(runtime, qapp):
     previous = runtime.controller.settings
-    settings = replace(previous, transparency=True, background_opacity=0, main_overlay=OverlayPreferences(pinned=True, position_locked=True, click_through=True))
+    settings = replace(previous, widget=replace(previous.widget, opacity=0, overlay=OverlayPreferences(pinned=True, position_locked=True, click_through=True)), transparency=True)
     runtime.controller.apply_settings(settings)
     runtime.start()
     dashboard = runtime.dashboard
@@ -379,8 +382,8 @@ def test_main_flags_do_not_affect_app_shell_and_recover_input_without_shortcut(r
     dashboard.capacity.setValue(3000)
     dashboard.save()
     stored = runtime.controller.store.load()
-    assert stored.main_overlay == replace(settings.main_overlay, click_through=False)
-    assert stored.background_opacity == 0
+    assert stored.widget.overlay == replace(settings.widget.overlay, click_through=False)
+    assert stored.widget.opacity == 0
     assert stored.capacity_wh == 3000
     assert "main" in dashboard.materials
     assert "main" in dashboard.overlay_fields

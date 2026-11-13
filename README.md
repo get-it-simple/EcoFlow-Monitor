@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.13.0**.
+battery charge. Version **0.14.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -50,19 +50,20 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 ## Everyday controls
 
 - The dashboard opens on startup. Use its sidebar for monitoring and settings,
-  and enable the separate Main or Mini widget when needed. Closing the main window offers
+  and enable the adaptive widget when needed. Closing the main window offers
   to save or discard pending changes, then hides it; use the tray menu to exit.
 - Launching the application again restores and focuses the dashboard.
   Only one instance runs per user in a Windows session, even from another folder.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
-- Enable the mini widget in Appearance and choose which metrics stay visible,
-  appear after expanding, or remain off. Reorder metrics by dragging or using
-  Move up/Move down within each visibility group. Drag the mini widget by its
-  heading; docking and taskbar overlap
-  are optional.
-- Main and Mini have independent scale, background, pin, position lock and click-through. Click-through requires
+- Resize the widget between a minimal numeric display, compact cards, a larger
+  display, or a wide row. Choose readings for Small, Large, or only when expanded
+  in Appearance; Small readings also appear in Large. Reorder by dragging or
+  Move up/Move down. Extra readings open in an attached details panel without
+  moving the widget. Controls appear on hover or keyboard focus; the device name
+  and full connection status are optional. Drag a free surface to move it.
+- The widget has its own scale, background, pin, position lock and click-through. Click-through requires
   the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
   controls; the tray offers the same action.
 - Open **Integrations** to manage modules. Expand **Integrations** in Monitoring to
@@ -77,14 +78,14 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   actions, ordered rules, and global hotkeys.
 - Automatic profile selection using running applications, input power, and
   battery charge, with independent Auto controls for each integration.
-- Independent interface and mini-widget scale, metric visibility, and mini-widget background opacity.
+- Independent interface and widget scale, adaptive metric visibility, and widget background opacity.
 - Graphite surfaces, bundled Inter typography, mint actions and shared controls. Percentage
   settings provide both numeric input and a slider.
 - Saved preferences, window placement, and English/Ukrainian interface languages.
 
 ### Appearance and monitoring status
 
-Choose Panel, Overlay or Clear for either widget in Appearance. **Background opacity** ranges from
+Choose Panel, Overlay or Clear for the widget in Appearance. **Background opacity** ranges from
 0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain
 opaque. Clear outlines text and offers a protective background if needed.
 Appearance changes preview temporarily; Save keeps them and Cancel restores the
