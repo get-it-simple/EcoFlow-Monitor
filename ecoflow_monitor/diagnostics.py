@@ -1,9 +1,9 @@
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import ipaddress
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import BaseRotatingHandler
 from pathlib import Path
 import queue
 import re
@@ -138,9 +138,57 @@ def reveal_log(path: Path) -> bool:
         return False
 
 
+class DailySizeFileHandler(BaseRotatingHandler):
+    def __init__(self, path, max_bytes, backup_count=None, clock=None):
+        self.max_bytes = max_bytes
+        self.backup_count = backup_count
+        self.clock = clock or datetime.now
+        self.path = Path(path)
+        self.day = (datetime.fromtimestamp(self.path.stat().st_mtime).date()
+                    if self.path.exists() and self.path.stat().st_size else self.clock().date())
+        super().__init__(path, "a", encoding="utf-8")
+
+    def _open(self):
+        return open(self.baseFilename, self.mode, encoding=self.encoding, newline="\n")
+
+    def shouldRollover(self, record):
+        size = self.path.stat().st_size
+        return size > 0 and (self.clock().date() != self.day
+                             or size + len((self.format(record) + "\n").encode("utf-8")) > self.max_bytes)
+
+    def doRollover(self):
+        self.stream.close()
+        suffix = self.day.isoformat()
+        index = 1
+        archive = self.path.with_name(f"{self.path.stem}.{suffix}.{index:04d}{self.path.suffix}")
+        while archive.exists():
+            index += 1
+            archive = self.path.with_name(f"{self.path.stem}.{suffix}.{index:04d}{self.path.suffix}")
+        self.path.rename(archive)
+        self.day = self.clock().date()
+        self.stream = self._open()
+        self.prune()
+
+    def prune(self):
+        dated = re.compile(re.escape(self.path.stem) + r"\.\d{4}-\d{2}-\d{2}\.\d{4,}" + re.escape(self.path.suffix))
+        legacy = re.compile(re.escape(self.path.name) + r"\.\d+")
+        archives = sorted((item for item in self.path.parent.iterdir() if item.is_file()
+                           and (dated.fullmatch(item.name) or legacy.fullmatch(item.name))),
+                          key=lambda item: (item.stat().st_mtime_ns, item.name))
+        total = sum(item.stat().st_size for item in archives)
+        cutoff = (self.clock() - timedelta(days=14)).timestamp()
+        remaining = len(archives)
+        for item in archives:
+            size = item.stat().st_size
+            if item.stat().st_mtime < cutoff or total > 100 * 1024 * 1024 or self.backup_count is not None and remaining > self.backup_count:
+                item.unlink()
+                total -= size
+                remaining -= 1
+
+
 class DiagnosticLog(logging.Handler):
-    def __init__(self, path: Path, *, disabled: bool = False, max_bytes: int = 5 * 1024 * 1024,
-                 backup_count: int = 4, queue_size: int = 1024) -> None:
+    def __init__(self, path: Path, *, disabled: bool = False, max_bytes: int = 3 * 1024 * 1024,
+                 backup_count: int | None = None, queue_size: int = 1024) -> None:
         super().__init__()
         self.path = path
         self.disabled = disabled
@@ -178,9 +226,10 @@ class DiagnosticLog(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._state_lock:
-            if self._closed or self.disabled or self.failed or self.mode == "off":
+            forced = getattr(record, "diagnostic_consent", False)
+            if self._closed or self.disabled or self.failed or self.mode == "off" and not forced:
                 return
-            if record.levelno < (logging.DEBUG if self.mode == "detailed" else logging.INFO):
+            if not forced and record.levelno < (logging.DEBUG if self.mode == "detailed" else logging.INFO):
                 return
             data: dict[str, Any] = {
                 "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="milliseconds"),
@@ -199,9 +248,21 @@ class DiagnosticLog(logging.Handler):
                 data["event"] = data["event"][:1024]
                 line = json.dumps(data)
             try:
-                self._queue.put_nowait((self._generation, line))
+                self._queue.put_nowait((self._generation, line, forced))
             except queue.Full:
                 self._dropped += 1
+
+    def capture(self, name, *, sensitive=(), **fields):
+        if self.disabled or self._closed:
+            return
+        with self._state_lock:
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._write, name="ecoflow-diagnostics", daemon=True)
+                self._thread.start()
+        record = logging.LogRecord(LOGGER_NAME, logging.INFO, "", 0, name, (), None)
+        record.diagnostic_fields = sanitize(fields, sensitive)
+        record.diagnostic_consent = True
+        self.emit(record)
 
     def _write(self) -> None:
         while True:
@@ -209,16 +270,16 @@ class DiagnosticLog(logging.Handler):
             try:
                 if item is None:
                     return
-                generation, line = item
+                generation, line, forced = item
                 with self._state_lock:
-                    if generation != self._generation or self.mode == "off" or self.failed:
+                    if (generation != self._generation or self.mode == "off") and not forced or self.failed:
                         continue
                     try:
                         if self._sink is None:
                             self.path.parent.mkdir(parents=True, exist_ok=True)
-                            self._sink = RotatingFileHandler(self.path, maxBytes=self._max_bytes,
-                                                             backupCount=self._backup_count, encoding="utf-8")
+                            self._sink = DailySizeFileHandler(self.path, self._max_bytes, self._backup_count)
                             self._sink.setFormatter(logging.Formatter("%(message)s"))
+                            self._sink.prune()
                         if self._dropped:
                             self._write_line(json.dumps({"event": "log_events_dropped", "count": self._dropped}))
                             self._dropped = 0

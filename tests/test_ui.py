@@ -338,27 +338,30 @@ def test_profile_details_tooltips_update_on_selection_and_edit(runtime, qapp):
         editor.deleteLater()
 
 
-def test_helper_requires_consent_and_does_not_repeat_on_auto_toggle(runtime, monkeypatch):
+def test_helper_requires_consent_and_does_not_repeat_on_auto_toggle(runtime, qapp, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
-    from types import SimpleNamespace
     module = replace(runtime.controller.settings.integrations[0], enabled=True)
     runtime.controller.apply_settings(replace(runtime.controller.settings, integrations=(module,)))
     submitted = []
     prompts = []
     monkeypatch.setattr(Controller, "_submit", lambda self, *args: submitted.append(args))
-    def decline(*args):
+    from ecoflow_monitor.ui.common import elevation_prompt
+    def create(*args):
         prompts.append(args)
-        return QMessageBox.StandardButton.No
+        return elevation_prompt(*args)
     monkeypatch.setattr("ecoflow_monitor.application.elevation_prompt",
-                        lambda *args: SimpleNamespace(exec=decline, deleteLater=lambda: None))
+                        create)
     runtime._offer_elevation(module.id, automatic=True)
+    qapp.processEvents()
+    runtime.confirmations.dialog.done(QMessageBox.StandardButton.No)
+    qapp.processEvents()
     assert len(prompts) == 1 and not submitted
     runtime.controller.set_auto(module.id, True)
     runtime._offer_elevation(module.id, automatic=True)
     assert len(prompts) == 1 and not submitted
-    monkeypatch.setattr("ecoflow_monitor.application.elevation_prompt",
-                        lambda *args: SimpleNamespace(exec=lambda: QMessageBox.StandardButton.Yes, deleteLater=lambda: None))
     runtime._offer_elevation(module.id)
+    qapp.processEvents()
+    runtime.confirmations.dialog.done(QMessageBox.StandardButton.Yes)
     assert [item[0] for item in submitted] == ["elevate:" + module.id]
 
 
@@ -383,9 +386,10 @@ def test_helper_consent_stays_above_monitor_and_active_settings(runtime, qapp, m
             seen.append((prompt.parentWidget(), bool(prompt.windowFlags() & Qt.WindowType.WindowStaysOnTopHint),
                          prompt.windowModality(), prompt.defaultButton() == prompt.button(QMessageBox.StandardButton.No)))
             QTest.mouseClick(prompt.button(QMessageBox.StandardButton.No), Qt.MouseButton.LeftButton)
-    QTimer.singleShot(0, decline)
     try:
         runtime._offer_elevation(module.id)
+        qapp.processEvents()
+        decline()
         assert seen == [(settings or runtime.window, True, Qt.WindowModality.ApplicationModal, True)]
         assert not submitted
     finally:

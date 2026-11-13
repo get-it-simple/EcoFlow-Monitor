@@ -20,6 +20,7 @@ from ecoflow_monitor.ui.polling import SensorDemand
 from ecoflow_monitor.ui.components import DialogChrome
 from ecoflow_monitor.ui.theme import menu_style
 from ecoflow_monitor.ui.hotkey_editor import hotkey_error_text
+from ecoflow_monitor.ui.confirmations import ConfirmationCoordinator, ConfirmationRequest
 
 
 class Application(QObject):
@@ -46,6 +47,12 @@ class Application(QObject):
         self.main = self.mini = self.widget
         self.dashboard = Dashboard(self.controller, lambda: self.controller.update_widget(enabled=True))
         self.window = self.dashboard
+        self.confirmations = ConfirmationCoordinator(self.dashboard, self)
+        self.controller.interactions = self.confirmations
+        self.controller.task_finished.connect(self.confirmations.finish)
+        self._automatic_helpers_allowed = True
+        self.controller.unsupported_device.connect(self._notify_unsupported)
+        self.dashboard.diagnostics_requested.connect(self._offer_diagnostics)
         self.sensor_demand = SensorDemand(self.controller, self.dashboard, self.widget)
         self.dashboard.setWindowIcon(app_icon())
         self.dashboard.preflight = self.preflight_settings
@@ -86,11 +93,39 @@ class Application(QObject):
             self.tray.showMessage(t("onepassword_cache_expired_title"), t("onepassword_cache_expired"),
                                   QSystemTrayIcon.MessageIcon.Warning, 10000)
 
+    def _notify_unsupported(self):
+        self.controller.notice = "device_unsupported_help"
+        if self.native and self.tray.isVisible() and QSystemTrayIcon.supportsMessages():
+            self.tray.showMessage(t("unsupported_device"), t("device_unsupported_help"),
+                                  QSystemTrayIcon.MessageIcon.Warning, 10000)
+
+    def _offer_diagnostics(self):
+        serial = self.controller.settings.serial
+        def accepted(done):
+            done()
+            self.controller.collect_diagnostics()
+        self.confirmations.enqueue(ConfirmationRequest(
+            ("diagnostics", serial), lambda owner: self._permission_prompt(owner, "device_diagnostics_title", t("device_diagnostics_prompt")),
+            accepted, lambda: not self._stopped and self.controller.settings.serial == serial))
+
+    @staticmethod
+    def _permission_prompt(owner, title, text):
+        prompt = QMessageBox(owner)
+        prompt.setWindowTitle(t(title))
+        prompt.setText(text)
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        prompt.setIcon(QMessageBox.Icon.Question)
+        prompt.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        prompt.button(QMessageBox.StandardButton.Yes).setText(t("confirmation_allow"))
+        prompt.button(QMessageBox.StandardButton.No).setText(t("cancel"))
+        prompt.setDefaultButton(QMessageBox.StandardButton.No)
+        return prompt
+
     def activate_existing_window(self):
         if self._stopped:
             return
         self.open_dashboard()
-        target = QApplication.activeModalWidget() or self.dashboard
+        target = self.confirmations.dialog or QApplication.activeModalWidget() or self.dashboard
         if target is not None:
             target.setWindowState(target.windowState() & ~Qt.WindowState.WindowMinimized)
             target.show()
@@ -99,6 +134,7 @@ class Application(QObject):
     def preferences(self):
         if self._stopped:
             return
+        self.confirmations.invalidate()
         self._elevation_checked.clear()
         enabled = {module.id: replace(module, auto_enabled=False)
                    for module in self.controller.settings.integrations if module.enabled}
@@ -166,7 +202,7 @@ class Application(QObject):
                 action.setEnabled(not ready and "elevate:" + module.id not in self.controller._active)
 
     def _check_elevation(self):
-        if not self.native or self._stopped:
+        if not self.native or self._stopped or not self._automatic_helpers_allowed:
             return
         from ecoflow_monitor.adapters.elevation_windows import requires_administrator
         for module in self.controller.settings.integrations:
@@ -184,7 +220,7 @@ class Application(QObject):
             self.controller._submit("elevation_check:" + module.id, check)
 
     def _queue_elevation(self, identity):
-        if self.native:
+        if self.native and self._automatic_helpers_allowed:
             QTimer.singleShot(0, lambda: self._offer_elevation(identity, automatic=True))
 
     def _offer_elevation(self, identity, automatic=False):
@@ -201,16 +237,51 @@ class Application(QObject):
         if "elevate:" + identity in self.controller._active:
             return
         self._elevation_prompted[identity] = module
-        prompt = elevation_prompt(QApplication.activeModalWidget() or self.window, module.label)
-        try:
-            answer = prompt.exec()
-        finally:
-            prompt.deleteLater()
-        current = next((item for item in self.controller.settings.integrations if item.id == identity), None)
-        if (answer == QMessageBox.StandardButton.Yes and not self._stopped and current is not None
-                and replace(current, auto_enabled=False) == module):
-            self.controller._submit("elevate:" + identity, lambda: self.controller.integration_adapter.start_elevated(module))
+        def valid():
+            current = next((item for item in self.controller.settings.integrations if item.id == identity and item.enabled), None)
+            return (not self._stopped and current is not None and replace(current, auto_enabled=False) == module
+                    and not self.controller.integration_adapter.helper_ready(current))
+        def accepted(done):
+            if not valid():
+                done()
+                return
+            self.controller._submit("elevate:" + identity,
+                                    lambda: self.controller.integration_adapter.start_elevated(module) if valid() else None)
             self._sync_menu()
+        self.confirmations.enqueue(ConfirmationRequest("elevate:" + identity,
+                                                      lambda owner: elevation_prompt(owner, module.label), accepted, valid))
+
+    def _startup_consent(self):
+        settings = self.controller.settings
+        connection = bool(settings.serial or settings.onepassword_access_ref or self.controller.store.path.exists())
+        modules = tuple(module for module in settings.integrations if module.enabled)
+        if not connection and not modules:
+            return
+        operations = []
+        if connection:
+            operations.append(t("startup_onepassword" if settings.credential_source == "1password" else "startup_windows_keys"))
+            operations.append(t("startup_device_list"))
+        operations.extend(t("startup_helper").format(name=module.label) for module in modules)
+        message = t("startup_consent_description") + "\n\n" + "\n".join("• " + item for item in operations)
+        def accepted(done):
+            done()
+            self.controller.access_allowed = True
+            if connection:
+                self._startup_waiting_catalog = True
+                self.controller._api_pending = bool(settings.serial)
+                self.controller.discover(user_initiated=False)
+            else:
+                self._automatic_helpers_allowed = True
+                self._check_elevation()
+        self._startup_waiting_catalog = False
+        self.confirmations.enqueue(ConfirmationRequest("startup", lambda owner: self._permission_prompt(owner, "startup_consent_title", message),
+                                                      accepted, lambda: not self._stopped))
+
+    def _startup_catalog_finished(self, devices):
+        if getattr(self, "_startup_waiting_catalog", False):
+            self._startup_waiting_catalog = False
+            self._automatic_helpers_allowed = True
+            self._check_elevation()
 
     def start(self):
         if self.native and QSystemTrayIcon.isSystemTrayAvailable():
@@ -220,7 +291,10 @@ class Application(QObject):
         self.preferences()
         self.open_dashboard()
         if self.native:
-            self.controller.start()
+            self._automatic_helpers_allowed = False
+            self.controller.devices_ready.connect(self._startup_catalog_finished)
+            self.controller.start(authorized=False)
+            self._startup_consent()
 
     def hotkey(self, action: str):
         if action == "open_dashboard":
@@ -258,6 +332,7 @@ class Application(QObject):
         self.sensor_demand.refresh()
         self.dashboard.raise_()
         self.dashboard.activateWindow()
+        self.confirmations.raise_active()
 
     def preview(self, settings):
         if self._stopped:
@@ -339,6 +414,7 @@ class Application(QObject):
         if self._stopped:
             return
         self._stopped = True
+        self.confirmations.close()
         self.motion_driver.stop()
         if self.dashboard is not None:
             self.dashboard._draft_timer.stop()

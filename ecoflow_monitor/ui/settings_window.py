@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime
 from collections.abc import Callable
 from typing import cast
 
@@ -34,6 +35,7 @@ from ecoflow_monitor.ui.dialogs import LanguageGuideDialog
 
 class SettingsWindow(QDialog):
     preview_changed = Signal(object)
+    diagnostics_requested = Signal()
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -146,6 +148,8 @@ class SettingsWindow(QDialog):
         manual_layout.addWidget(self.show_keys)
         manual_layout.addWidget(hint(t("credentials_hint")))
         self.onepassword = OnePasswordPanel(self._entered_credentials, self.manual_credentials, self)
+        self.onepassword.session_loader = lambda fields, cancelled: self.controller.load_session_credentials(replace(self.controller.settings, **fields), cancelled)
+        self.onepassword.external_runner = lambda operation, cancelled: self.controller.interactions.run_external(operation, cancelled) if self.controller.interactions is not None else operation()
         self.onepassword.source_changed.connect(self._credential_source_changed)
         self.onepassword.credentials_ready.connect(self._fill_credentials)
         self.onepassword.busy_changed.connect(self._credential_busy_changed)
@@ -164,6 +168,8 @@ class SettingsWindow(QDialog):
         layout.addLayout(device_row)
         layout.addLayout(form2)
         layout.addWidget(hint(t("load_devices_hint")))
+        self.diagnostics_button = action(t("device_diagnostics_action"), self.diagnostics_requested.emit)
+        layout.addWidget(self.diagnostics_button)
         self.capacity = NumberField()
         self.capacity.setRange(1, 1000000)
         self.capacity.setDecimals(0)
@@ -190,6 +196,9 @@ class SettingsWindow(QDialog):
         self.range_error.setMinimumHeight(self.fontMetrics().height())
         layout.addWidget(self.range_error)
         layout.addWidget(hint(t("capacity_hint")))
+        self.capacity_status = hint("")
+        layout.addWidget(self.capacity_status)
+        self.controller.changed.connect(self._refresh_capacity_status)
         layout.addWidget(hint(t("manual_limit_hint")))
         self.polling_section = CollapsibleSection(t("polling_title"), self)
         layout.addWidget(self.polling_section)
@@ -437,8 +446,16 @@ class SettingsWindow(QDialog):
         self.access.clear()
         self.secret.clear()
         self.devices.clear()
-        self.devices.addItem(settings.serial, settings.serial)
+        self._loaded_device_names = {}
+        if self.controller.catalog:
+            for device in self.controller.catalog:
+                self.devices.addItem(device.name, device.serial)
+                self._loaded_device_names[device.serial] = device.name
+        if self.devices.findData(settings.serial) < 0:
+            self.devices.addItem(self.controller.metadata.name(settings.serial), settings.serial)
+        self.devices.setCurrentIndex(self.devices.findData(settings.serial))
         self.capacity.setValue(settings.capacity_wh)
+        self._refresh_capacity_status()
         self.capacity.setSuffix(" " + t("unit_watt_hour"))
         self.minimum.setValue(-1 if settings.manual_min is None else settings.manual_min)
         self.maximum.setValue(-1 if settings.manual_max is None else settings.manual_max)
@@ -556,9 +573,19 @@ class SettingsWindow(QDialog):
     def discover(self):
         if self.onepassword.busy:
             return
-        if self.onepassword.uses_onepassword and self.onepassword.credentials is None:
-            self.onepassword.show_status(t("onepassword_load_first"))
-            return
+        if self.onepassword.uses_onepassword:
+            try:
+                fields = self.onepassword.settings_fields()
+            except ValueError:
+                self.onepassword.show_status(t("onepassword_reference_error"))
+                return
+            if (fields["onepassword_access_ref"], fields["onepassword_secret_ref"]) == (self.controller.settings.onepassword_access_ref, self.controller.settings.onepassword_secret_ref):
+                self.discover_button.setEnabled(False)
+                self.controller.discover()
+                return
+            if self.onepassword.credentials is None:
+                self.onepassword.show_status(t("onepassword_load_first"))
+                return
         try:
             credentials = self._entered_credentials()
         except CredentialError as error:
@@ -570,14 +597,31 @@ class SettingsWindow(QDialog):
     def _devices(self, devices):
         self.discover_button.setEnabled(not self.onepassword.busy)
         if not devices:
-            QMessageBox.warning(self, t("error_title"), t(self.controller.notice or self.controller.connection.value))
+            self.onepassword.show_status(t(self.controller.notice or self.controller.connection.value))
             return
+        selected = self.devices.currentData() or self.controller.settings.serial
+        if self.devices.isEditable() and self.devices.currentIndex() >= 0 and self.devices.currentText() != self.devices.itemText(self.devices.currentIndex()):
+            selected = self.devices.currentText().strip()
         self.devices.clear()
+        self._loaded_device_names = {device.serial: device.name for device in devices}
         for device in devices:
             self.devices.addItem(device.name, device.serial)
-        index = self.devices.findData(self.controller.settings.serial)
+        index = self.devices.findData(selected)
         if index >= 0:
             self.devices.setCurrentIndex(index)
+        elif selected:
+            self.devices.addItem(self.controller.metadata.name(selected), selected)
+            self.devices.setCurrentIndex(self.devices.count() - 1)
+
+    def _refresh_capacity_status(self):
+        if not hasattr(self, "capacity_status"):
+            return
+        estimate = self.controller.capacity_estimate
+        self.capacity_status.setText(t("capacity_estimate_ready").format(
+            value=round(estimate.watt_hours), count=estimate.count, spread=round(estimate.spread_pct),
+            date=datetime.fromtimestamp(estimate.updated_utc).astimezone().strftime("%Y-%m-%d %H:%M"))
+            if estimate is not None else t("capacity_estimate_waiting"))
+        self.diagnostics_button.setEnabled(bool(self.controller.settings.serial) and not self.controller._stopped)
 
     def gather(self, validate_paths=True):
         current = self.controller.settings
@@ -686,6 +730,10 @@ class SettingsWindow(QDialog):
             if self.preflight is not None:
                 rollback = self.preflight(draft)
             self.controller.apply_settings(draft, self._entered_credentials())
+            name = self._loaded_device_names.get(draft.serial)
+            if name:
+                self.controller.metadata.remember_name(draft.serial, name)
+                self.controller._save_metadata()
         except (ValueError, OSError, SettingsError, CredentialError) as error:
             if rollback is not None:
                 rollback()

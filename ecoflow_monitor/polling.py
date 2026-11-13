@@ -15,15 +15,17 @@ SENSOR_FIELDS = {
     "minimum_discharge_level": "cmsMinDsgSoc", "maximum_charge_level": "cmsMaxChgSoc",
     **PORT_KEYS, "anderson": "powGet12vList.powGet12vItem",
     "ac_enabled": "flowInfoAcOut", "dc_enabled": "flowInfo12v", "charging_state": "cmsChgDsgState",
+    "device_discharge_minutes": "cmsDsgRemTime", "device_charge_minutes": "cmsChgRemTime",
 }
 CORE = frozenset(("input_power", "output_power", "battery_level"))
 LIMITS = frozenset(("minimum_discharge_level", "maximum_charge_level"))
 PORTS = frozenset((*PORT_KEYS, "anderson"))
-DASHBOARD_SENSORS = frozenset(SENSOR_FIELDS) - {"ac_input", "pv_input"}
+DASHBOARD_SENSORS = frozenset(SENSOR_FIELDS) - {"ac_input", "pv_input", "device_discharge_minutes", "device_charge_minutes"}
 ATTRIBUTES = {
     "input_power": "input_w", "output_power": "output_w", "battery_level": "soc_pct",
     "minimum_discharge_level": "min_soc", "maximum_charge_level": "max_soc",
     "ac_enabled": "ac_enabled", "dc_enabled": "dc_enabled", "charging_state": "charging_state",
+    "device_discharge_minutes": "device_discharge_minutes", "device_charge_minutes": "device_charge_minutes",
 }
 
 
@@ -103,6 +105,7 @@ class PollingState:
         self.samples: dict[str, SensorSample] = {}
         self.visible = frozenset()
         self.required = frozenset()
+        self.supplemental = frozenset()
         self.in_flight = frozenset()
         self.waiting = set()
         self.resumed = set()
@@ -142,6 +145,10 @@ class PollingState:
     def begin(self, now: float) -> tuple[str, ...]:
         with self._lock:
             keys = self.due(now)
+            if keys:
+                keys |= frozenset(key for key in self.supplemental if key not in self.in_flight
+                                  and now - self.samples.get(key, SensorSample()).attempted_monotonic
+                                  >= getattr(self.preferences, sensor_group(key)).interval_seconds)
             self.in_flight = keys
             for key in keys:
                 self.samples[key] = replace(self.samples.get(key, SensorSample()), attempted_monotonic=now)

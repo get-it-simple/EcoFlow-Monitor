@@ -151,6 +151,8 @@ class EcoFlowClient:
     def __init__(self, credentials: Credentials, transport: httpx.BaseTransport | None = None) -> None:
         self._credentials = credentials
         self._transport = transport
+        self.catalog = None
+        self.diagnostic_capture = None
 
     def _request(self, method: str, path: str, parameters: dict) -> Any:
         operation = uuid.uuid4().hex[:12]
@@ -170,6 +172,8 @@ class EcoFlowClient:
                 )
         except httpx.HTTPError as error:
             event("api_transport_failed", level=logging.WARNING, operation=operation, exception_type=type(error).__name__)
+            if self.diagnostic_capture is not None:
+                self.diagnostic_capture("device_diagnostic_transport_failure", endpoint=path, exception_type=type(error).__name__)
             event("api_request_timing", level=logging.DEBUG, operation=operation,
                   elapsed_ms=round((time.monotonic() - started) * 1000, 2))
             raise EcoFlowError(ConnectionState.API_ERROR) from None
@@ -183,6 +187,10 @@ class EcoFlowClient:
               http_status=response.status_code, elapsed_ms=round((time.monotonic() - started) * 1000, 2),
               body_bytes=len(response.content), retry_after_seconds=metric(response.headers.get("Retry-After")),
               payload=payload, body_format="json" if payload is not None else "non_json_or_null")
+        if self.diagnostic_capture is not None:
+            self.diagnostic_capture("device_diagnostic_response", sensitive=hidden, endpoint=path,
+                                    http_status=response.status_code, payload=payload,
+                                    body_format="json" if payload is not None else "non_json_or_null")
         if response.status_code in (401, 403):
             raise EcoFlowError(ConnectionState.AUTH_ERROR)
         if response.status_code >= 400:
@@ -210,6 +218,37 @@ class EcoFlowClient:
             raise EcoFlowError(ConnectionState.API_ERROR)
         return normalize_telemetry(data, time.time(), time.monotonic())
 
+    def diagnose(self, serial: str, capture) -> tuple[str, ...]:
+        self.diagnostic_capture = capture
+        failures = []
+        try:
+            for label, method, endpoint, parameters in (
+                ("devices", "GET", "/iot-open/sign/device/list", {}),
+                ("all_parameters", "GET", "/iot-open/sign/device/quota/all", {"sn": serial}),
+                ("selected_parameters", "POST", "/iot-open/sign/device/quota", {"sn": serial, "params": {"quotas": list(QUOTAS)}}),
+            ):
+                try:
+                    data = self._request(method, endpoint, parameters)
+                    if label == "devices":
+                        if not isinstance(data, list):
+                            raise EcoFlowError(ConnectionState.API_ERROR)
+                    elif not isinstance(data, dict):
+                        raise EcoFlowError(ConnectionState.API_ERROR)
+                    else:
+                        patch = normalize_partial(data, tuple(SENSOR_FIELDS.values()))
+                        capture("device_diagnostic_validation", operation=label, missing_fields=list(patch.missing),
+                                invalid_fields=list(patch.invalid), empty=not data)
+                        if not data or patch.invalid or label == "selected_parameters" and not CORE <= dict(patch.values).keys():
+                            failures.append(label)
+                except EcoFlowError as error:
+                    failures.append(label)
+                    capture("device_diagnostic_failure", operation=label, state=error.state.value)
+                    if error.state == ConnectionState.AUTH_ERROR:
+                        break
+        finally:
+            self.diagnostic_capture = None
+        return tuple(failures)
+
     def read_quotas(self, serial: str, select_quotas, *, verify_model: bool = False) -> TelemetryPatch:
         self._check_device(serial)
         quotas = tuple(select_quotas())
@@ -229,11 +268,11 @@ class EcoFlowClient:
         return patch
 
     def _check_device(self, serial: str) -> None:
-        devices = self.devices()
+        devices = self.devices() if self.catalog is None else self.catalog
         device = next((device for device in devices if device.serial == serial), None)
         if device is None:
             event("device_unavailable", reason="not_in_account")
             raise EcoFlowError(ConnectionState.UNSUPPORTED)
-        if not device.online:
+        if not device.online and self.catalog is None:
             event("device_unavailable", reason="offline")
             raise EcoFlowError(ConnectionState.DEVICE_OFFLINE)

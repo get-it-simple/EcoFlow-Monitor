@@ -1,8 +1,8 @@
 # EcoFlow Monitor
 
-Windows monitoring for **EcoFlow DELTA 3 Max**, with optional CLI integrations
+Windows monitoring for **EcoFlow devices**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.15.0**.
+battery charge. Version **0.16.0**.
 
 The application uses the official EcoFlow developer API. Real-device validation
 remains pending.
@@ -23,8 +23,9 @@ settings, logs and developer keys. Updates close the installed application safel
 close copies running in other Windows sessions before updating.
 
 Open **Connection** in the dashboard, enter your official EcoFlow developer access/secret keys, and click
-**Load my devices**. Select your DELTA 3 Max and save. The list contains your bound
-devices; telemetry mapping supports DELTA 3 Max only. Developer keys are different
+**Load my devices**. Select your device and save. The list contains your bound
+devices. Unsupported telemetry formats can be collected in local diagnostic logs
+to help add support. Developer keys are different
 from an EcoFlow mobile-app email/password.
 
 <details>
@@ -163,23 +164,37 @@ it. **Connection → Logging** offers Off, Normal (application actions), and Det
 (API responses and telemetry processing). Save to apply the mode without restarting.
 Known sensitive fields are masked while their presence remains visible; new API
 fields may need additional masking. **Show log file in Explorer** selects the current
-file. Logs stay locally in the settings directory's `logs` folder, with rotation
-limited to five files of approximately 5 MiB each. Turning logging off preserves
-existing files.
+file. Logs stay locally in the settings directory's `logs` folder. A new file starts
+on each local calendar day or before exceeding 3 MiB. Archives are kept for up to
+14 days and 100 MiB in total. Turning logging off preserves existing files.
+
+At startup, a confirmation lists the planned connection operations and possible
+1Password/Windows Hello and administrator-helper/UAC windows. They run sequentially.
+Declining pauses automatic access until you explicitly request it. Device discovery
+and monitoring share the current credential session. Device names refresh once at
+startup and remain available after saving or restarting.
+
+**Collect device diagnostics** requests separate permission to record sanitized
+official API responses locally, including when ordinary logging is Off. Nothing is
+uploaded, and the saved logging mode stays the same. Review logs before sharing.
 
 ## Known limitations
 
-- Only DELTA 3 Max telemetry mapping is supported. Official documentation and a
-  supplied runtime log inform the mapping; selective polling still needs live
-  device verification. Port power retains the sign supplied by the API.
+- The verified telemetry profile is based on DELTA 3 Max documentation and a
+  supplied runtime log. Other response formats need diagnostic review before
+  support can be added. Selective polling still needs live device verification.
+  Port power retains the sign supplied by the API.
 - Cloud monitoring requires internet, an authorized account-bound device, and
   valid developer keys. Connection settings provide separate update intervals and
   loading ages for main readings, ports and charge limits. Defaults are 30 seconds,
   one minute and five minutes. Widgets request visible readings and dependencies
   of calculations and enabled Auto rules. API failure alone does not prove internet loss.
 - Runtime estimates use output power and charge above the discharge floor, only
-  with measured zero input and the necessary fresh data. The nominal capacity is
-  2048 Wh and can be overridden for local estimates.
+  with measured zero input and the necessary fresh data. Approximate full-battery
+  capacity improves from stable API power, charge-level and remaining-time samples
+  during normal monitoring. It is retained per device; manual capacity is the
+  fallback until enough samples are available. Charging losses and changing loads
+  affect accuracy. Capacity sampling creates no separate polling cycles.
 - EcoFlow monitoring is read-only. Manual values and automation never send control
   commands to the station.
 - Exclusive-fullscreen games may cover the monitoring widgets.

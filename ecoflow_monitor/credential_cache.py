@@ -109,3 +109,16 @@ class SessionCredentialCache:
                 self.clear()
             finally:
                 self._entropy[:] = bytes(len(self._entropy))
+
+    def adopt(self, identity: tuple[str, str], credentials: Credentials) -> None:
+        with self._lock:
+            self.initialize()
+            if self._expired:
+                raise OnePasswordError("onepassword_cache_expired")
+            if self._identity == identity and self._obtained is not None:
+                return
+            self._epoch += 1
+            value = json.dumps([credentials.access_key, credentials.secret_key]).encode("utf-8")
+            self._storage.write(self._protection.protect(value, self._entropy))
+            self._identity = identity
+            self._obtained = (self._clock(), self._utc_clock())

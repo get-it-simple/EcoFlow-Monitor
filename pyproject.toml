@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ecoflow-monitoring-win-support"
 dynamic = ["version", "dependencies"]
-description = "DELTA 3 Max monitoring and modular CLI profile automation for Windows"
+description = "EcoFlow device monitoring and modular CLI profile automation for Windows"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [

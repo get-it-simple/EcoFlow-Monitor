@@ -203,7 +203,7 @@ def test_rotated_files_are_sanitized_and_writer_is_not_gui_thread(tmp_path, monk
         diagnostics.configure("detailed")
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(lambda index: event("parallel_event", level=logging.DEBUG, index=index, sn="private-serial", metric=index), range(40)))
-    paths = list(tmp_path.glob("ecoflow-monitor.log*"))
+    paths = list(tmp_path.glob("ecoflow-monitor*.log"))
     assert len(paths) == 3
     for file in paths:
         assert "private-serial" not in file.read_text(encoding="utf-8")

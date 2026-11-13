@@ -23,6 +23,8 @@ class OnePasswordPanel(QWidget):
         self._saving = False
         self._save_credentials = None
         self.credentials: Credentials | None = None
+        self.session_loader = None
+        self.external_runner = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.source = QTabBar()
@@ -144,7 +146,8 @@ class OnePasswordPanel(QWidget):
         access, secret = fields["onepassword_access_ref"], fields["onepassword_secret_ref"]
         self.credentials = None
         self.source_changed.emit()
-        self._start(lambda cancelled: read_credentials(access, secret, cancelled), saving=False)
+        self._start(lambda cancelled: self.session_loader(fields, cancelled) if self.session_loader is not None
+                    else read_credentials(access, secret, cancelled), saving=False)
 
     def save_credentials(self):
         if self.busy:
@@ -158,7 +161,10 @@ class OnePasswordPanel(QWidget):
             return
         vault, title = self.vault.text(), self.title.text()
         self._save_credentials = credentials
-        self._start(lambda cancelled: create_item(vault, title, credentials, cancelled), saving=True)
+        def operation(cancelled):
+            create = lambda: create_item(vault, title, credentials, cancelled)
+            return self.external_runner(create, cancelled) if self.external_runner is not None else create()
+        self._start(operation, saving=True)
 
     def _start(self, operation, saving):
         self._saving = saving

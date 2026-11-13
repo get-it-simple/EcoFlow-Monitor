@@ -132,7 +132,7 @@ def sensor_controller(tmp_path, qapp, session_cache):
     calls = []
     values = {"powInSumW": 0, "powOutSumW": 420, "cmsBattSoc": 75, "cmsMinDsgSoc": 10,
               "cmsMaxChgSoc": 90, "powGetAcOut": -420, "powGetQcusb1": -2,
-              "flowInfoAcOut": 14, "flowInfo12v": 4, "cmsChgDsgState": 1}
+              "flowInfoAcOut": 14, "flowInfo12v": 4, "cmsChgDsgState": 1, "cmsDsgRemTime": 120, "cmsChgRemTime": 0}
     failures = []
     def handle(request):
         if request.method == "GET":
@@ -161,15 +161,16 @@ def test_controller_requests_visible_sensors_and_calculation_dependencies(sensor
     controller.set_sensor_demand("widget", {"battery_level"})
     controller.refresh()
     wait(qapp, lambda: "api" not in controller._active)
-    assert set(calls[-1]) == {SENSOR_FIELDS[key] for key in CORE}
+    sampling_fields = {"powInSumW", "powOutSumW", "cmsBattSoc", "cmsChgDsgState", "cmsDsgRemTime", "cmsChgRemTime"}
+    assert set(calls[-1]) == sampling_fields
     now[0] += 31
     controller.tick()
     wait(qapp, lambda: "api" not in controller._active)
-    assert calls[-1] == ["cmsBattSoc"]
+    assert set(calls[-1]) == sampling_fields
     controller.set_sensor_demand("widget", {"estimated_runtime"})
     controller.tick()
     wait(qapp, lambda: "api" not in controller._active)
-    assert set(calls[-1]) == {"powInSumW", "powOutSumW", "cmsMinDsgSoc"}
+    assert set(calls[-1]) == {"cmsMinDsgSoc"}
     assert controller.runtime is not None
     controller.set_sensor_demand("widget", ())
     count = len(calls)
@@ -191,7 +192,7 @@ def test_hidden_auto_requirements_are_minimal(sensor_controller, qapp):
     now[0] += 31
     controller.refresh()
     wait(qapp, lambda: "api" not in controller._active)
-    assert calls[-1] == ["cmsBattSoc"]
+    assert set(calls[-1]) == {"powInSumW", "powOutSumW", "cmsBattSoc", "cmsChgDsgState", "cmsDsgRemTime", "cmsChgRemTime"}
 
 
 def test_timeout_retains_values_and_retries_without_renewing_credentials(sensor_controller, qapp, monkeypatch):
@@ -302,7 +303,8 @@ def test_visibility_change_during_request_is_picked_up_by_the_next_request(senso
         wait(qapp, lambda: "api" not in controller._active)
         controller.tick()
         wait(qapp, lambda: "api" not in controller._active)
-        assert calls[-2:] == [["cmsBattSoc"], ["cmsMinDsgSoc"]]
+        sampling_fields = {"powInSumW", "powOutSumW", "cmsBattSoc", "cmsChgDsgState", "cmsDsgRemTime", "cmsChgRemTime"}
+        assert [set(call) for call in calls[-2:]] == [sampling_fields, {"cmsMinDsgSoc"}]
         assert controller.telemetry.min_soc == 10
     finally:
         release.set()

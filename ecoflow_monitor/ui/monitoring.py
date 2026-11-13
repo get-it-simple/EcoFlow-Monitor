@@ -32,6 +32,7 @@ class MonitoringPage(QWidget):
         self.heading.setObjectName("page_title")
         self.heading.setWordWrap(True)
         self.updated = hint("")
+        self.updated.setTextFormat(Qt.TextFormat.PlainText)
         title_box.addWidget(self.heading)
         title_box.addWidget(self.updated)
         self.heading_row.addLayout(title_box, 1)
@@ -134,7 +135,7 @@ class MonitoringPage(QWidget):
         scale = getattr(self.window(), "_scale", effective_scale(self, settings.scale))
         self.heading.setText(t("monitoring_heading"))
         telemetry = self.controller.telemetry
-        self.updated.setText("DELTA 3 Max · " + (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M")) if telemetry else t("never_updated")))
+        self.updated.setText(self.controller.device_name + " · " + (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M")) if telemetry else t("never_updated")))
         self.status.refresh()
         self.notifications.refresh(self.controller, self.hotkey_notice)
         for key, reading in self.readings.items():

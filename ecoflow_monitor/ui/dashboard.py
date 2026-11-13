@@ -69,7 +69,8 @@ class Dashboard(SettingsWindow):
         for key in self.page_keys:
             self.navigation.addItem(t(key))
         sidebar.addWidget(self.navigation, 1)
-        self.device_label = QLabel("DELTA 3 Max", self.sidebar)
+        self.device_label = QLabel(self.controller.device_name, self.sidebar)
+        self.device_label.setTextFormat(Qt.TextFormat.PlainText)
         self.device_label.setObjectName("secondary")
         sidebar.addWidget(self.device_label)
         self.sidebar_status = StatusBadge(controller, self.sidebar)
@@ -172,6 +173,7 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
         if not hasattr(self, "monitoring"):
             return
         self.monitoring.refresh()
+        self.device_label.setText(self.controller.device_name)
         if hasattr(self, "sidebar_status"):
             self.sidebar_status.refresh()
         if self._last_language != self.controller.settings.language:

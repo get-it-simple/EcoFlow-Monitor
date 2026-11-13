@@ -357,7 +357,7 @@ def test_credential_tabs_stay_above_mode_fields_and_switch_visibility(controller
 
 def test_fill_masks_keys_and_discovers_devices_with_unsaved_references(dialog, controller, qapp, monkeypatch):
     pair = Credentials("synthetic-draft-access", "synthetic-draft-secret")
-    monkeypatch.setattr("ecoflow_monitor.ui.onepassword.read_credentials", lambda *args: pair)
+    monkeypatch.setattr("ecoflow_monitor.controller.read_credentials", lambda *args: pair)
     class Client:
         def __init__(self, supplied):
             assert supplied == pair
@@ -379,7 +379,7 @@ def test_fill_masks_keys_and_discovers_devices_with_unsaved_references(dialog, c
 
 
 def test_reference_edit_and_reset_clear_loaded_keys(dialog, qapp, monkeypatch):
-    monkeypatch.setattr("ecoflow_monitor.ui.onepassword.read_credentials", lambda *args: Credentials("access", "secret"))
+    monkeypatch.setattr("ecoflow_monitor.controller.read_credentials", lambda *args: Credentials("access", "secret"))
     panel = set_panel_references(dialog)
     panel.load_credentials()
     wait_until(qapp, lambda: panel.credentials is not None)
@@ -397,7 +397,7 @@ def test_pending_fill_cannot_save_and_cancel_discards_result(dialog, qapp, monke
         entered.set()
         assert cancelled.wait(3)
         return Credentials("obsolete", "obsolete")
-    monkeypatch.setattr("ecoflow_monitor.ui.onepassword.read_credentials", pending)
+    monkeypatch.setattr("ecoflow_monitor.controller.read_credentials", pending)
     panel = set_panel_references(dialog)
     panel.load_credentials()
     wait_until(qapp, entered.is_set)
@@ -418,7 +418,7 @@ def test_application_exit_cancels_lookup_in_open_settings(controller, qapp, monk
         assert cancelled.wait(3)
         cancelled_request.set()
         raise RequestCancelled()
-    monkeypatch.setattr("ecoflow_monitor.ui.onepassword.read_credentials", pending)
+    monkeypatch.setattr("ecoflow_monitor.controller.read_credentials", pending)
     runtime = Application(controller.store.path, native=False, controller=controller)
     dialog = SettingsWindow(controller, runtime.window)
     runtime._dialog = dialog

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QBoxLayout, Q
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import ActionButton, status_color, status_text, status_tooltip
 from ecoflow_monitor.ui.reference_style import icon_path
-from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY
+from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY, RADIUS
 from ecoflow_monitor.ui.motion import motion_driver, paint_status_mark, status_motion_active
 from ecoflow_monitor.ui.typography import draw_outlined
 
@@ -564,12 +564,30 @@ class DesignDialog(QDialog):
 
 class DialogChrome(QObject):
     def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Paint and isinstance(watched, QMessageBox) and watched.property("design_chrome"):
+            painter = QPainter(watched)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(COLORS["surface"]))
+            radius = RADIUS["window"] * (watched.property("dialog_scale") or 1)
+            painter.drawRoundedRect(watched.rect(), radius, radius)
+            painter.end()
         if event.type() == QEvent.Type.Polish and isinstance(watched, QMessageBox) and not watched.property("design_chrome"):
             from ecoflow_monitor.ui.theme import settings_style
+            parent = watched.parentWidget()
+            scale = ((parent.property("dialog_scale") or getattr(parent, "_scale", getattr(parent, "_settings_scale", 1)))
+                     if parent is not None else 1)
+            watched.setProperty("dialog_scale", scale)
             watched.setProperty("design_chrome", True)
+            watched.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             watched.setWindowFlag(Qt.WindowType.FramelessWindowHint)
             watched.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            watched.setStyleSheet(settings_style() + f"QMessageBox {{ border-radius: 20px; background: {COLORS['surface']}; }}")
+            watched.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            watched.setStyleSheet(settings_style(scale=scale) + f"QMessageBox {{ border-radius: {round(RADIUS['window'] * scale)}px; background: {COLORS['surface']}; }}")
+            label = watched.findChild(QLabel, "qt_msgbox_label")
+            if label is not None:
+                label.setMinimumWidth(round(280 * scale))
+                label.setWordWrap(True)
             layout = cast(QGridLayout, watched.layout())
             items = []
             while layout.count():
@@ -579,7 +597,30 @@ class DialogChrome(QObject):
                 layout.addItem(item, row + 1, column, rows, columns)
             title = TitleBar(watched)
             title.title.setText(watched.windowTitle())
+            title.title.setWordWrap(True)
+            title.layout().setContentsMargins(round(24 * scale), round(12 * scale), round(16 * scale), round(12 * scale))
             layout.addWidget(title, 0, 0, 1, max(1, layout.columnCount()))
-            layout.setContentsMargins(24, 16, 24, 24)
-            layout.setSpacing(16)
+            layout.setContentsMargins(round(24 * scale), round(16 * scale), round(24 * scale), round(24 * scale))
+            layout.setSpacing(round(16 * scale))
+            if label is not None:
+                area = watched.screen().availableGeometry()
+                width = min(round(280 * scale), max(120, area.width() - round(120 * scale)))
+                label.setMinimumWidth(width)
+                height = max(80, area.height() - round(220 * scale))
+                if label.heightForWidth(width) > height:
+                    position = layout.getItemPosition(layout.indexOf(label))
+                    layout.removeWidget(label)
+                    scroll = QScrollArea(watched)
+                    scroll.setObjectName("dialog_message_scroll")
+                    scroll.setFrameShape(QFrame.Shape.NoFrame)
+                    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                    scroll.setWidgetResizable(True)
+                    scroll.setMinimumWidth(width)
+                    scroll.setFixedHeight(height)
+                    label.setMinimumWidth(0)
+                    label.setMinimumHeight(label.heightForWidth(width))
+                    scroll.setWidget(label)
+                    layout.addWidget(scroll, *position)
+                    from ecoflow_monitor.ui.scrollbar import install_scrollbars
+                    install_scrollbars(watched)
         return False

@@ -93,6 +93,7 @@ class AdaptiveWidget(QFrame):
         self.shell.setObjectName("widget_shell")
         outer.addWidget(self.shell)
         self.title = ValueLabel(self.shell)
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
         self.status = StatusBadge(controller, self.shell)
         self.status.compact = True
         self.status_indicator = ValueLabel(self.shell)
@@ -167,7 +168,7 @@ class AdaptiveWidget(QFrame):
         self._apply_style(preferences)
         self._reflow()
         self.setWindowTitle(t("adaptive_widget"))
-        self.title.setText("DELTA 3 Max")
+        self.title.setText(self.controller.device_name)
         self.status.refresh()
         self.status.outlined = preferences.opacity == 0
         self.status_indicator.setText("!")

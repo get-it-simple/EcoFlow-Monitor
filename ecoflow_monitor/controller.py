@@ -16,6 +16,7 @@ from ecoflow_monitor.adapters.onepassword import read_credentials
 from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
 from ecoflow_monitor.credential_cache import SessionCredentialCache
+from ecoflow_monitor.device_metadata import DeviceMetadataStore
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
@@ -69,6 +70,8 @@ class Controller(QObject):
     elevation_needed = Signal(str)
     credentials_expired = Signal()
     quotas_started = Signal()
+    task_finished = Signal(str)
+    unsupported_device = Signal()
 
     def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None) -> None:
         super().__init__()
@@ -80,6 +83,13 @@ class Controller(QObject):
         self.credential_cache = credential_cache if credential_cache is not None else SessionCredentialCache(clock=clock)
         self.credential_renewal_required = False
         self.credential_renewal_pending = False
+        self.interactions = None
+        self.access_allowed = True
+        self.catalog = None
+        self.metadata = DeviceMetadataStore(store.path.with_name("device-metadata.json"))
+        self._unsupported_notified = set()
+        self._diagnostic_failures = ()
+        self._metadata_dirty = False
         self.notice = ""
         self.preview = None
         try:
@@ -107,6 +117,7 @@ class Controller(QObject):
         self._active = {}
         self._api_pending = False
         self._discovery_pending = None
+        self._diagnostic_pending = False
         self._api_mode = "telemetry"
         self._next_api = 0.0
         self._retry = 5.0
@@ -157,7 +168,8 @@ class Controller(QObject):
         required = set(visible)
         for module in self.settings.integrations:
             required.update(self._automation_sensors(module))
-        if self.polling.set_demand(visible, required, self.clock()) and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+        self.polling.supplemental = CORE | {"charging_state", "device_discharge_minutes", "device_charge_minutes"} if required else frozenset()
+        if self.polling.set_demand(visible, required, self.clock()) and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE, ConnectionState.UNSUPPORTED}:
             self._next_api = self.polling.next_due(self.clock())
 
     def reading_state(self, key: str) -> str:
@@ -195,12 +207,35 @@ class Controller(QObject):
     @property
     def runtime(self):
         keys = CORE | ({"minimum_discharge_level"} if self.minimum.source != "manual" else set())
-        return runtime_hours(self.telemetry, self.settings.capacity_wh, self.minimum.value, self.fresh_for(keys))
+        return runtime_hours(self.telemetry, self.effective_capacity, self.minimum.value, self.fresh_for(keys))
+
+    @property
+    def device_name(self):
+        return self.metadata.name(self.settings.serial) if self.settings.serial else i18n.t("device")
+
+    @property
+    def capacity_estimate(self):
+        return self.metadata.sampler(self.settings.serial).estimate if self.settings.serial else None
+
+    @property
+    def effective_capacity(self):
+        estimate = self.capacity_estimate
+        return estimate.watt_hours if estimate is not None else self.settings.capacity_wh
+
+    def _save_metadata(self):
+        if self._stopped:
+            return
+        self._metadata_dirty = True
+        if "metadata" not in self._active:
+            data = self.metadata.snapshot()
+            self._metadata_dirty = False
+            self._submit("metadata", lambda: self.metadata.save(data))
 
     def module(self, integration_id: str) -> IntegrationDefinition:
         return next(module for module in self.settings.integrations if module.id == integration_id)
 
-    def start(self) -> None:
+    def start(self, authorized=True) -> None:
+        self.access_allowed = authorized
         event("application_started", version=__version__)
         try:
             self.credential_cache.initialize()
@@ -220,7 +255,14 @@ class Controller(QObject):
         self._active[kind] = task
         self._pool.start(task)
 
-    def discover(self, supplied: Credentials | None = None) -> None:
+    def discover(self, supplied: Credentials | None = None, *, user_initiated=True) -> None:
+        if user_initiated:
+            self.access_allowed = True
+        if not self.access_allowed or self._stopped:
+            return
+        if supplied is None and self._check_credential_expiry():
+            self.devices_ready.emit(())
+            return
         if "api" in self._active:
             self._discovery_pending = (supplied,)
             return
@@ -231,11 +273,15 @@ class Controller(QObject):
             credentials = supplied if supplied is not None else self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
-            return ("devices", self.client_factory(credentials).devices())
+            return ("devices", self.client_factory(credentials).devices(), supplied is None)
         self._submit("api", operation)
 
-    def refresh(self) -> None:
+    def refresh(self, *, user_initiated=True) -> None:
+        if user_initiated:
+            self.access_allowed = True
         if self._stopped:
+            return
+        if not self.access_allowed:
             return
         if self._check_credential_expiry():
             return
@@ -261,6 +307,7 @@ class Controller(QObject):
         serial = settings.serial
         self._api_mode = "telemetry"
         polling = self.polling
+        catalog = self.catalog
         def select_quotas():
             if cancelled.is_set():
                 return ()
@@ -274,9 +321,11 @@ class Controller(QObject):
                 raise CredentialError("credentials_required")
             try:
                 client = self.client_factory(credentials)
+                if isinstance(client, EcoFlowClient):
+                    client.catalog = catalog if catalog is not None else client.devices()
                 if hasattr(client, "read_quotas"):
-                    return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified))
-                return ("telemetry", client.read(serial))
+                    return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified), getattr(client, "catalog", None))
+                return ("telemetry", client.read(serial), getattr(client, "catalog", None))
             except EcoFlowError as error:
                 if error.state == ConnectionState.API_ERROR and internet_unavailable():
                     raise EcoFlowError(ConnectionState.NETWORK_UNAVAILABLE) from None
@@ -292,10 +341,35 @@ class Controller(QObject):
     def _read_credentials(self, settings: AppSettings, cancelled: threading.Event) -> Credentials | None:
         event("credentials_requested", source=settings.credential_source)
         if settings.credential_source == "1password":
-            identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
-            return self.credential_cache.get(identity, settings.onepassword_cache_ttl_seconds, cancelled,
-                                             lambda: read_credentials(*identity, cancelled))
+            return self.load_session_credentials(settings, cancelled)
         return self.credential_store.read(settings.credential_ref)
+
+    def load_session_credentials(self, settings, cancelled):
+        identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
+        def load():
+            operation = lambda: read_credentials(*identity, cancelled)
+            return self.interactions.run_external(operation, cancelled) if self.interactions is not None else operation()
+        if identity == (self.settings.onepassword_access_ref, self.settings.onepassword_secret_ref):
+            return self.credential_cache.get(identity, settings.onepassword_cache_ttl_seconds, cancelled, load)
+        return load()
+
+    def collect_diagnostics(self):
+        if self._stopped or not self.settings.serial or self.diagnostics is None:
+            return
+        if "api" in self._active:
+            self._diagnostic_pending = True
+            return
+        settings, cancelled = self.settings, self._credential_cancelled
+        self.access_allowed = True
+        self.notice = "device_diagnostics_running"
+        def operation():
+            credentials = self._read_credentials(settings, cancelled)
+            if credentials is None:
+                raise CredentialError("credentials_required")
+            return ("diagnostic", self.client_factory(credentials).diagnose(settings.serial, self.diagnostics.capture))
+        self._api_mode = "diagnostic"
+        self._submit("api", operation)
+        self.changed.emit()
 
     def _check_credential_expiry(self) -> bool:
         if self.settings.credential_source != "1password":
@@ -331,6 +405,7 @@ class Controller(QObject):
     def renew_credentials(self) -> None:
         if self._stopped or self.settings.credential_source != "1password" or "api" in self._active:
             return
+        self.access_allowed = True
         self._credential_cancelled.set()
         event("credential_renewal_requested")
         self._credential_cancelled = threading.Event()
@@ -375,7 +450,7 @@ class Controller(QObject):
         event("settings_saved")
         if credentials is None and replace(previous, logging_mode=settings.logging_mode, polling=settings.polling) == settings:
             self._update_demand()
-            if previous.polling != settings.polling and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE}:
+            if previous.polling != settings.polling and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE, ConnectionState.UNSUPPORTED}:
                 self._next_api = self.polling.next_due(self.clock())
             self.preferences_changed.emit()
             self.changed.emit()
@@ -388,6 +463,7 @@ class Controller(QObject):
             self.integration_adapter.retain_sessions(settings.integrations)
         self._generation += 1
         self._discovery_pending = None
+        self._diagnostic_pending = False
         credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
         if any(getattr(previous, name) != getattr(settings, name) for name in credential_fields):
             self.telemetry = None
@@ -400,6 +476,7 @@ class Controller(QObject):
         self.notice = ""
         cache_fields = ("credential_source", "onepassword_access_ref", "onepassword_secret_ref")
         if any(getattr(previous, name) != getattr(settings, name) for name in cache_fields):
+            self.catalog = None
             try:
                 self.credential_cache.clear()
                 self.credential_renewal_required = False
@@ -409,6 +486,15 @@ class Controller(QObject):
                 self.connection = ConnectionState.AUTH_ERROR
                 self._next_api = float("inf")
                 self._api_pending = False
+        if previous.credential_ref != settings.credential_ref:
+            self.catalog = None
+        if credentials is not None and settings.credential_source == "1password" and not self.credential_renewal_required:
+            identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
+            try:
+                self.credential_cache.adopt(identity, credentials)
+            except CredentialError as error:
+                self.notice = str(error)
+                self.credential_renewal_required = True
         self._check_credential_expiry()
         previous_modules = {module.id: module for module in previous.integrations}
         self.integration_states = {
@@ -523,15 +609,15 @@ class Controller(QObject):
         elif self.connection == ConnectionState.STALE and self.fresh:
             self.connection = ConnectionState.LIVE
             self.changed.emit()
-        if self.settings.serial and now >= self._next_api and "api" not in self._active:
-            self.refresh()
+        if self.access_allowed and self.settings.serial and now >= self._next_api and "api" not in self._active:
+            self.refresh(user_initiated=False)
         for module in self.settings.integrations:
             state = self.integration_states[module.id]
             kind = "scan:" + module.id
             if module.enabled and now >= state.next_scan and kind not in self._active:
                 state.next_scan = now + 2
                 self._submit(kind, lambda selected=module: self.integration_adapter.inspect(selected))
-            eligible = module.enabled and module.auto_enabled and self.fresh_for(self._automation_sensors(module)) and state.observation.ready
+            eligible = self.access_allowed and module.enabled and module.auto_enabled and self.fresh_for(self._automation_sensors(module)) and state.observation.ready
             reason = "automatic_mode" if eligible else "automation_paused"
             if reason != state.auto_reason:
                 state.auto_reason = reason
@@ -554,7 +640,10 @@ class Controller(QObject):
             if hasattr(self.integration_adapter, "retain_sessions"):
                 self.integration_adapter.retain_sessions(() if self._stopped else self.settings.integrations)
         if self._stopped:
+            self.task_finished.emit(kind)
             return
+        if kind == "metadata" and self._metadata_dirty:
+            self._save_metadata()
         if kind == "api":
             self._check_credential_expiry()
             if (generation != self._generation or task is not None and task.cancelled is not None and task.cancelled.is_set()) and getattr(task, "polling", None) is self.polling:
@@ -567,12 +656,23 @@ class Controller(QObject):
                           exception_type=type(error).__name__)
                     if isinstance(error, CredentialError):
                         self.notice = str(error)
+                        if self._api_mode == "devices":
+                            self._api_pending = False
+                            if not self.fresh:
+                                self.access_allowed = False
                     elif self._api_mode == "devices":
                         self.notice = state.value
-                    if self._api_mode != "devices":
+                    if self._api_mode == "diagnostic":
+                        self.notice = "device_diagnostics_failed"
+                    elif self._api_mode != "devices":
                         self.polling.fail(self.clock())
                         self.connection = state
-                        self._next_api = float("inf") if self.connection == ConnectionState.AUTH_ERROR else self.clock() + max(self._retry, getattr(error, "retry_after", None) or 0)
+                        if state == ConnectionState.UNSUPPORTED:
+                            self._next_api = float("inf")
+                            if self.settings.serial not in self._unsupported_notified:
+                                self._unsupported_notified.add(self.settings.serial)
+                                self.unsupported_device.emit()
+                        self._next_api = float("inf") if self.connection in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED} else self.clock() + max(self._retry, getattr(error, "retry_after", None) or 0)
                         self._retry = min(self._retry * 2, 300)
                         event("api_retry_scheduled", level=logging.DEBUG, delay_seconds=None if self._next_api == float("inf") else max(0, self._next_api - self.clock()))
                     if self.settings.credential_source == "1password" and isinstance(error, EcoFlowError) and error.state == ConnectionState.AUTH_ERROR:
@@ -580,16 +680,30 @@ class Controller(QObject):
                             self.credential_cache.clear()
                         except CredentialError as cache_error:
                             self.notice = str(cache_error)
-                    self.devices_ready.emit(())
+                    if self._api_mode == "devices":
+                        self.devices_ready.emit(())
                 elif result[0] == "devices":
                     event("device_discovery_completed", count=len(result[1]))
+                    if len(result) < 3 or result[2]:
+                        self.catalog = result[1]
+                        self.metadata.remember(result[1])
+                        self._save_metadata()
                     self.devices_ready.emit(result[1])
+                elif result[0] == "diagnostic":
+                    self._diagnostic_failures = result[1]
+                    self.notice = "device_diagnostics_partial" if result[1] else "device_diagnostics_complete"
                 else:
                     event("telemetry_refresh_completed")
+                    if len(result) > 2 and result[2] is not None and self.catalog is None:
+                        self.catalog = result[2]
+                        self.metadata.remember(result[2])
+                        self._save_metadata()
                     if isinstance(result[1], TelemetryPatch):
                         patch = result[1]
                         now, utc = self.clock(), time.time()
                         self.polling.complete(patch, utc, now)
+                        if self.metadata.sampler(self.settings.serial).observe(dict(patch.values), utc, now, self.settings.polling.primary.stale_after_seconds):
+                            self._save_metadata()
                         if patch.values:
                             self.telemetry = self.polling.snapshot(self.telemetry, utc, now)
                             self.connection = ConnectionState.LIVE
@@ -647,11 +761,15 @@ class Controller(QObject):
             if self._discovery_pending is not None:
                 supplied, = self._discovery_pending
                 self._discovery_pending = None
-                self.discover(supplied)
+                self.discover(supplied, user_initiated=False)
+            elif self._diagnostic_pending:
+                self._diagnostic_pending = False
+                self.collect_diagnostics()
             elif self._api_pending:
                 self._api_pending = False
-                self.refresh()
+                self.refresh(user_initiated=False)
             self.changed.emit()
+        self.task_finished.emit(kind)
 
     def stop(self) -> None:
         if self._stopped:
@@ -669,6 +787,8 @@ class Controller(QObject):
         if hasattr(self.integration_adapter, "close"):
             self.integration_adapter.close()
         self._pool.waitForDone(22000)
+        if self.metadata.devices or self.metadata.samplers:
+            self.metadata.save()
         if hasattr(self.integration_adapter, "close"):
             self.integration_adapter.close()
         event("application_stopped")

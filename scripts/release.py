@@ -156,7 +156,7 @@ PackageName: EcoFlow Monitor
 PackageUrl: https://github.com/{repository}
 License: MIT
 LicenseUrl: https://github.com/{repository}/blob/main/LICENSE
-ShortDescription: EcoFlow DELTA 3 Max monitoring and optional CLI profile automation for Windows
+ShortDescription: EcoFlow device monitoring and optional CLI profile automation for Windows
 ReleaseNotesUrl: https://github.com/{repository}/releases/tag/{__version__}
 ManifestType: defaultLocale
 """ + suffix,
@@ -164,7 +164,7 @@ ManifestType: defaultLocale
 Publisher: Get it Simple
 PackageName: EcoFlow Monitor
 License: MIT
-ShortDescription: Моніторинг EcoFlow DELTA 3 Max та автоматизація CLI-профілів для Windows
+ShortDescription: Моніторинг пристроїв EcoFlow та автоматизація CLI-профілів для Windows
 ManifestType: locale
 """ + suffix,
     }
