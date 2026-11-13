@@ -6,8 +6,12 @@ import sys
 
 import pytest
 
+
 from ecoflow_monitor.settings import SettingsStore
 from scripts.installer_smoke_settings import create_settings, verify_settings
+
+
+pytestmark = pytest.mark.native
 
 
 @pytest.fixture

@@ -1,9 +1,14 @@
 import pytest
+
+
 from PySide6.QtCore import QFile
 
 from ecoflow_monitor.adapters.executables import InvalidExecutable, local_executable
 from ecoflow_monitor.adapters.hotkeys import parse_combo, validate_bindings
 from ecoflow_monitor.settings import HotkeyBinding
+
+
+pytestmark = pytest.mark.native
 
 
 def test_real_shortcut_unicode_and_duplicate_targets(tmp_path, qapp):

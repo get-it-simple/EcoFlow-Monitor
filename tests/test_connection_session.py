@@ -4,13 +4,13 @@ import json
 import logging
 import os
 import threading
-import time
 
 from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox, QWidget
 import httpx
 import pytest
+from qt_helpers import wait_until
+from qt_helpers import close_runtime
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, Device, EcoFlowClient
 from ecoflow_monitor.application import Application
@@ -23,11 +23,7 @@ from ecoflow_monitor.ui.confirmations import ConfirmationCoordinator, Confirmati
 
 
 def wait(qapp, condition):
-    deadline = time.monotonic() + 4
-    while not condition() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert condition()
+    wait_until(qapp, condition, timeout=4000)
 
 
 def prompt(owner):
@@ -135,8 +131,7 @@ def runtime(tmp_path, qapp, session_cache):
     controller = Controller(SettingsStore(tmp_path / "settings.json"), credential_cache=session_cache)
     instance = Application(controller.store.path, native=False, controller=controller)
     yield instance
-    instance.stop()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
 
 
 def test_startup_decline_blocks_keys_helpers_and_allows_manual_discovery(runtime, qapp, monkeypatch):

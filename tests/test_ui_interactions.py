@@ -7,6 +7,7 @@ from PySide6.QtGui import QWindow
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QLabel, QWidget
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.elevation import ElevatedSession
@@ -26,11 +27,7 @@ from ecoflow_monitor.ui.settings_window import SettingsWindow
 def runtime(tmp_path, qapp):
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.window.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
 
 
 @pytest.mark.parametrize("labels,hover", [(True, False), (False, False), (True, True), (False, True)])

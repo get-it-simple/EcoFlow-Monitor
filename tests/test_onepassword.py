@@ -5,9 +5,9 @@ import sys
 import threading
 import time
 
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QLabel, QLineEdit, QTabBar
 import pytest
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters import onepassword
 from ecoflow_monitor.adapters.ecoflow import Credentials, Device
@@ -24,12 +24,6 @@ ACCESS_REF = "op://Personal/EcoFlow/username"
 SECRET_REF = "op://Personal/EcoFlow/password"
 
 
-def wait_until(qapp, condition):
-    deadline = time.monotonic() + 5
-    while not condition() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert condition()
 
 
 @pytest.mark.parametrize("reference", [ACCESS_REF, '  "' + ACCESS_REF + '"  ', "'" + ACCESS_REF + "'", "op://My Vault/My Item/section/access key"])
@@ -431,13 +425,8 @@ def test_application_exit_cancels_lookup_in_open_settings(controller, qapp, monk
         assert not panel.busy
         assert panel.credentials is None
     finally:
-        runtime.stop()
         dialog.deleteLater()
-        runtime.window.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        runtime.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 def test_create_from_draft_selects_references_without_publishing_settings(dialog, controller, qapp, monkeypatch):

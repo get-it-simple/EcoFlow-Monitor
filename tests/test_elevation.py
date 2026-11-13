@@ -8,10 +8,14 @@ import uuid
 
 import pytest
 
+
 from ecoflow_monitor.adapters.elevation import ElevatedSession, approved_commands, receive, send, serve
 from ecoflow_monitor.adapters.elevation_windows import connect_pipe, is_helper_process, pipe_peer, requires_administrator
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile, Reaction, afterburner_example
+
+
+pytestmark = pytest.mark.native
 
 
 def test_native_pipe_peers_and_json_protocol():

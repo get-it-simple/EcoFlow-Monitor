@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QScrollArea
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor.adapters import hotkeys
 from ecoflow_monitor.application import Application
@@ -23,11 +24,7 @@ from ecoflow_monitor.ui.settings_window import SettingsWindow
 def runtime(tmp_path, qapp):
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.window.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
 
 
 @pytest.mark.parametrize("language", ["en", "uk"])

@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QLabel
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
@@ -21,11 +22,7 @@ from ecoflow_monitor.ui.integrations import CommandDialog
 def runtime(tmp_path, qapp):
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.window.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
     i18n.setup("en")
 
 

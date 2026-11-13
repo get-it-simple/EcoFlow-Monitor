@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor.adapters import reference_effects
 from ecoflow_monitor.application import Application
@@ -98,13 +99,9 @@ def test_accent_refresh_preserves_open_dialog_drafts(tmp_path, qapp, monkeypatch
         qapp.processEvents()
         assert spy.count() == 1
     finally:
-        runtime.stop()
         profile.deleteLater()
         dialog.deleteLater()
-        runtime.window.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
@@ -140,12 +137,8 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         dialog.reject()
         assert runtime.controller.store.load() == stored
     finally:
-        runtime.stop()
         dialog.deleteLater()
-        runtime.window.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 @pytest.mark.parametrize("color,text", [("#ffffff", "#000000"), ("#ffff00", "#000000"), ("#000000", "#ffffff"), ("#0000ff", "#ffffff")])

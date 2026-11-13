@@ -11,6 +11,9 @@ permissions:
 jobs:
   dependency-audit:
     runs-on: windows-latest
+    outputs:
+      tests: ${{ steps.changes.outputs.tests }}
+      packages: ${{ steps.changes.outputs.packages }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -19,39 +22,28 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Detect dependency changes
-        id: dependencies
+      - name: Select checks from changed paths and event
+        id: changes
         shell: pwsh
         env:
           EVENT_BASE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          $baseRevision = $env:EVENT_BASE
-          if ($env:PR_BASE) { $baseRevision = $env:PR_BASE }
-          if (-not $baseRevision -or $baseRevision -match '^0+$') {
-            $baseRevision = git rev-parse --verify HEAD^ 2>$null
-            if ($LASTEXITCODE -ne 0) { $baseRevision = $null }
-          }
-          $changed = 'true'
-          if ($baseRevision) {
-            git diff --quiet $baseRevision HEAD -- requirements.txt requirements-dev.txt requirements-build.txt pyproject.toml
-            if ($LASTEXITCODE -eq 0) { $changed = 'false' }
-            elseif ($LASTEXITCODE -ne 1) { throw 'Dependency comparison failed' }
-          }
-          "changed=$changed" >> $env:GITHUB_OUTPUT
-          exit 0
+        run: python -m scripts.ci_changes
       - name: Audit declared dependencies before project installation
-        if: steps.dependencies.outputs.changed == 'true'
+        if: steps.changes.outputs.dependencies == 'true'
         run: |
           python -m pip install --disable-pip-version-check pip-audit
           python -m pip_audit -r requirements-dev.txt -r requirements-build.txt
       - name: No dependency changes
-        if: steps.dependencies.outputs.changed != 'true'
+        if: steps.changes.outputs.dependencies != 'true'
         run: Write-Output 'Dependency files are unchanged in this change.'
 
   test-and-package:
     needs: dependency-audit
+    if: needs.dependency-audit.outputs.tests == 'true'
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,6 +58,7 @@ jobs:
             requirements-build.txt
             pyproject.toml
       - name: Validate the single version source and exact release tag
+        id: version
         shell: pwsh
         run: |
           $version = python -c 'from ecoflow_monitor import __version__; print(__version__)'
@@ -75,26 +68,42 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne $version) {
             throw 'Tag must match the application version exactly, without a v prefix'
           }
+          "value=$version" >> $env:GITHUB_OUTPUT
       - name: Install application and check dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-build.txt
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install packaging dependencies
+        if: needs.dependency-audit.outputs.packages == 'true'
+        run: python -m pip install -r requirements-build.txt
       - name: Run the full functional suite
-        run: python -m pytest -q -m "not design"
+        run: python -m scripts.run_tests --full --parallel --workers auto --report build/ci-tests.json
       - name: Build the Python wheel
+        if: needs.dependency-audit.outputs.packages == 'true'
         run: python -m pip wheel --no-deps --wheel-dir dist/wheels .
       - name: Verify packaged metadata and all language catalogs
+        if: needs.dependency-audit.outputs.packages == 'true'
         run: python -m scripts.check_package dist/wheels
       - name: Build portable executable
+        if: needs.dependency-audit.outputs.packages == 'true'
         run: python build.py
       - name: Smoke the actual executable
+        if: needs.dependency-audit.outputs.packages == 'true'
         shell: pwsh
         run: |
           $version = python -c 'from ecoflow_monitor import __version__; print(__version__)'
           python -m scripts.smoke_executable "dist/$version/EcoFlowMonitor.exe"
+      - name: Pass the verified executable to release preparation
+        if: needs.dependency-audit.outputs.packages == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-executable
+          path: dist/${{ steps.version.outputs.value }}/EcoFlowMonitor.exe
+          if-no-files-found: error
       - name: Check whitespace
         run: git diff --check
 
   release-build:
-    needs: test-and-package
+    needs: [dependency-audit, test-and-package]
+    if: needs.dependency-audit.outputs.packages == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -103,7 +112,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-build.txt
+            pyproject.toml
       - run: python -m pip install -r requirements-dev.txt -r requirements-build.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: verified-executable
+          path: dist/${{ needs.test-and-package.outputs.version }}
       - name: Read canonical version
         id: version
         shell: pwsh
@@ -128,12 +147,15 @@ jobs:
           if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne $expected) { throw 'NSIS checksum mismatch' }
           $process = Start-Process -FilePath $setup -ArgumentList /S -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'NSIS installation failed' }
-      - name: Build complete release
+      - name: Prepare release from the verified executable
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ github.ref_type == 'tag' && secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 || '' }}
           WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD || '' }}
           WINDOWS_TIMESTAMP_URL: ${{ github.ref_type == 'tag' && secrets.WINDOWS_TIMESTAMP_URL || '' }}
-        run: ./scripts/prepare-release.ps1 -Build
+        run: |
+          python -m scripts.release installer
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+          ./scripts/prepare-release.ps1
       - name: Smoke machine installation on disposable runner
         run: ./scripts/installer-smoke-test.ps1 -Version '${{ steps.version.outputs.value }}'
       - name: Validate release and WinGet manifests

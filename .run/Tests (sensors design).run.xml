@@ -11,8 +11,8 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
-    <option name="SCRIPT_NAME" value="pytest" />
-    <option name="PARAMETERS" value="-n 0 -m design tests/test_polling.py tests/test_adaptive_widget.py tests/test_design_system.py tests/test_ui.py tests/test_motion.py --junitxml=build/sensor-design-tests.xml -q" />
+    <option name="SCRIPT_NAME" value="scripts.run_tests" />
+    <option name="PARAMETERS" value="--area sensors --design --report build/sensors-design-tests.json" />
     <option name="MODULE_MODE" value="true" />
     <method v="2" />
   </configuration>

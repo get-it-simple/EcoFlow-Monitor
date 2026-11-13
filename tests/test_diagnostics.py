@@ -8,6 +8,7 @@ from typing import cast
 
 import httpx
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.controller import Controller
@@ -497,11 +498,7 @@ def test_logging_settings_layout_and_preview(tmp_path, qapp, session_cache, monk
         assert runtime.main.grab().save(str(output / f"main-{suffix}.png"))
         assert runtime.mini.grab().save(str(output / f"mini-{suffix}.png"))
     finally:
-        runtime.stop()
-        runtime.window.deleteLater()
-        runtime.main.deleteLater()
-        runtime.mini.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
         i18n.setup(previous_language)
 
 

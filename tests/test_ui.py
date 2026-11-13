@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 import time
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, Qt
+from PySide6.QtCore import QObject, QPoint, Qt
 from PySide6.QtTest import QTest
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
@@ -101,12 +102,7 @@ def runtime(tmp_path, qapp):
     controller = Controller(SettingsStore(tmp_path / "settings.json"), NoCredentials())
     instance = Application(controller.store.path, native=False, controller=controller)
     yield instance
-    instance.stop()
-    instance.window.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    qapp.processEvents()
+    close_runtime(instance, qapp)
     i18n.setup("en")
 
 
@@ -557,10 +553,7 @@ def test_saved_scaled_geometry_is_not_scaled_again_on_startup(tmp_path, qapp, mo
         qapp.processEvents()
         assert instance.window.width() == 1400 and instance.window.height() == 1000
     finally:
-        instance.stop()
-        instance.window.deleteLater()
-        instance.mini.deleteLater()
-        instance.main.deleteLater()
+        close_runtime(instance, qapp)
 
 
 @pytest.mark.design

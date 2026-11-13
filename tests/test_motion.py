@@ -6,6 +6,7 @@ import sys
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, QRectF
 from PySide6.QtGui import QImage, QPainter
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.ecoflow import normalize_telemetry
@@ -118,12 +119,7 @@ def runtime(tmp_path, qapp, monkeypatch):
     instance.controller.clock = lambda: clock[0]
     instance.test_clock = clock
     yield instance
-    instance.stop()
-    for widget in (instance.dashboard, instance.mini, instance.main):
-        widget.deleteLater()
-    instance.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    qapp.processEvents()
+    close_runtime(instance, qapp)
     i18n.setup("en")
     assert not failures, failures
 

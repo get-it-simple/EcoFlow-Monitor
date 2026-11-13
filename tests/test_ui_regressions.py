@@ -4,6 +4,7 @@ import ctypes
 import time
 
 import pytest
+from qt_helpers import close_runtime
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QDialog, QLineEdit, QMessageBox, QStyle, QStyleOptionSlider, QSystemTrayIcon, QToolTip
@@ -21,11 +22,7 @@ from ecoflow_monitor.ui.integrations import CommandDialog
 def runtime(tmp_path, qapp):
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.dashboard.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
     i18n.setup("en")
 
 
@@ -343,11 +340,7 @@ def test_saved_small_dashboard_geometry_is_raised_to_new_minimum(tmp_path, qapp)
     try:
         assert runtime.dashboard.width() >= 800 and runtime.dashboard.height() >= 600
     finally:
-        runtime.stop()
-        runtime.dashboard.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 @pytest.mark.parametrize("opacity", [0, 0.82, 1])

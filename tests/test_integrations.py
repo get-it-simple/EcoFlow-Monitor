@@ -4,12 +4,11 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
-import time
 
 from PySide6.QtCore import QFile
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog
 import pytest
+from qt_helpers import wait_until as wait_for
 
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, ProcessSnapshot
 from ecoflow_monitor.controller import Controller
@@ -33,12 +32,6 @@ def module_example(**changes):
     return replace(module, **changes)
 
 
-def wait_for(qapp, predicate):
-    deadline = time.monotonic() + 5
-    while not predicate() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert predicate()
 
 
 @pytest.fixture

@@ -2,8 +2,8 @@ from dataclasses import replace
 import threading
 import time
 
-from PySide6.QtTest import QTest
 import pytest
+from qt_helpers import wait_until as wait_for_condition
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowError
 from ecoflow_monitor.controller import Controller
@@ -42,11 +42,7 @@ class FakeIntegrationAdapter:
 
 
 def wait_until(qapp, condition):
-    deadline = time.monotonic() + 4
-    while not condition() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert condition()
+    wait_for_condition(qapp, condition, timeout=4000)
 
 
 @pytest.fixture

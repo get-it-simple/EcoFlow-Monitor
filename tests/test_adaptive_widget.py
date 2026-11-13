@@ -2,6 +2,7 @@ from dataclasses import replace
 import sys
 
 import pytest
+from qt_helpers import close_runtime
 from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
 from PySide6.QtGui import QEnterEvent
 from PySide6.QtTest import QTest
@@ -21,12 +22,7 @@ def runtime(tmp_path, qapp, monkeypatch):
     monkeypatch.setattr(sys, "excepthook", lambda kind, error, traceback: failures.append(error))
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.dashboard.deleteLater()
-    instance.widget.deleteLater()
-    instance.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    qapp.processEvents()
+    close_runtime(instance, qapp)
     i18n.setup("en")
     assert not failures, failures
 

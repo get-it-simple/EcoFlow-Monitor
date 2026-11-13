@@ -12,8 +12,8 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
-    <option name="SCRIPT_NAME" value="pytest" />
-    <option name="PARAMETERS" value="-n 0 tests/test_integrations.py tests/test_ui_integrations.py tests/test_design_system.py::test_rule_dependencies_block_condition_disable_and_keep_rules tests/test_design_system.py::test_command_editor_preview_preserves_id_and_never_executes tests/test_design_system.py::test_integration_editor_accepts_command_and_profile_dialog_results tests/test_ui.py::test_friendly_rule_names_and_explanations tests/test_ui.py::test_profile_details_tooltips_update_on_selection_and_edit tests/test_appearance.py::test_percent_sliders_save_reset_cancel_and_rules tests/test_disclosure.py::test_settings_integrations_keep_draft_and_allow_empty_modules tests/test_ui_interactions.py::test_settings_rebuilds_never_show_temporary_top_level_widgets tests/test_i18n.py tests/test_ui.py::test_every_literal_translation_key_exists_in_english --durations=5 --junitxml=build/integration-tests.xml -q" />
+    <option name="SCRIPT_NAME" value="scripts.run_tests" />
+    <option name="PARAMETERS" value="--area integrations --report build/integrations-tests.json" />
     <option name="MODULE_MODE" value="true" />
     <method v="2" />
   </configuration>

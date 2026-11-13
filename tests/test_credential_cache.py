@@ -5,9 +5,9 @@ import threading
 import time
 import uuid
 
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QSystemTrayIcon
 import pytest
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, Device, EcoFlowError
 from ecoflow_monitor.adapters.credentials import NativeCredential
@@ -26,12 +26,6 @@ IDENTITY = ("op://Test/EcoFlow/username", "op://Test/EcoFlow/password")
 PAIR = Credentials("synthetic-session-access", "synthetic-session-secret")
 
 
-def wait_until(qapp, condition):
-    deadline = time.monotonic() + 5
-    while not condition() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert condition()
 
 
 @pytest.fixture
@@ -209,12 +203,7 @@ def test_ttl_control_is_staged_and_reset_preserves_saved_value(controller, qapp)
         runtime.dashboard.save()
         assert controller.store.load().onepassword_cache_ttl_seconds == 21600
     finally:
-        runtime.stop()
-        runtime.dashboard.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        runtime.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 def test_expiry_notifies_once_and_tray_click_preserves_draft(controller, qapp, api, monkeypatch):
@@ -241,12 +230,7 @@ def test_expiry_notifies_once_and_tray_click_preserves_draft(controller, qapp, a
         assert runtime.dashboard.capacity.value() == 3000
     finally:
         runtime.native = False
-        runtime.stop()
-        runtime.dashboard.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        runtime.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
 
 
 def test_saved_discovery_and_unrelated_settings_reuse_cache(controller, qapp, api):
@@ -361,6 +345,7 @@ def test_concurrent_requests_share_one_successful_acquisition(session_cache):
             worker.join(3)
 
 
+@pytest.mark.native
 def test_native_dpapi_session_record_roundtrip_and_entropy_isolation():
     storage = SessionCredentialStore("EcoFlowMonitor/1PasswordSession/test-" + uuid.uuid4().hex)
     protection = WindowsDataProtection()
@@ -419,10 +404,5 @@ def test_expiration_banner_and_ttl_layout(controller, qapp, language, scale):
         assert runtime.main.grab().save(str(folder / "main.png"))
         assert runtime.mini.grab().save(str(folder / "mini.png"))
     finally:
-        runtime.stop()
-        runtime.dashboard.deleteLater()
-        runtime.mini.deleteLater()
-        runtime.main.deleteLater()
-        runtime.deleteLater()
-        qapp.processEvents()
+        close_runtime(runtime, qapp)
         i18n.setup("en")

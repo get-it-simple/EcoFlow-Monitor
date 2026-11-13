@@ -11,8 +11,8 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
-    <option name="SCRIPT_NAME" value="pytest" />
-    <option name="PARAMETERS" value="-n 0 tests/test_polling.py tests/test_ecoflow.py tests/test_controller.py tests/test_settings.py tests/test_domain.py tests/test_motion.py tests/test_credential_cache.py tests/test_ui.py::test_metric_tooltips_follow_language_changes -q" />
+    <option name="SCRIPT_NAME" value="scripts.run_tests" />
+    <option name="PARAMETERS" value="--area sensors --report build/sensors-tests.json" />
     <option name="MODULE_MODE" value="true" />
     <method v="2" />
   </configuration>

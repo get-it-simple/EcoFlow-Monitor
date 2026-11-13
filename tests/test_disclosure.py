@@ -5,6 +5,7 @@ from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QComboBox
 import pytest
+from qt_helpers import close_runtime
 
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.domain import ConnectionState, Telemetry
@@ -16,11 +17,7 @@ from ecoflow_monitor.ui.settings_window import SettingsWindow
 def runtime(tmp_path, qapp):
     instance = Application(tmp_path / "settings.json", native=False)
     yield instance
-    instance.stop()
-    instance.window.deleteLater()
-    instance.mini.deleteLater()
-    instance.main.deleteLater()
-    qapp.processEvents()
+    close_runtime(instance, qapp)
 
 
 def test_hidden_metrics_roundtrip_and_existing_settings():

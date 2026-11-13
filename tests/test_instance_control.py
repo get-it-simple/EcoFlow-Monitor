@@ -9,8 +9,12 @@ from PySide6.QtNetwork import QLocalSocket
 from PySide6.QtTest import QSignalSpy, QTest
 import pytest
 
+
 from ecoflow_monitor.adapters.instance_windows import InstanceMutex, instance_name
 from ecoflow_monitor.instance_control import InstanceController
+
+
+pytestmark = pytest.mark.native
 
 
 def wait_until(qapp, condition, timeout=3000):

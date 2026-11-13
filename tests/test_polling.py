@@ -4,8 +4,8 @@ import time
 import threading
 
 import httpx
-from PySide6.QtTest import QTest
 import pytest
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, normalize_partial
@@ -21,11 +21,7 @@ def complete(state, values, now, missing=()):
 
 
 def wait(qapp, predicate):
-    deadline = time.monotonic() + 5
-    while not predicate() and time.monotonic() < deadline:
-        qapp.processEvents()
-        QTest.qWait(5)
-    assert predicate()
+    wait_until(qapp, predicate, timeout=5000)
 
 
 def test_signed_port_values_survive_partial_normalization_and_snapshot():
@@ -428,9 +424,7 @@ def test_actual_widget_composition_controls_demand(sensor_controller, qapp):
         runtime.sensor_demand.refresh()
         assert "minimum_discharge_level" not in controller.polling.required
     finally:
-        runtime.stop()
-        runtime.dashboard.deleteLater()
-        runtime.widget.deleteLater()
+        close_runtime(runtime, qapp)
 
 
 def test_outlet_state_waits_independently_of_port_power(sensor_controller, qapp):
