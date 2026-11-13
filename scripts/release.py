@@ -17,6 +17,13 @@ from scripts.smoke_executable import verify_icon, verify_version
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ID = "GetItSimple.EcoFlowMonitor"
 REPOSITORY = "get-it-simple/EcoFlow-Monitor"
+MANIFEST_VERSION = "1.12.0"
+MANIFEST_TYPES = {
+    f"{PACKAGE_ID}.yaml": "version",
+    f"{PACKAGE_ID}.installer.yaml": "installer",
+    f"{PACKAGE_ID}.locale.en-US.yaml": "defaultLocale",
+    f"{PACKAGE_ID}.locale.uk-UA.yaml": "locale",
+}
 
 
 def validate_version(version: str = __version__) -> str:
@@ -105,12 +112,16 @@ def build_installer(executable: Path, output: Path, compiler: str | None = None)
     return target
 
 
+def manifest_schema_header(manifest_type: str) -> str:
+    return f"# yaml-language-server: $schema=https://aka.ms/winget-manifest.{manifest_type}.{MANIFEST_VERSION}.schema.json\n"
+
+
 def write_manifests(directory: Path, installer: Path, repository: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Repository must be owner/name")
     directory.mkdir()
     common = f"PackageIdentifier: {PACKAGE_ID}\nPackageVersion: {__version__}\n"
-    suffix = "ManifestVersion: 1.12.0\n"
+    suffix = f"ManifestVersion: {MANIFEST_VERSION}\n"
     files = {
         f"{PACKAGE_ID}.yaml": common + "DefaultLocale: en-US\nManifestType: version\n" + suffix,
         f"{PACKAGE_ID}.installer.yaml": common + f"""Platform:
@@ -158,6 +169,7 @@ ManifestType: locale
 """ + suffix,
     }
     for name, content in files.items():
+        content = manifest_schema_header(MANIFEST_TYPES[name]) + content
         (directory / name).write_text(content, encoding="utf-8", newline="\r\n")
 
 
@@ -179,7 +191,7 @@ def verify_release(directory: Path) -> None:
     verify_portable(directory / f"EcoFlowMonitor-{__version__}-portable.zip", executable)
     installer = directory / f"EcoFlowMonitor-{__version__}-x64-machine-setup.exe"
     verify_version(installer)
-    names = {f"{PACKAGE_ID}{suffix}.yaml" for suffix in ("", ".installer", ".locale.en-US", ".locale.uk-UA")}
+    names = set(MANIFEST_TYPES)
     manifests = directory / "winget"
     if {path.name for path in manifests.iterdir()} != names:
         raise ValueError("Unexpected WinGet manifest bundle")
@@ -190,8 +202,14 @@ def verify_release(directory: Path) -> None:
     if not url or not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/" +
                                   re.escape(__version__) + "/" + re.escape(installer.name), url.group(1)):
         raise ValueError("WinGet installer URL does not match the release")
-    for name in names:
-        if f"PackageVersion: {__version__}\n" not in (manifests / name).read_text(encoding="utf-8"):
+    for name, manifest_type in MANIFEST_TYPES.items():
+        content = (manifests / name).read_text(encoding="utf-8")
+        if not content.startswith(manifest_schema_header(manifest_type)):
+            raise ValueError(f"WinGet manifest schema header mismatch: {name}")
+        lines = content.splitlines()
+        if lines.count(f"ManifestType: {manifest_type}") != 1 or lines.count(f"ManifestVersion: {MANIFEST_VERSION}") != 1:
+            raise ValueError(f"WinGet manifest type or schema version mismatch: {name}")
+        if f"PackageVersion: {__version__}" not in lines:
             raise ValueError("WinGet version mismatch")
     with ZipFile(directory / f"{PACKAGE_ID}-{__version__}-winget.zip") as archive:
         if set(archive.namelist()) != names or len(archive.namelist()) != len(names):
