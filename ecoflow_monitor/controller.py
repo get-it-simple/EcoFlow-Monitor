@@ -20,7 +20,8 @@ from ecoflow_monitor.device_metadata import DeviceMetadataStore
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
-from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, PollingState, TelemetryPatch, dependencies
+from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, SENSOR_FIELDS, PollingState, TelemetryPatch, dependencies
+from ecoflow_monitor.system_activity import ActivityCancelled, SystemActivity
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ class Task(QRunnable):
         result = None
         failure = None
         try:
+            if self.cancelled is not None and self.cancelled.is_set():
+                raise ActivityCancelled()
             result = self.operation()
         except Exception as error:
             failure = error
@@ -72,6 +75,7 @@ class Controller(QObject):
     quotas_started = Signal()
     task_finished = Signal(str)
     unsupported_device = Signal()
+    system_activity_changed = Signal(object)
 
     def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None) -> None:
         super().__init__()
@@ -92,6 +96,11 @@ class Controller(QObject):
         self._metadata_dirty = False
         self.notice = ""
         self.preview = None
+        self.system_activity = SystemActivity()
+        self._activity_epoch = 0
+        self._resume_fields = None
+        self._resume_scans = set()
+        self._started = False
         try:
             self.settings = store.load()
         except SettingsError as error:
@@ -114,6 +123,7 @@ class Controller(QObject):
         self._generation = 0
         self._stopped = False
         self._credential_cancelled = threading.Event()
+        self._work_cancelled = threading.Event()
         self._active = {}
         self._api_pending = False
         self._discovery_pending = None
@@ -126,6 +136,54 @@ class Controller(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(250)
         self._timer.timeout.connect(self.tick)
+        self._activity_timer = QTimer(self)
+        self._activity_timer.setSingleShot(True)
+        self._activity_timer.timeout.connect(self._apply_system_activity)
+
+    def set_system_activity(self, activity: SystemActivity) -> None:
+        if self._stopped or activity == self.system_activity:
+            return
+        was_paused = self.system_activity.paused
+        self.system_activity = activity
+        if activity.paused and not was_paused:
+            self._activity_epoch += 1
+            self._credential_cancelled.set()
+            self._work_cancelled.set()
+            self._timer.stop()
+            self._api_pending = False
+            self._diagnostic_pending = False
+            if "api" in self._active and self._api_mode == "devices" and self._discovery_pending is None:
+                self._discovery_pending = (None,)
+            self.credential_renewal_pending = False
+            self._resume_fields = set()
+            self._resume_scans = {module.id for module in self.settings.integrations if module.enabled}
+            for state in self.integration_states.values():
+                state.gate.suspend()
+                state.auto_reason = "automation_paused"
+        self.system_activity_changed.emit(activity)
+        self._activity_timer.start(0)
+
+    def _apply_system_activity(self):
+        if self._stopped:
+            return
+        if not self.system_activity.paused:
+            self._credential_cancelled = threading.Event()
+            self._work_cancelled = threading.Event()
+            self._update_demand()
+            self.polling.resume(self.clock())
+            if self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}:
+                self._next_api = 0
+                self._api_pending = bool(self.settings.serial)
+            for state in self.integration_states.values():
+                state.next_scan = 0
+            if self._started:
+                self._timer.start()
+            if self._metadata_dirty:
+                self._save_metadata()
+            self._check_credential_expiry()
+            self._continue_api()
+            self.tick()
+        self.changed.emit()
 
     @property
     def ui_settings(self):
@@ -137,6 +195,8 @@ class Controller(QObject):
         return self.fresh_for(keys or self.polling.required or CORE)
 
     def fresh_for(self, keys) -> bool:
+        if self.system_activity.paused or self._resume_fields is not None and not set(keys) <= self._resume_fields:
+            return False
         if self.connection not in {ConnectionState.LIVE, ConnectionState.STALE} or self.telemetry is None:
             return False
         if self.polling.samples:
@@ -243,6 +303,8 @@ class Controller(QObject):
         if self._stopped:
             return
         self._metadata_dirty = True
+        if self.system_activity.paused:
+            return
         if "metadata" not in self._active:
             data = self.metadata.snapshot()
             self._metadata_dirty = False
@@ -252,6 +314,7 @@ class Controller(QObject):
         return next(module for module in self.settings.integrations if module.id == integration_id)
 
     def start(self, authorized=True) -> None:
+        self._started = True
         self.access_allowed = authorized
         event("application_started", version=__version__)
         try:
@@ -261,21 +324,26 @@ class Controller(QObject):
             self.connection = ConnectionState.AUTH_ERROR
             self._next_api = float("inf")
             self.changed.emit()
-        self._timer.start()
+        if not self.system_activity.paused:
+            self._timer.start()
         self.tick()
 
     def _submit(self, kind: str, operation: Callable) -> None:
-        if self._stopped or kind in self._active:
+        if self._stopped or self.system_activity.paused or kind in self._active:
             return
-        task = Task(kind, self._generation, operation, self._credential_cancelled if kind == "api" else None)
+        cancelled = self._credential_cancelled if kind == "api" else self._work_cancelled if kind != "metadata" else None
+        task = Task(kind, self._generation, operation, cancelled)
+        task.activity_epoch = self._activity_epoch
         task.signals.finished.connect(self._completed, Qt.ConnectionType.QueuedConnection)
         self._active[kind] = task
         self._pool.start(task)
 
     def discover(self, supplied: Credentials | None = None, *, user_initiated=True) -> None:
+        if self._stopped or self.system_activity.paused:
+            return
         if user_initiated:
             self.access_allowed = True
-        if not self.access_allowed or self._stopped:
+        if not self.access_allowed:
             return
         if supplied is None and self._check_credential_expiry():
             self.devices_ready.emit(())
@@ -290,14 +358,14 @@ class Controller(QObject):
             credentials = supplied if supplied is not None else self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
-            return ("devices", self.client_factory(credentials).devices(), supplied is None)
+            return ("devices", self._client(credentials, cancelled).devices(), supplied is None)
         self._submit("api", operation)
 
     def refresh(self, *, user_initiated=True) -> None:
+        if self._stopped or self.system_activity.paused:
+            return
         if user_initiated:
             self.access_allowed = True
-        if self._stopped:
-            return
         if not self.access_allowed:
             return
         if self._check_credential_expiry():
@@ -337,7 +405,7 @@ class Controller(QObject):
             if credentials is None:
                 raise CredentialError("credentials_required")
             try:
-                client = self.client_factory(credentials)
+                client = self._client(credentials, cancelled)
                 if isinstance(client, EcoFlowClient):
                     client.catalog = catalog if catalog is not None else client.devices()
                 if hasattr(client, "read_quotas"):
@@ -356,10 +424,20 @@ class Controller(QObject):
         self.changed.emit()
 
     def _read_credentials(self, settings: AppSettings, cancelled: threading.Event) -> Credentials | None:
+        if cancelled.is_set():
+            raise ActivityCancelled()
         event("credentials_requested", source=settings.credential_source)
         if settings.credential_source == "1password":
             return self.load_session_credentials(settings, cancelled)
         return self.credential_store.read(settings.credential_ref)
+
+    def _client(self, credentials, cancelled):
+        if cancelled.is_set():
+            raise ActivityCancelled()
+        client = self.client_factory(credentials)
+        if isinstance(client, EcoFlowClient):
+            client.cancelled = cancelled
+        return client
 
     def load_session_credentials(self, settings, cancelled):
         identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
@@ -371,7 +449,7 @@ class Controller(QObject):
         return load()
 
     def collect_diagnostics(self):
-        if self._stopped or not self.settings.serial or self.diagnostics is None:
+        if self._stopped or self.system_activity.paused or not self.settings.serial or self.diagnostics is None:
             return
         if "api" in self._active:
             self._diagnostic_pending = True
@@ -383,7 +461,7 @@ class Controller(QObject):
             credentials = self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
-            return ("diagnostic", self.client_factory(credentials).diagnose(settings.serial, self.diagnostics.capture))
+            return ("diagnostic", self._client(credentials, cancelled).diagnose(settings.serial, self.diagnostics.capture))
         self._api_mode = "diagnostic"
         self._submit("api", operation)
         self.changed.emit()
@@ -420,7 +498,7 @@ class Controller(QObject):
         return True
 
     def renew_credentials(self) -> None:
-        if self._stopped or self.settings.credential_source != "1password" or "api" in self._active:
+        if self._stopped or self.system_activity.paused or self.settings.credential_source != "1password" or "api" in self._active:
             return
         self.access_allowed = True
         self._credential_cancelled.set()
@@ -578,6 +656,8 @@ class Controller(QObject):
         self.update_preferences(integrations=tuple(replace(item, auto_enabled=enabled) if item.id == integration_id else item for item in self.settings.integrations))
 
     def request_profile(self, integration_id: str, profile_id: str, automatic: bool = False) -> None:
+        if self._stopped or self.system_activity.paused:
+            return
         module = self.module(integration_id)
         module_index = self.settings.integrations.index(module) + 1
         event("profile_requested", module_index=module_index, automatic=automatic)
@@ -599,18 +679,22 @@ class Controller(QObject):
         previous = next((profile for profile in module.profiles if profile.id == previous_id), None)
         state.transition_from = previous_id
         generation = self._generation
+        activity_epoch = self._activity_epoch
         state.busy = True
         state.requested_profile = profile_id
         state.result = None
         def current():
-            return not self._stopped and generation == self._generation and self.module(integration_id).enabled
+            return (not self._stopped and not self.system_activity.paused and generation == self._generation
+                    and activity_epoch == self._activity_epoch and self.module(integration_id).enabled)
         def operation(target_profile: IntegrationProfile = target):
             return profile_id, automatic, self.integration_adapter.transition(module, previous, target_profile, current)
         self._submit(kind, operation)
+        if kind in self._active:
+            self._active[kind].integration_state = state
         self.changed.emit()
 
     def tick(self) -> None:
-        if self._stopped:
+        if self._stopped or self.system_activity.paused:
             return
         self._check_credential_expiry()
         now = self.clock()
@@ -634,7 +718,8 @@ class Controller(QObject):
             if module.enabled and now >= state.next_scan and kind not in self._active:
                 state.next_scan = now + 2
                 self._submit(kind, lambda selected=module: self.integration_adapter.inspect(selected))
-            eligible = self.access_allowed and module.enabled and module.auto_enabled and self.fresh_for(self._automation_sensors(module)) and state.observation.ready
+            eligible = (self.access_allowed and module.enabled and module.auto_enabled and module.id not in self._resume_scans
+                        and self.fresh_for(self._automation_sensors(module)) and state.observation.ready)
             reason = "automatic_mode" if eligible else "automation_paused"
             if reason != state.auto_reason:
                 state.auto_reason = reason
@@ -662,9 +747,13 @@ class Controller(QObject):
         if kind == "metadata" and self._metadata_dirty:
             self._save_metadata()
         if kind == "api":
-            self._check_credential_expiry()
+            if not self.system_activity.paused:
+                self._check_credential_expiry()
             if (generation != self._generation or task is not None and task.cancelled is not None and task.cancelled.is_set()) and getattr(task, "polling", None) is self.polling:
                 self.polling.abandon()
+        interrupted = task is not None and getattr(task, "activity_epoch", self._activity_epoch) != self._activity_epoch
+        if interrupted and kind.startswith("dispatch:") and generation == self._generation:
+            self._finish_dispatch(kind, result, error, task, interrupted=True)
         if generation == self._generation and not (task is not None and task.cancelled is not None and task.cancelled.is_set()):
             if kind == "api":
                 if error is not None:
@@ -719,6 +808,8 @@ class Controller(QObject):
                         patch = result[1]
                         now, utc = self.clock(), time.time()
                         self.polling.complete(patch, utc, now)
+                        if self._resume_fields is not None:
+                            self._resume_fields.update(key for key, value in patch.values)
                         if self.metadata.sampler(self.settings.serial).observe(dict(patch.values), utc, now, self.settings.polling.primary.stale_after_seconds):
                             self._save_metadata()
                         if patch.values:
@@ -727,6 +818,8 @@ class Controller(QObject):
                         self._next_api = self.polling.next_due(now)
                     else:
                         self.telemetry = result[1]
+                        if self._resume_fields is not None:
+                            self._resume_fields.update(SENSOR_FIELDS)
                         self.connection = ConnectionState.LIVE
                         self._next_api = self.clock() + self.settings.polling.primary.interval_seconds
                     self._retry = 5
@@ -739,6 +832,8 @@ class Controller(QObject):
                 integration_id = kind.split(":", 1)[1]
                 previous_availability = self.integration_states[integration_id].observation.availability
                 self.integration_states[integration_id].observation = result if error is None else IntegrationObservation("integration_error")
+                if error is None:
+                    self._resume_scans.discard(integration_id)
                 availability = self.integration_states[integration_id].observation.availability
                 if previous_availability != availability:
                     event("integration_availability_changed", module_index=self.settings.integrations.index(self.module(integration_id)) + 1, state=availability)
@@ -748,45 +843,64 @@ class Controller(QObject):
                 if result is True and error is None:
                     self.elevation_needed.emit(kind.split(":", 1)[1])
             elif kind.startswith("dispatch:"):
-                integration_id = kind.split(":", 1)[1]
-                state = self.integration_states[integration_id]
-                profile_id, automatic, outcome = result if error is None else (state.requested_profile, True, TransitionResult(False, error="integration_command_failed"))
-                state.busy = False
-                state.result = outcome
-                event("profile_operation_completed", level=logging.INFO if outcome.success else logging.WARNING,
-                      module_index=self.settings.integrations.index(self.module(integration_id)) + 1,
-                      success=outcome.success, completed_commands=outcome.completed,
-                      exit_code=outcome.exit_code, winerror=outcome.winerror, reason=outcome.error)
-                state.active_profile = profile_id if outcome.success else None
-                if outcome.success:
-                    state.transition_from = None
-                if automatic:
-                    state.gate.dispatched(profile_id, self.clock(), outcome.success)
-                if not outcome.success:
-                    self.notice = "profile_failed"
-                    if outcome.winerror in (5, 740):
-                        self.elevation_needed.emit(integration_id)
-                elif self.notice in {"profile_failed", "profile_unavailable"}:
-                    self.notice = ""
-                state.next_scan = 0
+                self._finish_dispatch(kind, result, error, task)
             if error is not None and not isinstance(error, (EcoFlowError, CredentialError)):
                 logger.error("Background %s failed (%s)", kind.split(":", 1)[0], type(error).__name__)
             if previous_connection != self.connection:
                 event("connection_changed", state=self.connection.value)
             self.changed.emit()
-        if kind == "api":
-            if self._discovery_pending is not None:
-                supplied, = self._discovery_pending
-                self._discovery_pending = None
-                self.discover(supplied, user_initiated=False)
-            elif self._diagnostic_pending:
-                self._diagnostic_pending = False
-                self.collect_diagnostics()
-            elif self._api_pending:
-                self._api_pending = False
-                self.refresh(user_initiated=False)
+        if kind == "api" and not self.system_activity.paused:
+            self._continue_api()
             self.changed.emit()
         self.task_finished.emit(kind)
+
+    def _finish_dispatch(self, kind, result, error, task, interrupted=False):
+        integration_id = kind.split(":", 1)[1]
+        state = self.integration_states[integration_id]
+        if task is not None and getattr(task, "integration_state", state) is not state:
+            return
+        profile_id, automatic, outcome = result if error is None else (
+            state.requested_profile, True, TransitionResult(False, error="integration_cancelled" if interrupted else "integration_command_failed"))
+        state.busy = False
+        cancelled = interrupted and outcome.error == "integration_cancelled"
+        state.result = None if cancelled else outcome
+        event("profile_operation_completed", level=logging.INFO if outcome.success or cancelled else logging.WARNING,
+              module_index=self.settings.integrations.index(self.module(integration_id)) + 1,
+              success=outcome.success, completed_commands=outcome.completed,
+              exit_code=outcome.exit_code, winerror=outcome.winerror, reason=outcome.error)
+        if outcome.success:
+            state.active_profile = profile_id
+            state.transition_from = None
+        elif not cancelled or outcome.completed:
+            state.active_profile = None
+            if interrupted:
+                state.transition_from = None
+        if interrupted:
+            state.requested_profile = None
+            state.gate.suspend()
+        elif automatic:
+            state.gate.dispatched(profile_id, self.clock(), outcome.success)
+        if not outcome.success and not cancelled:
+            self.notice = "profile_failed"
+            if not self.system_activity.paused and outcome.winerror in (5, 740):
+                self.elevation_needed.emit(integration_id)
+        elif self.notice in {"profile_failed", "profile_unavailable"}:
+            self.notice = ""
+        state.next_scan = 0
+
+    def _continue_api(self):
+        if self._stopped or self.system_activity.paused or "api" in self._active:
+            return
+        if self._discovery_pending is not None:
+            supplied, = self._discovery_pending
+            self._discovery_pending = None
+            self.discover(supplied, user_initiated=False)
+        elif self._diagnostic_pending:
+            self._diagnostic_pending = False
+            self.collect_diagnostics()
+        elif self._api_pending:
+            self._api_pending = False
+            self.refresh(user_initiated=False)
 
     def stop(self) -> None:
         if self._stopped:
@@ -794,12 +908,14 @@ class Controller(QObject):
         event("application_stopping")
         self._stopped = True
         self._credential_cancelled.set()
+        self._work_cancelled.set()
         try:
             self.credential_cache.close()
         except CredentialError:
             logger.error("The temporary 1Password credential record could not be removed")
         self._generation += 1
         self._timer.stop()
+        self._activity_timer.stop()
         self._pool.clear()
         if hasattr(self.integration_adapter, "close"):
             self.integration_adapter.close()

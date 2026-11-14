@@ -183,6 +183,16 @@ class PollingState:
                 self.samples[key] = replace(self.samples[key], attempted_monotonic=-math.inf)
             self._finish(self.in_flight)
 
+    def resume(self, now: float) -> None:
+        with self._lock:
+            for key in self.required:
+                sample = self.samples.get(key, SensorSample())
+                self.samples[key] = replace(sample, attempted_monotonic=-math.inf)
+            self.in_flight = frozenset()
+            visible, required = self.visible, self.required
+            self.visible = frozenset()
+            self.set_demand(visible, required, now)
+
     def next_due(self, now: float) -> float:
         with self._lock:
             needed = self.required | (CORE if self.required and not self.verified else frozenset())

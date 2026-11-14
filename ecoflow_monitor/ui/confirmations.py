@@ -30,6 +30,10 @@ class ConfirmationCoordinator(QObject):
         self.active = None
         self.dialog = None
         self._closed = False
+        self._paused = False
+        self._quiet = False
+        self._available = threading.Event()
+        self._available.set()
         self._watching = False
         self._waiting_modal = None
         self._advance_timer = QTimer(self)
@@ -37,7 +41,7 @@ class ConfirmationCoordinator(QObject):
         self._advance_timer.timeout.connect(self._advance)
         self._raise_timer = QTimer(self)
         self._raise_timer.setSingleShot(True)
-        self._raise_timer.timeout.connect(self.raise_active)
+        self._raise_timer.timeout.connect(lambda: self.raise_active(explicit=False))
         self.external_requested.connect(self.enqueue, Qt.ConnectionType.QueuedConnection)
         self.released.connect(self.finish, Qt.ConnectionType.QueuedConnection)
 
@@ -57,7 +61,21 @@ class ConfirmationCoordinator(QObject):
             return
         self.pending.append(request)
         self._watch(True)
-        self._advance_timer.start(0)
+        if not self._paused:
+            self._advance_timer.start(0)
+
+    def set_paused(self, paused):
+        if self._closed or paused == self._paused:
+            return
+        self._paused = paused
+        if paused:
+            self._quiet = True
+            self._available.clear()
+            self._advance_timer.stop()
+            self._raise_timer.stop()
+        else:
+            self._available.set()
+            self._advance_timer.start(0)
 
     def _watch(self, enabled):
         if enabled == self._watching:
@@ -70,7 +88,7 @@ class ConfirmationCoordinator(QObject):
             app.removeEventFilter(self)
 
     def _advance(self):
-        if self._closed or self.active is not None:
+        if self._closed or self._paused or self.active is not None:
             return
         modal = QApplication.activeModalWidget()
         if isinstance(modal, QMessageBox):
@@ -92,9 +110,10 @@ class ConfirmationCoordinator(QObject):
             self.dialog = request.prompt(parent)
             self.dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
             self.dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, self._quiet)
             self.dialog.finished.connect(lambda answer, item=request: self._answered(item, answer))
             self.dialog.show()
-            self.raise_active()
+            self.raise_active(explicit=False)
             return
         self._watch(False)
 
@@ -103,6 +122,10 @@ class ConfirmationCoordinator(QObject):
         if dialog is not None:
             dialog.deleteLater()
         if self.active is not request:
+            return
+        if self._paused and not self._closed and request.valid():
+            self.pending.appendleft(request)
+            self.active = None
             return
         if not self._closed and request.valid() and answer == QMessageBox.StandardButton.Yes:
             request.accepted(lambda: self.finish(request.key))
@@ -113,23 +136,31 @@ class ConfirmationCoordinator(QObject):
     def finish(self, key):
         if self.active is not None and self.active.key == key:
             self.active = None
-            if not self._closed:
+            if not self._closed and not self._paused:
                 self._advance_timer.start(0)
 
     def _resume(self, result):
-        if not self._closed:
+        if not self._closed and not self._paused:
             self._advance_timer.start(0)
 
     def invalidate(self):
         if self.active is not None and self.dialog is not None and not self.active.valid():
             self.dialog.reject()
 
-    def raise_active(self):
+    def raise_active(self, explicit=True):
+        if self._closed or self._paused:
+            return
+        if explicit:
+            self._quiet = False
+        elif self._quiet:
+            return
         if self.dialog is not None and self.dialog.isVisible():
             self.dialog.setWindowState(self.dialog.windowState() & ~Qt.WindowState.WindowMinimized)
             activate_window(self.dialog)
 
     def eventFilter(self, watched, event):
+        if self._paused or self._closed or self._quiet:
+            return False
         if event.type() in {QEvent.Type.ApplicationActivate, QEvent.Type.WindowActivate, QEvent.Type.Show}:
             if self.dialog is not None and watched is not self.dialog and watched is not self.dialog.windowHandle():
                 self._raise_timer.start(0)
@@ -148,12 +179,18 @@ class ConfirmationCoordinator(QObject):
                     raise RequestCancelled()
             if cancelled.is_set() or self._closed:
                 raise RequestCancelled()
+            while not self._available.wait(0.05):
+                if cancelled.is_set() or self._closed:
+                    raise RequestCancelled()
+            if cancelled.is_set() or self._closed:
+                raise RequestCancelled()
             return operation()
         finally:
             self.released.emit(key)
 
     def close(self):
         self._closed = True
+        self._available.set()
         for request in self.pending:
             request.rejected()
         self.pending.clear()

@@ -30,6 +30,7 @@ class MotionDriver(QObject):
         self._timer.setInterval(16)
         self._timer.timeout.connect(self.tick)
         controller.changed.connect(self.refresh)
+        controller.system_activity_changed.connect(self.schedule)
         QApplication.instance().installEventFilter(self)
         self.refresh()
 
@@ -43,7 +44,8 @@ class MotionDriver(QObject):
         if self._stopped:
             return
         now = self.now()
-        enabled = self.controller.ui_settings.animations and QApplication.instance().property("system_animations") is not False
+        enabled = (not self.controller.system_activity.paused and self.controller.ui_settings.animations
+                   and QApplication.instance().property("system_animations") is not False)
         key = (self.controller.motion_telemetry, self.controller.connection, self.controller.fresh)
         if key != self._key:
             self.state = derive_motion(*key, self.state.mode, MOTION["powerThresholds"])
@@ -79,7 +81,8 @@ class MotionDriver(QObject):
     def schedule(self, *args):
         if self._stopped or not isValid(self._timer):
             return
-        active = self.enabled and any(self.visible(view) and view.motion_active() for view in tuple(self._views))
+        active = (not self.controller.system_activity.paused and self.enabled
+                  and any(self.visible(view) and view.motion_active() for view in tuple(self._views)))
         if active and not self._timer.isActive():
             self._timer.start()
         elif not active:

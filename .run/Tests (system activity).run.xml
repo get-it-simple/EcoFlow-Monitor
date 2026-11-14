@@ -1,0 +1,20 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Tests (system activity)" type="PythonConfigurationType" factoryName="Python">
+    <module name="ecoflow-monitoring-win-support" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+      <env name="QT_QPA_PLATFORM" value="offscreen" />
+      <env name="QT_OPENGL" value="software" />
+    </envs>
+    <option name="SDK_HOME" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="IS_MODULE_SDK" value="true" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="SCRIPT_NAME" value="scripts.run_tests" />
+    <option name="PARAMETERS" value="--target tests/test_system_activity.py --report build/system-activity-tests.json" />
+    <option name="MODULE_MODE" value="true" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -132,6 +132,20 @@ completed commands may repeat. Disabling an integration or Auto, exiting, losing
 fresh telemetry, or finding no matching rule leaves the external state unchanged.
 Successful command dispatch does not confirm that an application applied a profile.
 
+Monitoring, integration scans, Auto and animations pause while Windows sleeps,
+the session is locked, or its display is off. Work resumes automatically once
+Windows is awake, the session is unlocked and the display is on. Auto first waits
+for new readings and a new target check, then applies its normal stability delay.
+Display dimming alone does not pause work. Saved Auto choices, settings drafts and
+window visibility are retained; resuming does not bring windows to the foreground.
+
+EcoFlow Monitor allows Windows to sleep and turn off its display normally. It does
+not keep the PC awake, change power settings or schedule wake-ups. A CLI command
+already running can finish within its existing timeout; remaining transition
+commands are cancelled. A partial transition may repeat completed commands if Auto
+selects that profile again after recovery. Key expiry includes time spent asleep;
+expired 1Password keys still require **Get new keys**.
+
 Use a profile's **Technical details** field for comments, shown in profile
 tooltips. **Export JSON** includes local paths and rules; review paths before
 sharing. If an integration requires administrator rights, approve its separate

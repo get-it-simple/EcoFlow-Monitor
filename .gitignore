@@ -17,6 +17,7 @@ venv/
 !.run/Build EXE.run.xml
 !.run/Tests (pytest).run.xml
 !.run/Tests (serial).run.xml
+!.run/Tests (system activity).run.xml
 !.run/Tests (performance).run.xml
 !.run/Tests (scoped).run.xml
 !.run/Tests (parallel experiment).run.xml

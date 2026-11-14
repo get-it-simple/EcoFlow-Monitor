@@ -55,12 +55,17 @@ class ElevatedSession:
     def ready(self) -> bool:
         return not self._closed.is_set() and self.connection is not None and self.handle is not None and process_running(self.handle)
 
-    def start(self):
+    def start(self, current=None):
+        from ecoflow_monitor.system_activity import ActivityCancelled
+        if current is not None and not current():
+            raise ActivityCancelled()
         address = "\\\\.\\pipe\\EcoFlowMonitor-" + uuid.uuid4().hex
         accepted = Queue()
         handover = threading.Lock()
         with Listener(address, family="AF_PIPE") as listener:
             try:
+                if current is not None and not current():
+                    raise ActivityCancelled()
                 self.handle, pid = launch_helper(address, os.getpid())
                 def accept():
                     try:

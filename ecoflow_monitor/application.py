@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from ecoflow_monitor.adapters.hotkeys import HotkeyError, HotkeyIssue, HotkeyManager, validate_bindings
 from ecoflow_monitor.adapters.accent import AccentWatcher
 from ecoflow_monitor.adapters.motion import MotionPreference
+from ecoflow_monitor.adapters.system_activity import SystemActivityWatcher
 from ecoflow_monitor.adapters.windows import activate_window
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.i18n import t
@@ -66,6 +67,8 @@ class Application(QObject):
         self._hotkey_signature = None
         self._elevation_checked = {}
         self._elevation_prompted = {}
+        self._activity_paused = False
+        self._paused_timers = []
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.menu = QMenu()
         self.menu.setStyleSheet(menu_style())
@@ -86,7 +89,30 @@ class Application(QObject):
         self.window.visibility_changed.connect(self._sync_menu)
         self.controller.elevation_needed.connect(self._queue_elevation)
         self.app.aboutToQuit.connect(self.stop)
+        self.activity_watcher = SystemActivityWatcher(self, native=native)
+        self.activity_watcher.changed.connect(self.controller.set_system_activity)
+        self.controller.system_activity_changed.connect(self._system_activity_changed)
         self.preferences()
+
+    def _system_activity_changed(self, activity):
+        if activity.paused == self._activity_paused:
+            return
+        self._activity_paused = activity.paused
+        self.confirmations.set_paused(activity.paused)
+        if activity.paused:
+            timers = (self._menu_timer, self.dashboard._log_status_timer, self.dashboard.onepassword._timer)
+            self._paused_timers = [timer for timer in timers if timer.isActive()]
+            for timer in self._paused_timers:
+                timer.stop()
+        else:
+            for timer in self._paused_timers:
+                if timer is self._menu_timer and not self.menu.isVisible():
+                    continue
+                if timer is self.dashboard.onepassword._timer and self.dashboard.onepassword._request is None:
+                    continue
+                timer.start()
+            self._paused_timers.clear()
+            self._elevation_checked.clear()
 
     def _notify_credentials_expired(self):
         if self.native and self.tray.isVisible() and QSystemTrayIcon.supportsMessages():
@@ -122,7 +148,7 @@ class Application(QObject):
         return prompt
 
     def activate_existing_window(self):
-        if self._stopped:
+        if self._stopped or self.controller.system_activity.paused:
             return
         self.open_dashboard()
         target = self.confirmations.dialog or QApplication.activeModalWidget() or self.dashboard
@@ -202,7 +228,7 @@ class Application(QObject):
                 action.setEnabled(not ready and "elevate:" + module.id not in self.controller._active)
 
     def _check_elevation(self):
-        if not self.native or self._stopped or not self._automatic_helpers_allowed:
+        if not self.native or self._stopped or self.controller.system_activity.paused or not self._automatic_helpers_allowed:
             return
         from ecoflow_monitor.adapters.elevation_windows import requires_administrator
         for module in self.controller.settings.integrations:
@@ -220,11 +246,11 @@ class Application(QObject):
             self.controller._submit("elevation_check:" + module.id, check)
 
     def _queue_elevation(self, identity):
-        if self.native and self._automatic_helpers_allowed:
+        if self.native and self._automatic_helpers_allowed and not self.controller.system_activity.paused:
             QTimer.singleShot(0, lambda: self._offer_elevation(identity, automatic=True))
 
     def _offer_elevation(self, identity, automatic=False):
-        if self._stopped:
+        if self._stopped or self.controller.system_activity.paused:
             return
         module = next((item for item in self.controller.settings.integrations if item.id == identity and item.enabled), None)
         if module is None:
@@ -242,11 +268,14 @@ class Application(QObject):
             return (not self._stopped and current is not None and replace(current, auto_enabled=False) == module
                     and not self.controller.integration_adapter.helper_ready(current))
         def accepted(done):
-            if not valid():
+            if not valid() or self.controller.system_activity.paused:
                 done()
                 return
+            epoch = self.controller._activity_epoch
+            def current():
+                return valid() and not self.controller.system_activity.paused and epoch == self.controller._activity_epoch
             self.controller._submit("elevate:" + identity,
-                                    lambda: self.controller.integration_adapter.start_elevated(module) if valid() else None)
+                                    lambda: self.controller.integration_adapter.start_elevated(module, current) if current() else None)
             self._sync_menu()
         self.confirmations.enqueue(ConfirmationRequest("elevate:" + identity,
                                                       lambda owner: elevation_prompt(owner, module.label), accepted, valid))
@@ -284,6 +313,8 @@ class Application(QObject):
             self._check_elevation()
 
     def start(self):
+        self.activity_watcher.start()
+        self.controller.set_system_activity(self.activity_watcher.state)
         if self.native and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         self.widget.refresh()
@@ -297,6 +328,8 @@ class Application(QObject):
             self._startup_consent()
 
     def hotkey(self, action: str):
+        if self._stopped or self.controller.system_activity.paused:
+            return
         if action == "open_dashboard":
             self.open_dashboard()
         elif action == "recover_widgets":
@@ -328,8 +361,11 @@ class Application(QObject):
             return
         if page is not None:
             self.dashboard.navigation.setCurrentRow(page)
+        self.dashboard.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, self.controller.system_activity.paused)
         self.dashboard.show()
         self.sensor_demand.refresh()
+        if self.controller.system_activity.paused:
+            return
         self.dashboard.raise_()
         self.dashboard.activateWindow()
         self.confirmations.raise_active()
@@ -414,6 +450,8 @@ class Application(QObject):
         if self._stopped:
             return
         self._stopped = True
+        self.activity_watcher.stop()
+        self._paused_timers.clear()
         self.confirmations.close()
         self.motion_driver.stop()
         if self.dashboard is not None:

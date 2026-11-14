@@ -13,6 +13,7 @@ import httpx
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.diagnostics import event
 from ecoflow_monitor.polling import CORE, PORT_KEYS, SENSOR_FIELDS, TelemetryPatch
+from ecoflow_monitor.system_activity import ActivityCancelled
 
 
 HOST = "https://api.ecoflow.com"
@@ -153,8 +154,11 @@ class EcoFlowClient:
         self._transport = transport
         self.catalog = None
         self.diagnostic_capture = None
+        self.cancelled = None
 
     def _request(self, method: str, path: str, parameters: dict) -> Any:
+        if self.cancelled is not None and self.cancelled.is_set():
+            raise ActivityCancelled()
         operation = uuid.uuid4().hex[:12]
         started = time.monotonic()
         hidden = (self._credentials.access_key, self._credentials.secret_key, str(parameters.get("sn", "")))

@@ -9,6 +9,7 @@ import psutil
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.system_activity import ActivityCancelled
 
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,20 @@ class IntegrationAdapter:
     def __init__(self):
         self.sessions = {}
 
-    def start_elevated(self, module):
+    def start_elevated(self, module, current=None):
         from ecoflow_monitor.adapters.elevation import ElevatedSession
+        if current is not None and not current():
+            raise ActivityCancelled()
         observation = self.inspect(module)
+        if current is not None and not current():
+            raise ActivityCancelled()
         if not observation.ready:
             raise ValueError(observation.availability)
         session = ElevatedSession(module, observation.executable)
-        session.start()
+        if current is None:
+            session.start()
+        else:
+            session.start(current)
         previous = self.sessions.pop(module.id, None)
         if previous:
             previous.close()
