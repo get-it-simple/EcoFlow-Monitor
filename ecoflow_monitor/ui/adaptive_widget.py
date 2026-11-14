@@ -247,8 +247,10 @@ class AdaptiveWidget(QFrame):
                 if key not in candidates:
                     continue
                 hint = reading.sizeHint()
-                label_height = reading.label.heightForWidth(max(1, target_width - round(2 * padding * scale))) if labels else 0
-                card_height = max(card_height, hint.height(), reading.value.minimumHeight() + max(0, label_height) + round((2 * padding + (4 if labels else 0)) * scale))
+                inner_width = max(1, target_width - round(2 * padding * scale))
+                label_height = reading.label.heightForWidth(inner_width) if labels else 0
+                value_height = max(reading.value.minimumHeight(), reading.value.heightForWidth(inner_width))
+                card_height = max(card_height, hint.height(), value_height + max(0, label_height) + round((2 * padding + (4 if labels else 0)) * scale))
             usable_height = max(0, self.height() - 2 * inset - metadata_height)
             rows = max(0, (usable_height + gap) // (card_height + gap))
             self.composition = widget_layout(preferences, width, height, columns, rows, WIDGET)

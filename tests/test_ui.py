@@ -25,6 +25,33 @@ class NoCredentials:
         raise AssertionError("UI tests must not access credentials")
 
 
+def test_remaining_time_switches_between_charge_limit_and_runtime(runtime, qapp):
+    controller = runtime.controller
+    controller.settings = replace(controller.settings, capacity_wh=2000, language="en")
+    i18n.setup("en")
+    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80)
+    controller.connection = ConnectionState.LIVE
+    controller.changed.emit()
+    readings = (runtime.window.monitoring.readings["estimated_runtime"],
+                runtime.widget.readings["estimated_runtime"], runtime.widget.details.readings["estimated_runtime"])
+    for reading in readings:
+        reading.refresh()
+        assert reading.label.toolTip() == "Time to charge limit"
+        assert reading.value.text() == "≈ 1 h 12 min"
+        assert "input minus output" in reading.toolTip()
+        assert "Time to charge limit" in reading.accessibleName()
+    controller.telemetry = replace(controller.telemetry, input_w=0)
+    for reading in readings:
+        reading.refresh()
+        assert reading.label.toolTip() == i18n.t("estimated_runtime")
+        assert reading.value.text() == "≈ 3 h 0 min"
+    controller.telemetry = replace(controller.telemetry, input_w=200)
+    assert metric_text(controller, "estimated_runtime") == "—"
+    controller.telemetry = replace(controller.telemetry, input_w=700)
+    controller.connection = ConnectionState.STALE
+    assert metric_text(controller, "estimated_runtime") == "—"
+
+
 @pytest.mark.parametrize("conditions", [("input", "soc"), ("soc",), ("input",), ()])
 @pytest.mark.design
 def test_system_rule_fields_fill_available_table_width(qapp, conditions):
@@ -51,6 +78,40 @@ def test_system_rule_fields_fill_available_table_width(qapp, conditions):
     finally:
         editor.close()
         editor.deleteLater()
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+def test_charging_time_label_fits_monitor_and_widget(runtime, qapp, monkeypatch, language, scale):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QScreen
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: QRect(0, 0, 1920, 1200))
+    controller = runtime.controller
+    controller.settings = replace(controller.settings, language=language, scale=scale,
+                                  widget=replace(controller.settings.widget, enabled=True, scale=scale))
+    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80)
+    controller.connection = ConnectionState.LIVE
+    i18n.setup(language)
+    runtime.preferences()
+    runtime.widget.resize(round(512 * scale), round(350 * scale))
+    runtime.widget.refresh()
+    runtime.open_dashboard(0)
+    qapp.processEvents()
+    assert "estimated_runtime" in runtime.widget.composition.visible
+    for reading in (runtime.window.monitoring.readings["estimated_runtime"], runtime.widget.readings["estimated_runtime"]):
+        reading.refresh()
+        assert reading.rect().contains(reading.label.geometry())
+        if reading.label.wordWrap():
+            assert reading.label.height() >= reading.label.heightForWidth(reading.label.width())
+        assert reading.rect().contains(reading.value.geometry())
+        if reading.value.fontMetrics().horizontalAdvance(reading.value.text()) > reading.value.width():
+            assert reading.value.wordWrap()
+        assert reading.value.height() >= reading.value.heightForWidth(reading.value.width())
+    destination = Path("build/connection-fixes")
+    destination.mkdir(parents=True, exist_ok=True)
+    runtime.window.grab().save(str(destination / f"charge-monitor-{language}-{scale}.png"))
+    runtime.widget.grab().save(str(destination / f"charge-widget-{language}-{scale}.png"))
 
 
 @pytest.mark.parametrize("language", ["en", "uk"])

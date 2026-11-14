@@ -17,7 +17,7 @@ from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
 from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.device_metadata import DeviceMetadataStore
-from ecoflow_monitor.domain import AutomationGate, ConnectionState, resolve_limit, runtime_hours
+from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, PollingState, TelemetryPatch, dependencies
@@ -182,8 +182,8 @@ class Controller(QObject):
             return "ready"
         if key == "maximum_charge_level" and self.maximum.source == "manual":
             return "ready"
-        if key == "estimated_runtime" and self.minimum.source == "manual":
-            keys = CORE
+        if key == "estimated_runtime":
+            keys = self.remaining_time_sensors
         if self.connection == ConnectionState.AUTH_ERROR and "api" not in self._active:
             return "stale" if any(self.polling.samples.get(sensor) is not None and self.polling.samples[sensor].value is not None for sensor in keys) else "missing"
         return self.polling.presentation(keys, self.clock())
@@ -208,6 +208,23 @@ class Controller(QObject):
     def runtime(self):
         keys = CORE | ({"minimum_discharge_level"} if self.minimum.source != "manual" else set())
         return runtime_hours(self.telemetry, self.effective_capacity, self.minimum.value, self.fresh_for(keys))
+
+    @property
+    def charging(self):
+        snapshot = self.telemetry
+        return snapshot is not None and snapshot.input_w is not None and snapshot.output_w is not None and snapshot.input_w > snapshot.output_w
+
+    @property
+    def remaining_time_sensors(self):
+        limit = self.maximum if self.charging else self.minimum
+        key = "maximum_charge_level" if self.charging else "minimum_discharge_level"
+        return CORE | ({key} if limit.source != "manual" else set())
+
+    @property
+    def remaining_time(self):
+        if self.charging:
+            return charge_hours(self.telemetry, self.effective_capacity, self.maximum.value, self.fresh_for(self.remaining_time_sensors))
+        return self.runtime
 
     @property
     def device_name(self):

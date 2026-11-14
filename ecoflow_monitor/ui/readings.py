@@ -28,6 +28,7 @@ class MetricReading(MotionSurface):
         self.label = ValueLabel(self)
         self.label.setWordWrap(True)
         self.value = ValueLabel(self)
+        self.value.setWordWrap(key == "estimated_runtime")
         from ecoflow_monitor.ui.polling import LoadingIndicator
         self.loader = LoadingIndicator(controller, self.value)
         policy = self.value.sizePolicy()
@@ -69,7 +70,7 @@ class MetricReading(MotionSurface):
         text = metric_text(self.controller, self.key)
         state = self.controller.reading_state(self.key)
         display = " " if state == "loading" else text
-        label = metric_label(self.key)
+        label = metric_label(self.key, self.controller)
         width = getattr(self, "label_width", None)
         self.label.setText(self.label.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, width) if width is not None else label)
         self.label.setToolTip(label)
@@ -82,7 +83,7 @@ class MetricReading(MotionSurface):
         if text == "—":
             tooltip += "\n" + t("missing_data")
         self.setToolTip(tooltip)
-        self.setAccessibleName(metric_label(self.key) + ": " + (t("sensor_" + state) if state in {"loading", "refreshing"} else text))
+        self.setAccessibleName(label + ": " + (t("sensor_" + state) if state in {"loading", "refreshing"} else text))
         self.value.setAccessibleName(self.accessibleName())
         if self.key == "battery_level":
             color = COLORS["output" if self.motion.state.mode == "discharging" else "accent"]

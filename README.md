@@ -74,7 +74,8 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 ## Features
 
 - Monitoring cards with input/output power, charge, separate limits, port
-  loads, and approximate runtime without input power.
+  loads, approximate runtime without input power, and estimated time to the charge
+  limit while charging (based on input minus output power).
 - Optional CLI integrations with their own profiles, activation/deactivation
   actions, ordered rules, and global hotkeys.
 - Automatic profile selection using running applications, input power, and

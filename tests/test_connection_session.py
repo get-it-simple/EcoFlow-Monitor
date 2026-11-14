@@ -402,6 +402,34 @@ def test_unsupported_device_does_not_retry_when_visibility_changes(runtime):
 
 
 @pytest.mark.design
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
+def test_startup_confirmation_fits_wrapped_message(runtime, qapp, language, scale):
+    from pathlib import Path
+    from PySide6.QtWidgets import QLabel
+    from ecoflow_monitor import i18n
+    i18n.setup(language)
+    runtime.dashboard._scale = scale
+    message = i18n.t("startup_consent_description") + "\n\n" + "\n".join(
+        "• " + i18n.t(key).format(name="MSI Afterburner") for key in ("startup_onepassword", "startup_device_list", "startup_helper"))
+    dialog = runtime._permission_prompt(runtime.dashboard, "startup_consent_title", message)
+    try:
+        dialog.show()
+        qapp.processEvents()
+        label = dialog.findChild(QLabel, "qt_msgbox_label")
+        assert dialog.rect().contains(label.geometry()), (dialog.size(), label.geometry())
+        assert label.height() >= label.heightForWidth(label.width())
+        for button in dialog.buttons():
+            assert dialog.rect().contains(button.geometry().translated(button.parentWidget().mapTo(dialog, button.parentWidget().rect().topLeft())))
+        destination = Path("build/connection-fixes")
+        destination.mkdir(parents=True, exist_ok=True)
+        dialog.grab().save(str(destination / f"startup-{language}-{scale}.png"))
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+@pytest.mark.design
 def test_long_confirmation_scrolls_on_small_work_area(runtime, qapp, monkeypatch):
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QScreen

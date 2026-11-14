@@ -166,7 +166,7 @@ def test_controller_requests_visible_sensors_and_calculation_dependencies(sensor
     controller.set_sensor_demand("widget", {"estimated_runtime"})
     controller.tick()
     wait(qapp, lambda: "api" not in controller._active)
-    assert set(calls[-1]) == {"cmsMinDsgSoc"}
+    assert set(calls[-1]) == {"cmsMinDsgSoc", "cmsMaxChgSoc"}
     assert controller.runtime is not None
     controller.set_sensor_demand("widget", ())
     count = len(calls)
@@ -189,6 +189,28 @@ def test_hidden_auto_requirements_are_minimal(sensor_controller, qapp):
     controller.refresh()
     wait(qapp, lambda: "api" not in controller._active)
     assert set(calls[-1]) == {"powInSumW", "powOutSumW", "cmsBattSoc", "cmsChgDsgState", "cmsDsgRemTime", "cmsChgRemTime"}
+
+
+def test_charge_time_uses_fresh_upper_limit_and_manual_fallback(sensor_controller, qapp):
+    controller, now, calls, values, failures = sensor_controller
+    controller.settings = replace(controller.settings, capacity_wh=2000, manual_max=80)
+    values.update(powInSumW=700, powOutSumW=200, cmsBattSoc=50, cmsMaxChgSoc=90)
+    controller.set_sensor_demand("widget", {"estimated_runtime"})
+    controller.refresh()
+    wait(qapp, lambda: "api" not in controller._active)
+    assert controller.remaining_time == 1.6
+    assert controller.reading_state("estimated_runtime") == "ready"
+    assert {"cmsMinDsgSoc", "cmsMaxChgSoc"} <= set(calls[-1])
+    now[0] += 901
+    complete(controller.polling, {"input_power": 700, "output_power": 200, "battery_level": 50}, now[0])
+    assert controller.remaining_time is None
+    complete(controller.polling, {}, now[0], ("maximum_charge_level",))
+    assert controller.remaining_time is None
+    controller.telemetry = replace(controller.telemetry, max_soc=None)
+    assert controller.remaining_time == 1.2
+    assert controller.reading_state("estimated_runtime") == "ready"
+    controller.settings = replace(controller.settings, manual_max=None)
+    assert controller.remaining_time is None
 
 
 def test_timeout_retains_values_and_retries_without_renewing_credentials(sensor_controller, qapp, monkeypatch):

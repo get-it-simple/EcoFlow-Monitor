@@ -31,7 +31,7 @@ ATTRIBUTES = {
 
 def dependencies(key: str) -> frozenset[str]:
     if key == "estimated_runtime":
-        return CORE | {"minimum_discharge_level"}
+        return CORE | LIMITS
     if key.startswith("anderson_"):
         return frozenset(("anderson",))
     return frozenset((key,)) if key in SENSOR_FIELDS else frozenset()

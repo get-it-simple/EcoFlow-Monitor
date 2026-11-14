@@ -87,6 +87,19 @@ def runtime_hours(telemetry: Telemetry | None, capacity_wh: float, floor: float 
     return capacity_wh * max(telemetry.soc_pct - floor, 0) / 100 / telemetry.output_w
 
 
+def charge_hours(telemetry: Telemetry | None, capacity_wh: float, ceiling: float | None, fresh: bool) -> float | None:
+    if not fresh or telemetry is None or ceiling is None:
+        return None
+    values = (capacity_wh, ceiling, telemetry.input_w, telemetry.output_w, telemetry.soc_pct)
+    if any(value is None or isinstance(value, bool) or not math.isfinite(value) for value in values):
+        return None
+    if capacity_wh <= 0 or not 0 <= ceiling <= 100 or not 0 <= telemetry.soc_pct <= 100:
+        return None
+    if telemetry.output_w < 0 or telemetry.input_w <= telemetry.output_w:
+        return None
+    return capacity_wh * max(ceiling - telemetry.soc_pct, 0) / 100 / (telemetry.input_w - telemetry.output_w)
+
+
 class RuleConditions(Protocol):
     @property
     def enabled(self) -> bool: ...

@@ -1,6 +1,6 @@
 from typing import cast
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QAbstractItemView, QAbstractSpinBox, QBoxLayout, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit, QListWidget, QMenu, QMessageBox, QPlainTextEdit, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle, QTableWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 
@@ -563,7 +563,30 @@ class DesignDialog(QDialog):
 
 
 class DialogChrome(QObject):
+    @staticmethod
+    def _fit_message(dialog):
+        if not dialog.isVisible():
+            return
+        label = dialog.findChild(QLabel, "qt_msgbox_label")
+        if label is None:
+            return
+        scale = dialog.property("dialog_scale") or 1
+        area = dialog.screen().availableGeometry()
+        width = min(round(280 * scale), max(120, area.width() - round(120 * scale)))
+        scroll = dialog.findChild(QScrollArea, "dialog_message_scroll")
+        if scroll is not None:
+            width = min(width, scroll.width() - scroll.verticalScrollBar().sizeHint().width() - 2 * scroll.frameWidth())
+        label.setWordWrap(True)
+        label.setFixedWidth(width)
+        label.setMinimumHeight(label.heightForWidth(width))
+        layout = dialog.layout()
+        layout.invalidate()
+        dialog.setFixedSize(layout.totalSizeHint().boundedTo(area.size()))
+        layout.activate()
+
     def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Show and isinstance(watched, QMessageBox) and watched.property("design_chrome"):
+            watched._message_fit_timer.start(0)
         if event.type() == QEvent.Type.Paint and isinstance(watched, QMessageBox) and watched.property("design_chrome"):
             painter = QPainter(watched)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -579,6 +602,9 @@ class DialogChrome(QObject):
                      if parent is not None else 1)
             watched.setProperty("dialog_scale", scale)
             watched.setProperty("design_chrome", True)
+            watched._message_fit_timer = QTimer(watched)
+            watched._message_fit_timer.setSingleShot(True)
+            watched._message_fit_timer.timeout.connect(lambda: self._fit_message(watched))
             watched.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
             watched.setWindowFlag(Qt.WindowType.FramelessWindowHint)
             watched.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
