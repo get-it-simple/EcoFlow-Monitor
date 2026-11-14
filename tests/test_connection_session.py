@@ -406,21 +406,39 @@ def test_unsupported_device_does_not_retry_when_visibility_changes(runtime):
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 def test_startup_confirmation_fits_wrapped_message(runtime, qapp, language, scale):
     from pathlib import Path
-    from PySide6.QtWidgets import QLabel
+    from PySide6.QtCore import QEvent, QSize
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QLabel, QScrollArea, QSizeGrip
     from ecoflow_monitor import i18n
     i18n.setup(language)
     runtime.dashboard._scale = scale
+    runtime.open_dashboard()
     message = i18n.t("startup_consent_description") + "\n\n" + "\n".join(
         "• " + i18n.t(key).format(name="MSI Afterburner") for key in ("startup_onepassword", "startup_device_list", "startup_helper"))
     dialog = runtime._permission_prompt(runtime.dashboard, "startup_consent_title", message)
     try:
         dialog.show()
-        qapp.processEvents()
+        QTest.qWait(100)
         label = dialog.findChild(QLabel, "qt_msgbox_label")
-        assert dialog.rect().contains(label.geometry()), (dialog.size(), label.geometry())
+        scroll = dialog.findChild(QScrollArea, "dialog_message_scroll")
+        assert label.wordWrap()
+        assert label.width() <= dialog.width()
         assert label.height() >= label.heightForWidth(label.width())
-        for button in dialog.buttons():
-            assert dialog.rect().contains(button.geometry().translated(button.parentWidget().mapTo(dialog, button.parentWidget().rect().topLeft())))
+        assert dialog.findChild(QSizeGrip).isVisible()
+        initial = dialog.size()
+        for size in (dialog.minimumSize() + QSize(80, 120), initial):
+            dialog.resize(size)
+            QTest.qWait(20)
+            resized = dialog.size()
+            assert resized == size.boundedTo(dialog.maximumSize())
+            qapp.sendEvent(dialog, QEvent(QEvent.Type.LayoutRequest))
+            QTest.qWait(20)
+            assert dialog.size() == resized
+            assert label.wordWrap()
+            assert label.width() <= scroll.viewport().width()
+            assert label.height() >= label.heightForWidth(label.width())
+            for button in dialog.buttons():
+                assert dialog.rect().contains(button.geometry().translated(button.parentWidget().mapTo(dialog, button.parentWidget().rect().topLeft())))
         destination = Path("build/connection-fixes")
         destination.mkdir(parents=True, exist_ok=True)
         dialog.grab().save(str(destination / f"startup-{language}-{scale}.png"))
@@ -443,6 +461,7 @@ def test_long_confirmation_scrolls_on_small_work_area(runtime, qapp, monkeypatch
         scroll = dialog.findChild(QScrollArea, "dialog_message_scroll")
         assert scroll is not None and scroll.verticalScrollBar().maximum() > 0
         assert dialog.height() <= 600 and dialog.width() <= 800
+        assert dialog.screen().availableGeometry().contains(dialog.geometry())
         assert dialog.button(QMessageBox.StandardButton.No).isVisible()
     finally:
         dialog.close()
