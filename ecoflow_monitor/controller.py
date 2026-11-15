@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field, replace
+import hmac
 import logging
+import secrets
 import threading
 import time
 import uuid
@@ -66,6 +68,20 @@ class IntegrationState:
     auto_reason: str = "automation_paused"
 
 
+@dataclass(frozen=True)
+class DiscoverySnapshot:
+    devices: tuple
+    settings: AppSettings = field(repr=False)
+    credential_identity: bytes = field(repr=False)
+
+    def matches(self, settings, credential_identity):
+        if settings.credential_source != self.settings.credential_source:
+            return False
+        if settings.credential_source == "1password":
+            return (settings.onepassword_access_ref, settings.onepassword_secret_ref) == (self.settings.onepassword_access_ref, self.settings.onepassword_secret_ref)
+        return hmac.compare_digest(credential_identity, self.credential_identity) if credential_identity is not None else settings.credential_ref == self.settings.credential_ref
+
+
 class Controller(QObject):
     changed = Signal()
     preferences_changed = Signal()
@@ -93,6 +109,8 @@ class Controller(QObject):
         self.interactions = None
         self.access_allowed = True
         self.catalog = None
+        self._discovery_snapshot = None
+        self._discovery_key = secrets.token_bytes(32)
         self.metadata = DeviceMetadataStore(store.path.with_name("device-metadata.json"))
         self._unsupported_notified = set()
         self._diagnostic_failures = ()
@@ -342,27 +360,29 @@ class Controller(QObject):
         self._active[kind] = task
         self._pool.start(task)
 
-    def discover(self, supplied: Credentials | None = None, *, user_initiated=True) -> None:
+    def discover(self, supplied: Credentials | None = None, source_settings=None, *, user_initiated=True) -> None:
         if self._stopped or self.system_activity.paused:
             return
         if user_initiated:
             self.access_allowed = True
         if not self.access_allowed:
             return
-        if supplied is None and self._check_credential_expiry():
+        if supplied is None and (source_settings is None or source_settings.credential_source == "1password") and self._check_credential_expiry():
             self.devices_ready.emit(())
             return
         if "api" in self._active:
-            self._discovery_pending = (supplied,)
+            self._discovery_pending = (supplied, source_settings)
             return
-        settings, cancelled = self.settings, self._credential_cancelled
+        settings, cancelled = source_settings or self.settings, self._credential_cancelled
+        self._discovery_snapshot = None
         event("device_discovery_started")
         self._api_mode = "devices"
         def operation():
             credentials = supplied if supplied is not None else self._read_credentials(settings, cancelled)
             if credentials is None:
                 raise CredentialError("credentials_required")
-            return ("devices", self._client(credentials, cancelled).devices(), supplied is None)
+            devices = self._client(credentials, cancelled, settings).devices()
+            return ("devices", devices, supplied is None and settings == self.settings, DiscoverySnapshot(devices, settings, self._discovery_identity(credentials)))
         self._submit("api", operation)
 
     def refresh(self, *, user_initiated=True) -> None:
@@ -414,7 +434,7 @@ class Controller(QObject):
                 if isinstance(client, EcoFlowClient):
                     client.catalog = catalog if catalog is not None else client.devices()
                     device = next((item for item in client.catalog if item.serial == serial), None)
-                    client.profile = client.profile_catalog.resolve(dict(settings.device_profile_assignments).get(serial, ""), device.model_id if device else "")
+                    client.profile = client.profile_catalog.resolve(dict(settings.device_profile_assignments).get(serial, ""), device.model_id if device else "", device.name if device else "")
                 if hasattr(client, "read_quotas"):
                     return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified), getattr(client, "catalog", None), getattr(client, "profile_catalog", None))
                 return ("telemetry", client.read(serial), getattr(client, "catalog", None))
@@ -450,8 +470,16 @@ class Controller(QObject):
                 snapshot = load_catalog(self.profile_directory, settings.custom_device_profiles)
             client.profile_catalog = snapshot
             device = next((item for item in self.catalog or () if item.serial == settings.serial), None)
-            client.profile = snapshot.resolve(dict(settings.device_profile_assignments).get(settings.serial, ""), device.model_id if device else "")
+            client.profile = snapshot.resolve(dict(settings.device_profile_assignments).get(settings.serial, ""), device.model_id if device else "", device.name if device else "")
         return client
+
+    def _discovery_identity(self, credentials):
+        digest = hmac.new(self._discovery_key, digestmod="sha256")
+        access = credentials.access_key.encode("utf-8")
+        digest.update(len(access).to_bytes(8, "big"))
+        digest.update(access)
+        digest.update(credentials.secret_key.encode("utf-8"))
+        return digest.digest()
 
     @property
     def profile_directory(self):
@@ -462,7 +490,7 @@ class Controller(QObject):
         if self.profile_catalog is None:
             return None
         device = next((item for item in self.catalog or () if item.serial == self.settings.serial), None)
-        return self.profile_catalog.resolve(dict(self.settings.device_profile_assignments).get(self.settings.serial, ""), device.model_id if device else "")
+        return self.profile_catalog.resolve(dict(self.settings.device_profile_assignments).get(self.settings.serial, ""), device.model_id if device else "", device.name if device else "")
 
     def scan_profiles(self, enabled):
         if self._stopped or self.system_activity.paused or "profiles" in self._active:
@@ -565,6 +593,9 @@ class Controller(QObject):
         if profile_catalog is not None and profile_catalog.custom_enabled != settings.custom_device_profiles:
             raise ValueError("device_profile_invalid")
         previous_profile_catalog = self.profile_catalog
+        discovery = self._discovery_snapshot
+        identity = self._discovery_identity(credentials) if credentials is not None else None
+        discovered_devices = discovery.devices if discovery is not None and discovery.matches(settings, identity) else None
         write_local = credentials is not None and settings.credential_source == "windows"
         if write_local:
             settings = replace(settings, credential_ref="EcoFlowMonitor/" + uuid.uuid4().hex)
@@ -637,6 +668,11 @@ class Controller(QObject):
                 self._api_pending = False
         if previous.credential_ref != settings.credential_ref:
             self.catalog = None
+        if discovered_devices is not None:
+            self.catalog = discovered_devices
+            self.metadata.remember(discovered_devices)
+            self._save_metadata()
+        self._discovery_snapshot = None
         if credentials is not None and settings.credential_source == "1password" and not self.credential_renewal_required:
             identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
             try:
@@ -853,6 +889,7 @@ class Controller(QObject):
                         self.devices_ready.emit(())
                 elif result[0] == "devices":
                     event("device_discovery_completed", count=len(result[1]))
+                    self._discovery_snapshot = result[3] if len(result) > 3 else None
                     if len(result) < 3 or result[2]:
                         self.catalog = result[1]
                         self.metadata.remember(result[1])
@@ -957,9 +994,9 @@ class Controller(QObject):
         if self._stopped or self.system_activity.paused or "api" in self._active:
             return
         if self._discovery_pending is not None:
-            supplied, = self._discovery_pending
+            pending = self._discovery_pending
             self._discovery_pending = None
-            self.discover(supplied, user_initiated=False)
+            self.discover(*pending, user_initiated=False)
         elif self._diagnostic_pending:
             self._diagnostic_pending = False
             self.collect_diagnostics()
@@ -967,11 +1004,15 @@ class Controller(QObject):
             self._api_pending = False
             self.refresh(user_initiated=False)
 
+    def discard_discovery(self):
+        self._discovery_snapshot = None
+
     def stop(self) -> None:
         if self._stopped:
             return
         event("application_stopping")
         self._stopped = True
+        self._discovery_snapshot = None
         self._credential_cancelled.set()
         self._work_cancelled.set()
         try:

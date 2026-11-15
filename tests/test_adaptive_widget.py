@@ -3,7 +3,7 @@ import sys
 
 import pytest
 from qt_helpers import close_runtime
-from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPointF, Qt
 from PySide6.QtGui import QEnterEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
@@ -220,6 +220,28 @@ def test_detail_panel_retains_open_state_across_pin_and_refresh(runtime):
     assert not widget.details.isVisible() and not widget.reveal_button.isChecked()
 
 
+def test_telemetry_refresh_does_not_hide_open_detail_readings(runtime, qapp):
+    controller = runtime.controller
+    controller.update_widget(enabled=True, large_metrics=METRICS[:3], expanded_metrics=("estimated_runtime",))
+    widget = runtime.widget
+    widget.reveal_button.setChecked(True)
+    QTest.qWait(40)
+    reading = widget.details.readings["estimated_runtime"]
+    hidden = []
+    class VisibilityObserver(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.Hide:
+                hidden.append(True)
+            return False
+    observer = VisibilityObserver(reading)
+    reading.installEventFilter(observer)
+    for _ in range(5):
+        controller.changed.emit()
+        qapp.processEvents()
+    assert widget.details.isVisible() and reading.isVisible()
+    assert not hidden
+
+
 @pytest.mark.design
 @pytest.mark.parametrize("size", [(240, 56), (320, 88), (360, 320), (760, 88)])
 @pytest.mark.parametrize("language", ["en", "uk"])
@@ -228,7 +250,7 @@ def test_visible_readings_fit_and_have_inner_padding(runtime, qapp, size, langua
     runtime.controller.update_widget(enabled=True, opacity=0)
     widget = runtime.widget
     widget.resize(*size)
-    qapp.processEvents()
+    QTest.qWait(40)
     if size == (240, 56) or size == (320, 88):
         assert widget.composition.visible == METRICS[:3]
     assert widget.composition.visible
@@ -245,9 +267,9 @@ def test_large_to_wide_releases_hero_minimum_without_clipping(runtime, qapp):
     runtime.controller.update_widget(enabled=True)
     widget = runtime.widget
     widget.resize(512, 350)
-    qapp.processEvents()
+    QTest.qWait(40)
     widget.resize(760, 88)
-    qapp.processEvents()
+    QTest.qWait(40)
     assert widget.composition.visible
     for key in widget.composition.visible:
         reading = widget.readings[key]

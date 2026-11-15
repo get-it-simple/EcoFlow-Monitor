@@ -48,6 +48,9 @@ class SyntheticCredentials:
     def read(self, reference):
         return Credentials("synthetic-access", "synthetic-secret")
 
+    def write(self, reference, credentials):
+        return None
+
 
 @pytest.fixture
 def controller(tmp_path, qapp, session_cache):
@@ -66,6 +69,59 @@ def test_bundled_catalog_has_only_working_reference_and_eight_unverified_example
     assert all(example["evidence"] == "documentation" for example in catalog.examples)
     incomplete = {example["id"] for example in catalog.examples if not DeviceProfile.from_dict(example, "user").usable}
     assert incomplete == {"deltamax", "river2pro"}
+
+
+@pytest.mark.parametrize("name", ["DELTA 3 MAX", "delta 3 Max-1026", "  Delta   3 MAX - 42  "])
+def test_automatic_profile_recognizes_known_device_names(name):
+    assert builtin_catalog().resolve("", "", name) is baseline_profile()
+
+
+@pytest.mark.parametrize("name", ["DELTA 3 MAX PLUS", "My DELTA 3 MAX", "DELTA 3", "DELTA 3 MAX-extra", "TEST"])
+def test_automatic_profile_does_not_guess_unknown_names(name):
+    assert builtin_catalog().resolve("", "", name) is None
+
+
+def test_explicit_profile_and_model_id_precede_name_matching():
+    catalog = builtin_catalog()
+    first = replace(baseline_profile(), id="first", model_ids=("model",))
+    second = replace(first, id="second")
+    catalog = replace(catalog, profiles=(first, second))
+    assert catalog.resolve(second.reference, "model", "DELTA 3 MAX") is second
+    assert catalog.resolve("", "model", "DELTA 3 MAX") is None
+    catalog = replace(catalog, profiles=(first, replace(second, model_ids=(), model_names=())))
+    assert catalog.resolve("", "model", "unknown") is first
+    assert catalog.resolve("missing:profile", "model", "DELTA 3 MAX") is None
+
+
+@pytest.mark.parametrize("aliases", ["DELTA", [""], [123], ["model\nname"], ["x" * 129]])
+def test_invalid_model_names_are_rejected(aliases):
+    with pytest.raises(ProfileError, match="device_profile_invalid"):
+        DeviceProfile.from_dict(profile_data(model_names=aliases), "user")
+
+
+@pytest.mark.parametrize("same_credentials", [True, False])
+def test_save_adopts_only_matching_discovery_and_recognizes_automatic_profile(controller, qapp, same_credentials):
+    requests = []
+    pair = Credentials("draft-access", "draft-secret")
+    def handle(request):
+        requests.append(request.url.path)
+        data = [{"sn": "TEST", "deviceName": "DELTA 3 Max-1026", "online": 1}] if request.url.path.endswith("/list") else {"powInSumW": 100, "powOutSumW": 50, "cmsBattSoc": 75}
+        return httpx.Response(200, json={"code": "0", "data": data})
+    controller.client_factory = lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle))
+    controller.discover(pair)
+    wait_until(qapp, lambda: "api" not in controller._active)
+    assert controller.catalog is None
+    assert "draft-secret" not in repr(controller._discovery_snapshot)
+    controller.apply_settings(replace(controller.settings, device_profile_assignments=()), pair if same_credentials else Credentials("other", "other"))
+    if same_credentials:
+        assert controller.device_profile is baseline_profile()
+        controller.refresh()
+        wait_until(qapp, lambda: "api" not in controller._active)
+        assert controller.connection == ConnectionState.LIVE
+        assert requests.count("/iot-open/sign/device/list") == 1
+    else:
+        assert controller.catalog is None and controller.device_profile is None
+    assert controller._discovery_snapshot is None
 
 
 def test_mapping_distinguishes_literal_dotted_keys_nested_paths_scaling_sum_and_arrays():
@@ -213,12 +269,12 @@ def test_old_settings_migrate_current_station_but_new_stations_require_selection
     assert AppSettings.from_dict(new.to_dict()) == new
 
 
-def test_unassigned_device_is_not_probed_with_delta3max_mapping(controller, qapp):
+def test_unknown_device_is_not_probed_with_delta3max_mapping(controller, qapp):
     controller.settings = replace(controller.settings, device_profile_assignments=())
     requests = []
     def handle(request):
         requests.append(request.url.path)
-        return httpx.Response(200, json={"code": "0", "data": [{"sn": "TEST", "deviceName": "DELTA 3 MAX", "online": 1}]})
+        return httpx.Response(200, json={"code": "0", "data": [{"sn": "TEST", "deviceName": "Unknown station", "online": 1}]})
     controller.client_factory = lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle))
     controller.refresh()
     wait_until(qapp, lambda: "api" not in controller._active)
@@ -300,11 +356,15 @@ def test_onepassword_references_are_masked_and_create_fields_are_independent(con
         assert window.access.text() == window.secret.text() == ""
         panel.source.setCurrentIndex(0)
         assert panel.access_ref.echoMode() == QLineEdit.EchoMode.Password
-        assert panel.create_access.text() == panel.create_secret.text() == ""
+        assert panel.create_access.text() == "new-access"
+        assert panel.create_secret.text() == "new-secret"
         assert window.gather().onepassword_access_ref == "op://Test/Item/username"
         panel.source.setCurrentIndex(1)
         panel.access_ref.setText("incomplete draft")
         panel.source.setCurrentIndex(0)
+        with pytest.raises(ValueError):
+            window.gather()
+        panel.storage_switches["windows"].setChecked(True)
         assert window.gather().onepassword_access_ref == "op://Test/Item/username"
     finally:
         window.reject()

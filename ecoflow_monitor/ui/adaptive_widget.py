@@ -18,7 +18,7 @@ from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.resize import WindowResize
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
 from ecoflow_monitor.ui.theme import settings_style
-from ecoflow_monitor.ui.tokens import RADIUS, TOKENS, surface
+from ecoflow_monitor.ui.tokens import RADIUS, REFLOW_INTERVAL_MS, TOKENS, surface
 from ecoflow_monitor.ui.typography import ValueLabel
 
 
@@ -137,6 +137,10 @@ class AdaptiveWidget(QFrame):
         self._geometry_timer.setSingleShot(True)
         self._geometry_timer.setInterval(500)
         self._geometry_timer.timeout.connect(self._save_geometry)
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.setInterval(REFLOW_INTERVAL_MS)
+        self._reflow_timer.timeout.connect(self._resize_layout)
         QApplication.instance().installEventFilter(self)
         QApplication.instance().focusChanged.connect(self._toolbar_visibility)
         controller.changed.connect(self.refresh)
@@ -211,6 +215,17 @@ class AdaptiveWidget(QFrame):
     def _reflow(self):
         if self._laying_out or not hasattr(self, "scale"):
             return
+        preferences = self.controller.ui_settings.widget
+        signature = (self.size(), self.scale, replace(preferences, geometry=(0, 0, 0, 0)),
+                     self.controller.ui_settings.language, self.controller.fresh)
+        if signature == getattr(self, "_layout_signature", None):
+            for key in self.composition.visible:
+                self.readings[key].refresh()
+            for key in self.composition.details:
+                self.details.readings[key].refresh()
+            self.progress.refresh()
+            return
+        self._layout_signature = signature
         self._laying_out = True
         try:
             preferences = self.controller.ui_settings.widget
@@ -243,14 +258,10 @@ class AdaptiveWidget(QFrame):
             compact_label_width = max(1, target_width - round(2 * padding * scale)) if probe.mode != "large" or probe.wide else None
             for key, reading in self.readings.items():
                 reading.material = self.shell.material
-                reading.configure(scale, value_size, preferences.opacity == 0, labels, preferences.values_on_hover and not minimal, padding, 0, compact_label_width)
+                reading.configure(scale, value_size, preferences.opacity == 0, labels, preferences.values_on_hover and not minimal, padding, 0, compact_label_width, fit=True)
                 if key not in candidates:
                     continue
-                hint = reading.sizeHint()
-                inner_width = max(1, target_width - round(2 * padding * scale))
-                label_height = reading.label.heightForWidth(inner_width) if labels else 0
-                value_height = max(reading.value.minimumHeight(), reading.value.heightForWidth(inner_width))
-                card_height = max(card_height, hint.height(), value_height + max(0, label_height) + round((2 * padding + (4 if labels else 0)) * scale))
+                card_height = max(card_height, reading.baseline_size(target_width).height())
             usable_height = max(0, self.height() - 2 * inset - metadata_height)
             rows = max(0, (usable_height + gap) // (card_height + gap))
             self.composition = widget_layout(preferences, width, height, columns, rows, WIDGET)
@@ -264,7 +275,10 @@ class AdaptiveWidget(QFrame):
                 reading = self.readings[key]
                 reading.setGeometry(inset + index % columns * (target_width + gap), y + index // columns * (row_height + gap), target_width, row_height)
                 if key == "battery_level" and probe.mode == "large" and not probe.wide and row_height >= round(124 * scale):
-                    reading.configure(scale, WIDGET["heroValueSize"], preferences.opacity == 0, labels, preferences.values_on_hover, padding, 0)
+                    reading.configure(scale, WIDGET["heroValueSize"], preferences.opacity == 0, labels, preferences.values_on_hover, padding, 0, fit=True, reserved_bottom=16)
+                    if reading.baseline_size(target_width).width() > target_width:
+                        reading.configure(scale, value_size, preferences.opacity == 0, labels, preferences.values_on_hover, padding, 0, fit=True, reserved_bottom=16)
+                reading.fit_value()
             self.progress.configure(scale, self.shell.material)
             self.progress.setGeometry(round(padding * scale), self.battery.height() - round((padding + 12) * scale), max(1, self.battery.width() - round(2 * padding * scale)), round(12 * scale))
             self.progress.setVisible("battery_level" in self.composition.visible and probe.mode == "large" and not probe.wide and row_height >= round(124 * scale))
@@ -298,16 +312,20 @@ class AdaptiveWidget(QFrame):
         if not hasattr(self, "composition"):
             return
         panel = self.details
-        while panel.grid.count():
-            panel.grid.takeAt(0).widget().hide()
+        changed = getattr(self, "_details_keys", None) != self.composition.details
+        if changed:
+            self._details_keys = self.composition.details
+            while panel.grid.count():
+                panel.grid.takeAt(0).widget().hide()
         scale = self.scale
         preferences = self.controller.ui_settings.widget
         for index, key in enumerate(self.composition.details):
             reading = panel.readings[key]
             reading.material = self.shell.material
-            reading.configure(scale, WIDGET["valueSize"], preferences.opacity == 0, preferences.labels_visible, False, WIDGET["largePadding"], 0)
-            panel.grid.addWidget(reading, index, 0)
-            reading.show()
+            reading.configure(scale, WIDGET["valueSize"], preferences.opacity == 0, preferences.labels_visible, False, WIDGET["largePadding"], 0, fit=True)
+            if changed:
+                panel.grid.addWidget(reading, index, 0)
+                reading.show()
         panel.grid.setContentsMargins(0, 0, 0, 0)
         panel.grid.setSpacing(round(WIDGET["gap"] * scale))
         for first, second in zip(self.composition.details, self.composition.details[1:]):
@@ -409,9 +427,14 @@ class AdaptiveWidget(QFrame):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_geometry_timer") and not self._initial:
+            if not self._reflow_timer.isActive():
+                self._reflow_timer.start()
+            self._geometry_timer.start()
+
+    def _resize_layout(self):
+        if not self._stopping:
             self._reflow()
             self._place_core()
-            self._geometry_timer.start()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -441,6 +464,7 @@ class AdaptiveWidget(QFrame):
 
     def stop(self):
         self._stopping = True
+        self._reflow_timer.stop()
         self._geometry_timer.stop()
         self._save_geometry()
         self._screen_tracker.stop()

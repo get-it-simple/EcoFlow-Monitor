@@ -4,6 +4,7 @@
     {
       "id": "delta3max",
       "name": "DELTA 3 MAX",
+      "model_names": ["DELTA 3 MAX"],
       "revision": 1,
       "evidence": "working",
       "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},

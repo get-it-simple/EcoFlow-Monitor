@@ -24,9 +24,12 @@ not substituted for station-total input/output power.
 Enabling additional files requires confirmation each time the option is turned on.
 A saved enabled option needs no new confirmation at startup. Built-in and user
 profiles have separate identities; a user file never silently replaces a built-in
-profile. Assignments are remembered per station. Automatic selection requires a
-unique explicit API model ID matching a profile's `model_ids`; names and similar
-telemetry fields do not identify a model. Without that ID, choose manually.
+profile. Assignments are remembered per station. Automatic selection first uses
+a unique API model ID matching `model_ids`, then a known device name matching
+`model_names` when no ID matched. Name matching ignores case and extra spaces,
+and accepts a numeric suffix such as `DELTA 3 Max-1026`. It requires a full name
+match: DELTA 3 MAX PLUS is a different model. Ambiguous IDs or names require manual
+selection. Telemetry-field similarity never identifies a model.
 
 Reloading validates a candidate catalog. The active mapping changes only on Save.
 Cancel leaves the active catalog unchanged; copied example files remain on disk.
@@ -63,6 +66,10 @@ underscores or hyphens, at most 64 characters. User IDs must be unique across th
 folder. The reference is `user:<id>`; built-in IDs use `builtin:<id>`. Duplicate
 IDs reject the affected files, and duplicate JSON properties are invalid. A user
 file cannot claim the working-reference status even if it declares it.
+
+Optional `model_ids` and `model_names` are arrays of up to 32 nonempty strings,
+each at most 128 characters. Existing version-1 files may omit both. Declare only
+known identifiers and names; a display name alone does not verify an API mapping.
 
 Supported internal fields are `input_power`, `output_power`, `battery_level`,
 `minimum_discharge_level`, `maximum_charge_level`, `ac_input`, `pv_input`,

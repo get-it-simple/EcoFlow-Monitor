@@ -49,7 +49,7 @@ class NumberField(QDoubleSpinBox):
 
     def sizeHint(self):
         size = super().sizeHint()
-        size.setHeight(round(GEOMETRY["field"] * max(0.5, self.font().pixelSize() / 14)))
+        size.setHeight(max(size.height(), round(GEOMETRY["field"] * max(0.5, self.font().pixelSize() / 14))))
         return size
 
     def minimumSizeHint(self):
@@ -236,7 +236,7 @@ class SettingRow(QWidget):
             self.control = control
         self.control.setMaximumWidth(GEOMETRY["field_width"])
         self.row.addWidget(self.control)
-        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
         if isinstance(self.label, QLabel):
@@ -250,7 +250,7 @@ class SettingRow(QWidget):
 
     def heightForWidth(self, width):
         scale = max(0.5, self.font().pixelSize() / 14)
-        control_height = max(self.control.sizeHint().height(), self.control.minimumSizeHint().height())
+        control_height = max(self.control.minimumHeight(), self.control.sizeHint().height(), self.control.minimumSizeHint().height())
         if self.stacked(width, scale):
             return max(self.label.minimumSizeHint().height(), self.label.sizeHint().height(), self.label.heightForWidth(max(1, width))) + round(8 * scale) + control_height
         field_width = self.control_width()
@@ -270,7 +270,12 @@ class SettingRow(QWidget):
     def arrange(self):
         scale = self.font().pixelSize() / 14 if self.font().pixelSize() > 0 else 1
         vertical = self.stacked(self.width(), scale)
+        signature = (self.width(), self.height(), scale, vertical, self.control_width())
+        if getattr(self, "_arrangement", None) == signature:
+            return
+        self._arrangement = signature
         self.row.setDirection(QBoxLayout.Direction.TopToBottom if vertical else QBoxLayout.Direction.LeftToRight)
+        self.row.setAlignment(Qt.AlignmentFlag.AlignTop if vertical else Qt.AlignmentFlag.AlignVCenter)
         self.row.setSpacing(round((8 if vertical else 24) * scale))
         width = self.control_width()
         self.control.setMaximumWidth(16777215 if vertical else round(width * scale))

@@ -442,17 +442,17 @@ class SettingsWindow(QDialog):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setToolTip(label.text())
             controls = QHBoxLayout()
-            controls.addWidget(label, 1)
             enabled = Switch(hotkey_label(name, modules))
             enabled.setChecked(binding.enabled)
             editor = HotkeyComboEditor(binding.combo)
-            controls.addWidget(enabled)
-            row.addLayout(controls)
+            row.addWidget(label)
+            controls.addWidget(editor, 1)
+            controls.addWidget(enabled, 0, Qt.AlignmentFlag.AlignVCenter)
             editor.setEnabled(binding.enabled)
             enabled.toggled.connect(editor.setEnabled)
             editor.accept_combo = lambda combo, action_name=name: self._accept_hotkey(action_name, combo)
-            row.addWidget(editor)
-            row.setSpacing(20)
+            row.addLayout(controls)
+            row.setSpacing(8)
             target = self.hotkey_sections[name.split(":")[1]].content if ":" in name else self.hotkey_layout
             if ":" not in name:
                 target.insertWidget(0 if name == "toggle_monitor" else 1, field)
@@ -475,6 +475,7 @@ class SettingsWindow(QDialog):
         self.secret.clear()
         self.devices.clear()
         self._loaded_device_names = {}
+        self.device_profiles.set_devices(self.controller.catalog or ())
         if self.controller.catalog:
             for device in self.controller.catalog:
                 self.devices.addItem(device.name, device.serial)
@@ -558,8 +559,9 @@ class SettingsWindow(QDialog):
                 widget.hide()
                 widget.deleteLater()
 
-    def _entered_credentials(self):
-        if self.onepassword.uses_onepassword:
+    def _entered_credentials(self, *, viewed=False):
+        source = self.onepassword.source.tabData(self.onepassword.source.currentIndex()) if viewed else self.onepassword.credential_source
+        if source == "1password":
             return self.onepassword.credentials
         access, secret = self.access.text().strip(), self.secret.text().strip()
         if bool(access) != bool(secret):
@@ -568,11 +570,8 @@ class SettingsWindow(QDialog):
 
     def _credential_source_changed(self):
         self.show_keys.setChecked(False)
-        self.access.clear()
-        self.secret.clear()
-        self.access.setReadOnly(self.onepassword.uses_onepassword)
-        self.secret.setReadOnly(self.onepassword.uses_onepassword)
         self.manual_credentials.setVisible(not self.onepassword.uses_onepassword)
+        self._schedule_draft()
 
     def _show_keys(self, visible):
         mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
@@ -580,9 +579,7 @@ class SettingsWindow(QDialog):
         self.secret.setEchoMode(mode)
 
     def _fill_credentials(self, credentials):
-        if credentials is not None:
-            self.access.setText(credentials.access_key)
-            self.secret.setText(credentials.secret_key)
+        self._schedule_draft()
 
     def _credential_busy_changed(self, busy):
         if hasattr(self, "save_button"):
@@ -594,6 +591,7 @@ class SettingsWindow(QDialog):
             self._draft_changed()
 
     def _close_credentials(self):
+        self.controller.discard_discovery()
         self.onepassword.cancel(show_status=False)
         self.onepassword.credentials = None
         self.onepassword.create_access.clear()
@@ -608,11 +606,11 @@ class SettingsWindow(QDialog):
             return
         if self.onepassword.uses_onepassword:
             try:
-                fields = self.onepassword.settings_fields()
+                fields = self.onepassword.settings_fields(viewed=True)
             except ValueError:
                 self.onepassword.show_status(t("onepassword_reference_error"))
                 return
-            if (fields["onepassword_access_ref"], fields["onepassword_secret_ref"]) == (self.controller.settings.onepassword_access_ref, self.controller.settings.onepassword_secret_ref):
+            if self.controller.settings.credential_source == "1password" and (fields["onepassword_access_ref"], fields["onepassword_secret_ref"]) == (self.controller.settings.onepassword_access_ref, self.controller.settings.onepassword_secret_ref):
                 self.discover_button.setEnabled(False)
                 self.controller.discover()
                 return
@@ -620,18 +618,19 @@ class SettingsWindow(QDialog):
                 self.onepassword.show_status(t("onepassword_load_first"))
                 return
         try:
-            credentials = self._entered_credentials()
+            credentials = self._entered_credentials(viewed=True)
         except CredentialError as error:
             QMessageBox.warning(self, t("error_title"), t(str(error)))
             return
         self.discover_button.setEnabled(False)
-        self.controller.discover(credentials)
+        self.controller.discover(credentials, replace(self.controller.settings, **self.onepassword.settings_fields(viewed=True)))
 
     def _devices(self, devices):
         self.discover_button.setEnabled(not self.onepassword.busy)
         if not devices:
             self.onepassword.show_status(t(self.controller.notice or self.controller.connection.value))
             return
+        self.device_profiles.set_devices(devices)
         selected = self.devices.currentData() or self.controller.settings.serial
         if self.devices.isEditable() and self.devices.currentIndex() >= 0 and self.devices.currentText() != self.devices.itemText(self.devices.currentIndex()):
             selected = self.devices.currentText().strip()
@@ -735,7 +734,7 @@ class SettingsWindow(QDialog):
             draft.validate()
             validate_bindings(draft.hotkeys)
             self._entered_credentials()
-            self._dirty = draft != self.controller.settings or self.device_profiles.catalog_changed or bool(self.access.text().strip() or self.secret.text().strip())
+            self._dirty = draft != self.controller.settings or self.device_profiles.catalog_changed or (draft.credential_source == "windows" and bool(self.access.text().strip() or self.secret.text().strip()))
             recording = any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values())
             self.save_button.setEnabled(self._dirty and not self.onepassword.busy and not self.device_profiles.busy and not recording)
             self.error_label.clear()

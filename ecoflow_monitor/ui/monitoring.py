@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ecoflow_monitor.i18n import t
@@ -12,7 +12,7 @@ from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
-from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS
+from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS, REFLOW_INTERVAL_MS
 from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
 from ecoflow_monitor.polling import PORT_KEYS
 from ecoflow_monitor.ui.polling import LoadingIndicator
@@ -28,12 +28,8 @@ class MonitoringPage(QWidget):
         self.box.setSpacing(24)
         self.heading_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         title_box = QVBoxLayout()
-        self.heading = QLabel(t("monitoring_heading"), self)
-        self.heading.setObjectName("page_title")
-        self.heading.setWordWrap(True)
         self.updated = hint("")
         self.updated.setTextFormat(Qt.TextFormat.PlainText)
-        title_box.addWidget(self.heading)
         title_box.addWidget(self.updated)
         self.heading_row.addLayout(title_box, 1)
         badges = QWidget(self)
@@ -66,8 +62,6 @@ class MonitoringPage(QWidget):
                 self.battery_progress = EnergyBalance(controller, card, battery=True)
                 box.addWidget(self.battery_progress)
         self.box.addLayout(self.metric_grid)
-        self.details = QGridLayout()
-        self.details.setSpacing(24)
         self.balance_card = QFrame(self)
         self.balance_card.setObjectName("balance_card")
         balance_box = QVBoxLayout(self.balance_card)
@@ -92,17 +86,24 @@ class MonitoringPage(QWidget):
         self.balance_message = MotionMessage(controller, self.balance_card)
         self.balance_message.setWordWrap(True)
         balance_box.addWidget(self.balance_message)
-        self.port_card = QFrame(self)
-        self.port_card.setObjectName("ports_card")
-        self.port_box = QVBoxLayout(self.port_card)
-        self.port_box.setContentsMargins(24, 20, 24, 24)
-        self.port_title = QLabel(t("outputs"))
-        self.port_title.setObjectName("section_title")
-        self.port_box.addWidget(self.port_title)
+        self.box.addWidget(self.balance_card)
+        self.port_sections = {}
+        for group, title in (("inputs", "inputs"), ("ac", "ac_outlets"), ("other", "other_outputs")):
+            card = QFrame(self)
+            card.setObjectName("ports_card")
+            box = QVBoxLayout(card)
+            heading = QLabel(t(title), card)
+            heading.setObjectName("section_title")
+            box.addWidget(heading)
+            grid = QGridLayout()
+            box.addLayout(grid)
+            note = hint(t("outputs_read_only"))
+            note.setVisible(group != "inputs")
+            box.addWidget(note)
+            self.port_sections[group] = (card, heading, grid, note)
+            self.box.addWidget(card)
         self.port_values = {}
-        self.port_hint = hint(t("outputs_read_only"))
-        self.port_box.addWidget(self.port_hint)
-        self.box.addLayout(self.details)
+        self._port_signature = None
         bottom = ActionLayout()
         self.limits = ChargeLimits(controller, self)
         bottom.addWidget(self.limits, 1)
@@ -128,12 +129,15 @@ class MonitoringPage(QWidget):
         self.box.addWidget(self.msi_section)
         self.box.addStretch()
         self._columns = None
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.setInterval(REFLOW_INTERVAL_MS)
+        self._reflow_timer.timeout.connect(self.reflow)
         self.refresh()
 
     def refresh(self):
         settings = self.controller.ui_settings
         scale = getattr(self.window(), "_scale", effective_scale(self, settings.scale))
-        self.heading.setText(t("monitoring_heading"))
         telemetry = self.controller.telemetry
         self.updated.setText(self.controller.device_name + " · " + (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M")) if telemetry else t("never_updated")))
         self.status.refresh()
@@ -142,11 +146,16 @@ class MonitoringPage(QWidget):
             reading.configure(scale, 28 if key == "estimated_runtime" else 36, labels=settings.monitor_labels_visible, hover=settings.monitor_values_on_hover)
         for card in self.cards:
             card.motion_radius = RADIUS["card"] * scale
+            card.layout().setContentsMargins(*(round(16 * scale),) * 4)
+        self.balance_card.layout().setContentsMargins(*(round(24 * scale),) * 4)
         for reading in self.balance_readings.values():
             reading.configure(scale, 28)
         self.balance_title.setText(t("energy_balance"))
-        self.port_title.setText(t("outputs"))
-        self.port_hint.setText(t("outputs_read_only"))
+        for group, (card, title, grid, note) in self.port_sections.items():
+            title.setText(t({"inputs": "inputs", "ac": "ac_outlets", "other": "other_outputs"}[group]))
+            note.setText(t("outputs_read_only"))
+            card.layout().setContentsMargins(*(round(16 * scale),) * 4)
+            grid.setSpacing(round(16 * scale))
         telemetry = self.controller.telemetry
         self.balance.configure(scale)
         self.battery_progress.configure(scale)
@@ -156,13 +165,14 @@ class MonitoringPage(QWidget):
         self.balance_message.setText(t("motion_" + self.balance.motion.state.mode))
         ports = dict(telemetry.ports) if telemetry else {}
         anderson = tuple(key for key in ports if key.startswith("anderson_")) or ("anderson",)
-        keys = tuple(key for key in PORT_KEYS if key not in {"ac_input", "pv_input"}) + anderson
+        keys = (*PORT_KEYS, *anderson)
         for key in keys:
             if key not in self.port_values:
                 value = QLabel()
                 value.loader = LoadingIndicator(self.controller, value)
                 value.setObjectName("secondary")
-                row = MotionSurface(self.controller, {"ac_output": "ac", "dc_output": "dc"}.get(key), self.port_card)
+                group = "inputs" if key in {"ac_input", "pv_input"} else "ac" if key == "ac_output" else "other"
+                row = MotionSurface(self.controller, {"ac_output": "ac", "dc_output": "dc"}.get(key), self.port_sections[group][0])
                 line = QHBoxLayout(row)
                 line.setContentsMargins(0, 0, 0, 0)
                 label = QLabel(metric_label(key), row)
@@ -179,7 +189,6 @@ class MonitoringPage(QWidget):
                     line.addWidget(state)
                     row.output_state = state
                     row.state_loader = LoadingIndicator(self.controller, row, state)
-                self.port_box.insertWidget(self.port_box.count() - 1, row)
                 self.port_values[key] = (row, value)
         for key, (row, value) in self.port_values.items():
             row.motion_radius = RADIUS["control"] * scale
@@ -212,6 +221,21 @@ class MonitoringPage(QWidget):
         width = max(1, available - 64 * scale)
         self.heading_row.setDirection(QBoxLayout.Direction.TopToBottom if width < GEOMETRY["form_breakpoint"] * scale else QBoxLayout.Direction.LeftToRight)
         columns = 4 if width >= 840 * scale else 2 if width >= 420 * scale else 1
+        port_width = max(1, width - 32 * scale)
+        cell_width = max(round(240 * scale), *(row.minimumSizeHint().width() for row, value in self.port_values.values()))
+        port_columns = min(3, max(1, int((port_width + 16 * scale) // (cell_width + 16 * scale))))
+        keys = tuple(key for key, (row, value) in self.port_values.items() if not row.isHidden())
+        signature = (port_columns, keys, scale)
+        if self._port_signature != signature:
+            self._port_signature = signature
+            for group, (card, title, grid, note) in self.port_sections.items():
+                while grid.count():
+                    grid.takeAt(0)
+                group_keys = [key for key in keys if ("inputs" if key in {"ac_input", "pv_input"} else "ac" if key == "ac_output" else "other") == group]
+                for index, key in enumerate(group_keys):
+                    grid.addWidget(self.port_values[key][0], index // port_columns, index % port_columns)
+                for index in range(3):
+                    grid.setColumnStretch(index, 1 if index < min(port_columns, len(group_keys)) else 0)
         if columns == self._columns:
             return
         self._columns = columns
@@ -219,21 +243,19 @@ class MonitoringPage(QWidget):
             self.metric_grid.takeAt(0)
         for index, card in enumerate(self.cards):
             self.metric_grid.addWidget(card, index // columns, index % columns)
-        self.details.removeWidget(self.balance_card)
-        self.details.removeWidget(self.port_card)
-        self.details.addWidget(self.balance_card, 0, 0)
-        self.details.addWidget(self.port_card, 0 if columns == 4 else 1, 1 if columns == 4 else 0)
-        self.details.setColumnStretch(0, 2)
-        self.details.setColumnStretch(1, 1 if columns == 4 else 0)
+
+    def schedule_reflow(self):
+        if not self._reflow_timer.isActive():
+            self._reflow_timer.start()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "readings"):
-            self.reflow()
+        if hasattr(self, "_reflow_timer"):
+            self.schedule_reflow()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Resize:
-            self.reflow()
+            self.schedule_reflow()
         return super().eventFilter(watched, event)
 
     def refresh_integrations(self):

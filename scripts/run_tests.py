@@ -90,6 +90,7 @@ DESIGN_AREAS = {
         "tests/test_diagnostics.py",
     ),
     "widgets": (
+        "tests/test_ui_adaptation.py",
         "tests/test_adaptive_widget.py",
         "tests/test_disclosure.py",
         "tests/test_motion.py",

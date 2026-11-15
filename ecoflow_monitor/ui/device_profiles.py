@@ -25,6 +25,7 @@ class DeviceProfilesPanel(QWidget):
         self.catalog = builtin_catalog()
         self._assignments = {}
         self._serial = ""
+        self._devices = ()
         self._loading = False
         self._closed = False
         self._catalog_dirty = False
@@ -110,6 +111,10 @@ class DeviceProfilesPanel(QWidget):
         self._serial = serial
         self._populate()
 
+    def set_devices(self, devices):
+        self._devices = tuple(devices)
+        self._refresh_detail()
+
     def settings_fields(self):
         return dict(custom_device_profiles=self.enabled.isChecked(), device_profile_assignments=tuple(sorted(self._assignments.items())))
 
@@ -135,8 +140,9 @@ class DeviceProfilesPanel(QWidget):
 
     def _refresh_detail(self):
         reference = self.profile.currentData()
-        profile = self.catalog.resolve(reference) if reference else None
-        text = profile_evidence(profile) if profile else t("device_profile_unavailable") if reference else t("device_profile_automatic_hint")
+        device = next((item for item in self._devices if item.serial == self._serial), None)
+        profile = self.catalog.resolve(reference, device.model_id if device else "", device.name if device else "")
+        text = (profile.name + " · " + profile_evidence(profile)) if profile else t("device_profile_unavailable") if reference else t("device_profile_automatic_hint")
         self.detail.setText(text)
 
     def _profile_changed(self):

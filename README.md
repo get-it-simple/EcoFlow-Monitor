@@ -9,6 +9,8 @@ user-confirmed working reference. Other model profiles are untested examples
 from the API documentation; see [device profiles](DEVICE_PROFILES.md).
 
 ![EcoFlow Monitor dashboard](assets/interface.png)
+![Widget](assets/1.png)
+![Widget](assets/2.png)
 
 ## Install
 

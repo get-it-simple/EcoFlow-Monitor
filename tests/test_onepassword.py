@@ -311,6 +311,7 @@ def set_panel_references(dialog):
     panel.source.setCurrentIndex(1)
     panel.access_ref.setText('"' + ACCESS_REF + '"')
     panel.secret_ref.setText(SECRET_REF)
+    panel.storage_switches["1password"].setChecked(True)
     return panel
 
 
@@ -362,9 +363,9 @@ def test_fill_masks_keys_and_discovers_devices_with_unsaved_references(dialog, c
     panel = set_panel_references(dialog)
     panel.load_credentials()
     wait_until(qapp, lambda: panel.credentials is not None)
-    assert dialog.access.text() == pair.access_key and dialog.secret.text() == pair.secret_key
+    assert dialog.access.text() == dialog.secret.text() == ""
     assert dialog.access.echoMode() == dialog.secret.echoMode() == QLineEdit.EchoMode.Password
-    assert dialog.access.isReadOnly() and dialog.secret.isReadOnly()
+    assert not dialog.access.isReadOnly() and not dialog.secret.isReadOnly()
     assert not dialog.manual_credentials.isVisibleTo(dialog)
     assert not controller.store.path.exists()
     dialog.discover()
@@ -445,6 +446,8 @@ def test_create_from_draft_selects_references_without_publishing_settings(dialog
     wait_until(qapp, lambda: panel.uses_onepassword and not panel.busy)
     assert panel.credentials == pair
     assert dialog.gather().onepassword_access_ref == ACCESS_REF
+    assert dialog.gather().credential_source == "windows"
+    panel.storage_switches["1password"].setChecked(True)
     assert not controller.store.path.exists()
     dialog.save()
     payload = controller.store.path.read_text(encoding="utf-8")
@@ -452,3 +455,36 @@ def test_create_from_draft_selects_references_without_publishing_settings(dialog
     assert controller.settings.credential_source == "1password"
     assert panel.credentials is None
     assert dialog.access.text() == dialog.secret.text() == ""
+
+
+@pytest.mark.parametrize("source", ["windows", "1password"])
+def test_browsing_credential_tabs_preserves_active_storage_and_draft(controller, qapp, source):
+    controller.settings = replace(controller.settings, credential_source=source, onepassword_access_ref=ACCESS_REF, onepassword_secret_ref=SECRET_REF)
+    window = SettingsWindow(controller)
+    try:
+        baseline = window.gather()
+        for index in (1, 0, 1):
+            window.onepassword.source.setCurrentIndex(index)
+            assert window.gather() == baseline
+            window._draft_changed()
+            assert not window.save_button.isEnabled()
+        window.onepassword.source.setCurrentIndex(0)
+        window.access.setText("windows-draft")
+        window.secret.setText("windows-secret")
+        window.onepassword.source.setCurrentIndex(1)
+        window.onepassword.create_access.setText("vault-draft")
+        window.onepassword.create_secret.setText("vault-secret")
+        window.onepassword.source.setCurrentIndex(0)
+        assert window.access.text() == "windows-draft"
+        assert window.onepassword.create_access.text() == "vault-draft"
+        alternative = "1password" if source == "windows" else "windows"
+        window.onepassword.storage_switches[alternative].setChecked(True)
+        assert window.gather().credential_source == alternative
+        assert not window.onepassword.storage_switches[source].isChecked()
+        window.onepassword.storage_switches[alternative].setChecked(False)
+        assert window.onepassword.storage_switches[alternative].isChecked()
+        window.load_draft()
+        assert window.gather() == baseline
+    finally:
+        window.reject()
+        window.deleteLater()

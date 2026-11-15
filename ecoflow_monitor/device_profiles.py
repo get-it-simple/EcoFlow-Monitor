@@ -145,6 +145,7 @@ class DeviceProfile:
     source: str = "builtin"
     model_ids: tuple[str, ...] = ()
     note: str = ""
+    model_names: tuple[str, ...] = ()
 
     @property
     def reference(self):
@@ -172,7 +173,7 @@ class DeviceProfile:
 
     @classmethod
     def from_dict(cls, data, source):
-        allowed = {"id", "name", "revision", "evidence", "read", "fields", "model_ids", "note"}
+        allowed = {"id", "name", "revision", "evidence", "read", "fields", "model_ids", "model_names", "note"}
         if not isinstance(data, dict) or set(data) - allowed:
             raise ProfileError("device_profile_invalid")
         identifier, name = data.get("id"), data.get("name")
@@ -195,8 +196,13 @@ class DeviceProfile:
             raise ProfileError("device_profile_invalid")
         if not isinstance(note, str) or len(note) > 2048:
             raise ProfileError("device_profile_invalid")
+        model_names = data.get("model_names", [])
+        if (not isinstance(model_names, list) or len(model_names) > 32
+                or any(not isinstance(value, str) or not value.strip() or len(value) > 128
+                       or any(ord(char) < 32 for char in value) for value in model_names)):
+            raise ProfileError("device_profile_invalid")
         return cls(identifier, name, revision, evidence if source == "builtin" else "documentation" if evidence == "documentation" else "custom",
-                   read["method"], read["path"], mappings, source, tuple(model_ids), note)
+                   read["method"], read["path"], mappings, source, tuple(model_ids), note, tuple(model_names))
 
 
 @dataclass(frozen=True)
@@ -206,10 +212,16 @@ class ProfileCatalog:
     errors: tuple[tuple[str, str], ...] = ()
     custom_enabled: bool = False
 
-    def resolve(self, reference, model_id=""):
+    def resolve(self, reference, model_id="", model_name=""):
         if reference:
             return next((profile for profile in self.profiles if profile.reference == reference and profile.usable), None)
         matches = [profile for profile in self.profiles if model_id and model_id in profile.model_ids and profile.usable]
+        if matches:
+            return matches[0] if len(matches) == 1 else None
+        name = " ".join(model_name.split()).casefold()
+        name = re.sub(r"\s*-\s*[0-9]+$", "", name).strip()
+        matches = [profile for profile in self.profiles if profile.usable and name
+                   and any(name == " ".join(alias.split()).casefold() for alias in profile.model_names)]
         return matches[0] if len(matches) == 1 else None
 
 
