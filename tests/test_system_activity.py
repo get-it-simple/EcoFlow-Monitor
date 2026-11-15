@@ -20,7 +20,7 @@ from ecoflow_monitor.application import Application
 from ecoflow_monitor.controller import Controller, Task
 from ecoflow_monitor.domain import ConnectionState
 from ecoflow_monitor.integrations import IntegrationRule, Reaction
-from ecoflow_monitor.polling import CORE, SENSOR_FIELDS, TelemetryPatch
+from ecoflow_monitor.polling import CORE, TelemetryPatch
 from ecoflow_monitor.settings import SettingsStore
 from ecoflow_monitor.system_activity import ActivityCancelled, SystemActivity
 from ecoflow_monitor.ui.confirmations import ConfirmationCoordinator, ConfirmationRequest
@@ -300,7 +300,7 @@ def activity_controller(tmp_path, qapp, session_cache):
         def read_quotas(self, serial, select, **kwargs):
             quotas = select()
             calls.append(quotas)
-            keys = tuple(key for key, wire in SENSOR_FIELDS.items() if wire in quotas)
+            keys = quotas
             values = {"input_power": 0, "output_power": 100, "battery_level": 75,
                       "minimum_discharge_level": 10, "maximum_charge_level": 90,
                       "ac_enabled": True, "dc_enabled": False, "charging_state": 1, "anderson": ()}
@@ -364,7 +364,7 @@ def test_resume_requires_valid_new_dependency_values(activity_controller, qapp):
     class MissingBattery:
         def read_quotas(self, serial, select, **kwargs):
             quotas = select()
-            keys = tuple(key for key, wire in SENSOR_FIELDS.items() if wire in quotas)
+            keys = quotas
             return TelemetryPatch(keys, (), missing=keys)
     controller.client_factory = lambda pair: MissingBattery()
     controller.set_system_activity(SystemActivity(locked=True))

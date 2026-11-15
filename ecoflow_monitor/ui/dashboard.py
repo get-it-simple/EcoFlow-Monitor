@@ -73,7 +73,7 @@ class Dashboard(SettingsWindow):
         self.device_label.setTextFormat(Qt.TextFormat.PlainText)
         self.device_label.setObjectName("secondary")
         sidebar.addWidget(self.device_label)
-        self.sidebar_status = StatusBadge(controller, self.sidebar)
+        self.sidebar_status = StatusBadge(controller, self.sidebar, retry_credentials=True)
         sidebar.addWidget(self.sidebar_status)
         body.addWidget(self.sidebar)
         self.page_container = QWidget(self.shell)

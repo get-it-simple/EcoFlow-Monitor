@@ -117,6 +117,8 @@ class AppSettings:
     onepassword_access_ref: str = ""
     onepassword_secret_ref: str = ""
     onepassword_cache_ttl_seconds: int = 86400
+    custom_device_profiles: bool = False
+    device_profile_assignments: tuple[tuple[str, str], ...] = ()
     capacity_wh: float = 2048
     manual_min: float | None = None
     manual_max: float | None = None
@@ -151,6 +153,19 @@ class AppSettings:
     widget: WidgetPreferences = field(default_factory=WidgetPreferences)
 
     def validate(self) -> None:
+        if type(self.custom_device_profiles) is not bool or not isinstance(self.device_profile_assignments, tuple):
+            raise ValueError("device_profile_invalid")
+        assigned = set()
+        for assignment in self.device_profile_assignments:
+            if not isinstance(assignment, tuple) or len(assignment) != 2:
+                raise ValueError("device_profile_invalid")
+            serial, reference = assignment
+            if not isinstance(serial, str) or not serial or serial in assigned or not isinstance(reference, str):
+                raise ValueError("device_profile_invalid")
+            prefix, separator, identifier = reference.partition(":")
+            if prefix not in {"builtin", "user"} or not separator or not identifier or len(identifier) > 64 or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in identifier):
+                raise ValueError("device_profile_invalid")
+            assigned.add(serial)
         if not isinstance(self.polling, PollingPreferences):
             raise ValueError("polling_interval_error")
         self.polling.validate()
@@ -215,6 +230,7 @@ class AppSettings:
             "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
                         "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref, "cache_ttl_seconds": self.onepassword_cache_ttl_seconds},
+                        "device_support": {"custom_enabled": self.custom_device_profiles, "assignments": dict(self.device_profile_assignments)},
                         "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max,
                         "polling": asdict(self.polling)},
             "integrations": [module.to_dict() for module in self.integrations],
@@ -242,6 +258,12 @@ class AppSettings:
         onepassword = eco.get("onepassword", {})
         if not isinstance(onepassword, dict):
             raise ValueError("1Password settings must be an object")
+        support = eco.get("device_support", {})
+        if not isinstance(support, dict) or not isinstance(support.get("assignments", {}), dict):
+            raise ValueError("device_profile_invalid")
+        assignments = tuple(support.get("assignments", {}).items())
+        if "device_support" not in eco and eco.get("serial"):
+            assignments = ((eco["serial"], "builtin:delta3max"),)
         def boolean(group, key, fallback):
             value = group.get(key, fallback)
             if type(value) is not bool:
@@ -266,6 +288,7 @@ class AppSettings:
             credential_source=string(eco, "credential_source", "windows"),
             onepassword_access_ref=string(onepassword, "access_ref"), onepassword_secret_ref=string(onepassword, "secret_ref"),
             onepassword_cache_ttl_seconds=onepassword.get("cache_ttl_seconds", 86400),
+            custom_device_profiles=boolean(support, "custom_enabled", False), device_profile_assignments=assignments,
             capacity_wh=eco.get("capacity_wh", 2048), manual_min=eco.get("manual_min"), manual_max=eco.get("manual_max"),
             integrations=modules, hotkeys=tuple(HotkeyBinding(**binding) for binding in bindings),
             language=string(data, "language", "system"), scale=appearance.get("scale", data.get("ui_scale", 1)),

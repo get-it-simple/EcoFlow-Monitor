@@ -239,7 +239,7 @@ def test_one_shot_diagnostics_honor_off_and_mask_responses(tmp_path):
     content = path.read_text(encoding="utf-8")
     assert "unknownMetric" in content and "missing_fields" in content
     assert "private-secret" not in content and "PRIVATE-SERIAL" not in content
-    assert [method for method, endpoint in operations] == ["GET", "GET", "POST"]
+    assert [method for method, endpoint in operations] == ["GET", "POST"]
 
 
 def test_rotation_uses_day_utf8_bytes_and_preserves_unrelated_files(tmp_path):
@@ -296,7 +296,7 @@ def test_startup_catalog_is_loaded_once_and_shared_with_telemetry(runtime, qapp,
     controller = runtime.controller
     now = [1000.0]
     controller.clock = lambda: now[0]
-    controller.settings = replace(controller.settings, serial="TEST")
+    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),))
     controller.access_allowed = False
     requests = []
     def handle(request):
@@ -326,7 +326,7 @@ def test_sampling_piggybacks_without_primary_background_requests(runtime, qapp):
     controller.set_sensor_demand("widget", {"ac_output"})
     polling = controller.polling
     first = polling.begin(0)
-    assert "cmsDsgRemTime" in first
+    assert "device_discharge_minutes" in first
     from ecoflow_monitor.polling import TelemetryPatch
     polling.complete(TelemetryPatch(tuple(key for key in polling.in_flight), ()), 1800000000, 0)
     polling.verified = True

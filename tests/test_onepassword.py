@@ -322,6 +322,7 @@ def test_credential_tabs_stay_above_mode_fields_and_switch_visibility(controller
         window.show()
         qapp.processEvents()
         panel = window.onepassword
+        window.connection_tabs.setCurrentIndex(1)
         assert isinstance(panel.source, QTabBar)
         assert panel.source.count() == 2
         assert panel.source.tabData(panel.source.currentIndex()) == source
@@ -337,7 +338,7 @@ def test_credential_tabs_stay_above_mode_fields_and_switch_visibility(controller
             assert all(label.isVisibleTo(window) == (index == 0) for label in window.manual_credentials.findChildren(QLabel))
             assert panel.references.isVisibleTo(window) == (index == 1)
             assert panel.load_button.isVisibleTo(window) == (index == 1)
-            assert panel.save_section.isVisibleTo(window) == (index == 0)
+            assert panel.save_section.isVisibleTo(window) == (index == 1)
             fields = window.manual_credentials if index == 0 else panel.references
             assert panel.source.geometry().bottom() < fields.geometry().top()
         panel.source.setCurrentIndex(1 if source == "windows" else 0)
@@ -435,9 +436,10 @@ def test_create_from_draft_selects_references_without_publishing_settings(dialog
         assert (vault, title, credentials) == ("Test", "EcoFlow Monitor", pair)
         return SavedItem(ACCESS_REF, SECRET_REF)
     monkeypatch.setattr("ecoflow_monitor.ui.onepassword.create_item", create)
-    dialog.access.setText(pair.access_key)
-    dialog.secret.setText(pair.secret_key)
     panel = dialog.onepassword
+    panel.source.setCurrentIndex(1)
+    panel.create_access.setText(pair.access_key)
+    panel.create_secret.setText(pair.secret_key)
     panel.vault.setText("Test")
     panel.save_credentials()
     wait_until(qapp, lambda: panel.uses_onepassword and not panel.busy)

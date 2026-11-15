@@ -39,7 +39,7 @@ class MonitoringPage(QWidget):
         badges = QWidget(self)
         badge_row = QHBoxLayout(badges)
         badge_row.setContentsMargins(0, 0, 0, 0)
-        self.status = StatusBadge(controller, self)
+        self.status = StatusBadge(controller, self, retry_credentials=True)
         badge_row.addWidget(self.status)
         self.notifications = NotificationIndicator(self)
         self.notifications.setProperty("icon_button", True)

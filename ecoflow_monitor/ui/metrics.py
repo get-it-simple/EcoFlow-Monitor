@@ -2,25 +2,11 @@ from textwrap import fill
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import number
+from ecoflow_monitor.device_profiles import baseline_profile
+from ecoflow_monitor.polling import CORE, LIMITS, PORTS
 
 
-API_FIELDS = {
-    "battery_level": "cmsBattSoc",
-    "input_power": "powInSumW",
-    "output_power": "powOutSumW",
-    "minimum_discharge_level": "cmsMinDsgSoc",
-    "maximum_charge_level": "cmsMaxChgSoc",
-    "ac_input": "powGetAcIn",
-    "pv_input": "powGetPv",
-    "ac_output": "powGetAcOut",
-    "dc_output": "powGet12v",
-    "usb_c1": "powGetTypec1",
-    "usb_c2": "powGetTypec2",
-    "usb_c3": "powGetTypec3",
-    "usb_a1": "powGetQcusb1",
-    "usb_a2": "powGetQcusb2",
-    "anderson": "powGet12vList.powGet12vItem",
-}
+API_FIELDS = {key: mapping.quotas[0] for key, mapping in baseline_profile().fields if key in CORE | LIMITS | PORTS}
 
 
 def metric_label(key: str, controller=None) -> str:
@@ -37,8 +23,10 @@ def metric_tooltip(key: str, controller=None) -> str:
         base = "estimated_charge_time"
     description = "usb_power_help" if base.startswith("usb_") else base + "_help"
     parts = [metric_label(key, controller), fill(t(description), width=85, break_long_words=False, break_on_hyphens=False)]
-    if base in API_FIELDS:
-        parts.append(t("metric_api_field").format(field=API_FIELDS[base]))
+    profile = controller.device_profile if controller is not None else baseline_profile()
+    mapping = dict(profile.fields).get(base) if profile is not None else None
+    if mapping is not None:
+        parts.append(t("metric_api_field").format(field=", ".join(mapping.quotas)))
     if base in {"ac_input", "pv_input", "ac_output", "dc_output", "anderson"} or base.startswith("usb_"):
         parts.append(t("sensor_signed_power"))
     if controller is not None:

@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "delta3max",
+      "name": "DELTA 3 MAX",
+      "revision": 1,
+      "evidence": "working",
+      "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},
+      "fields": {
+        "input_power": {"sources": ["powInSumW"]},
+        "output_power": {"sources": ["powOutSumW"]},
+        "battery_level": {"sources": ["cmsBattSoc"]},
+        "minimum_discharge_level": {"sources": ["cmsMinDsgSoc"], "maximum": 30},
+        "maximum_charge_level": {"sources": ["cmsMaxChgSoc"]},
+        "ac_input": {"sources": ["powGetAcIn"]},
+        "pv_input": {"sources": ["powGetPv"]},
+        "ac_output": {"sources": ["powGetAcOut"]},
+        "dc_output": {"sources": ["powGet12v"]},
+        "usb_c1": {"sources": ["powGetTypec1"]},
+        "usb_c2": {"sources": ["powGetTypec2"]},
+        "usb_c3": {"sources": ["powGetTypec3"]},
+        "usb_a1": {"sources": ["powGetQcusb1"]},
+        "usb_a2": {"sources": ["powGetQcusb2"]},
+        "anderson": {"sources": ["powGet12vList.powGet12vItem"]},
+        "ac_enabled": {"sources": ["flowInfoAcOut"], "enum": {"4": false}, "otherwise": true},
+        "dc_enabled": {"sources": ["flowInfo12v"], "enum": {"4": false}, "otherwise": true},
+        "charging_state": {"sources": ["cmsChgDsgState"]},
+        "device_discharge_minutes": {"sources": ["cmsDsgRemTime"]},
+        "device_charge_minutes": {"sources": ["cmsChgRemTime"]}
+      }
+    }
+  ],
+  "examples": [
+    {
+      "id": "delta2", "name": "DELTA 2", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA 2. GET quota/all is documented; selected-quota GET/POST is inconsistent. Charging-state semantics are not mapped.",
+      "read": {"method": "GET", "path": "/iot-open/sign/device/quota/all"},
+      "fields": {
+        "input_power": {"sources": ["pd.wattsInSum"]}, "output_power": {"sources": ["pd.wattsOutSum"]},
+        "battery_level": {"sources": ["pd.soc"]},
+        "minimum_discharge_level": {"sources": ["bms_emsStatus.minDsgSoc"]}, "maximum_charge_level": {"sources": ["bms_emsStatus.maxChargeSoc"]},
+        "ac_input": {"sources": ["inv.inputWatts"]}, "ac_output": {"sources": ["inv.outputWatts"]},
+        "pv_input": {"sources": ["mppt.inWatts"]}, "dc_output": {"sources": ["pd.carWatts"]},
+        "usb_c1": {"sources": ["pd.typec1Watts"]}, "usb_c2": {"sources": ["pd.typec2Watts"]},
+        "usb_a1": {"sources": ["pd.qcUsb1Watts"]}, "usb_a2": {"sources": ["pd.qcUsb2Watts"]},
+        "ac_enabled": {"sources": ["inv.cfgAcEnabled"], "enum": {"0": false, "1": true}},
+        "dc_enabled": {"sources": ["pd.carState"], "enum": {"0": false, "1": true}},
+        "device_charge_minutes": {"sources": ["bms_emsStatus.chgRemainTime"]}, "device_discharge_minutes": {"sources": ["bms_emsStatus.dsgRemainTime"]}
+      }
+    },
+    {
+      "id": "delta2max", "name": "DELTA 2 MAX", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA 2 Max. GET quota/all is documented. Charging-state codes describe charging phases, not the application's idle/discharging/charging states.",
+      "read": {"method": "GET", "path": "/iot-open/sign/device/quota/all"},
+      "fields": {
+        "input_power": {"sources": ["pd.wattsInSum"]}, "output_power": {"sources": ["pd.wattsOutSum"]}, "battery_level": {"sources": ["pd.soc"]},
+        "minimum_discharge_level": {"sources": ["bms_emsStatus.minDsgSoc"]}, "maximum_charge_level": {"sources": ["bms_emsStatus.maxChargeSoc"]},
+        "ac_input": {"sources": ["inv.inputWatts"]}, "ac_output": {"sources": ["inv.outputWatts"]}, "pv_input": {"sources": ["mppt.inWatts"]},
+        "dc_output": {"sources": ["pd.carWatts"]}, "usb_c1": {"sources": ["pd.typec1Watts"]}, "usb_c2": {"sources": ["pd.typec2Watts"]},
+        "usb_a1": {"sources": ["pd.qcUsb1Watts"]}, "usb_a2": {"sources": ["pd.qcUsb2Watts"]},
+        "ac_enabled": {"sources": ["inv.cfgAcEnabled"], "enum": {"0": false, "1": true}}, "dc_enabled": {"sources": ["pd.carState"], "enum": {"0": false, "1": true}},
+        "device_charge_minutes": {"sources": ["bms_emsStatus.chgRemainTime"]}, "device_discharge_minutes": {"sources": ["bms_emsStatus.dsgRemainTime"]}
+      }
+    },
+    {
+      "id": "delta3maxplus", "name": "DELTA 3 MAX PLUS", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA 3 MAX PLUS. Separate example, not an alias of DELTA 3 MAX. Outlet-state encoding is not specified by the supplied HTTP table and remains unknown.",
+      "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},
+      "fields": {
+        "input_power": {"sources": ["powInSumW"]}, "output_power": {"sources": ["powOutSumW"]}, "battery_level": {"sources": ["cmsBattSoc"]},
+        "minimum_discharge_level": {"sources": ["cmsMinDsgSoc"]}, "maximum_charge_level": {"sources": ["cmsMaxChgSoc"]},
+        "ac_input": {"sources": ["powGetAcIn"]}, "ac_output": {"sources": ["powGetAcOut"]}, "dc_output": {"sources": ["powGet12v"]},
+        "usb_c1": {"sources": ["powGetTypec1"]}, "usb_c2": {"sources": ["powGetTypec2"]}, "usb_c3": {"sources": ["powGetTypec3"]},
+        "usb_a1": {"sources": ["powGetQcusb1"]}, "usb_a2": {"sources": ["powGetQcusb2"]}, "anderson": {"sources": ["powGet12vList.powGet12vItem"]},
+        "device_charge_minutes": {"sources": ["cmsChgRemTime"]}, "device_discharge_minutes": {"sources": ["cmsDsgRemTime"]}
+      }
+    },
+    {
+      "id": "deltamax", "name": "DELTA MAX", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA Max. Incomplete example: documented bmsMaster power is main-battery power, not station input/output totals. Monitoring cannot be activated until station totals are established.",
+      "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},
+      "fields": {
+        "battery_level": {"sources": ["bmsMaster.soc"]}, "minimum_discharge_level": {"sources": ["ems.minDsgSoc"]}, "maximum_charge_level": {"sources": ["ems.maxChargeSoc"]},
+        "ac_input": {"sources": ["inv.inputWatts"]}, "ac_output": {"sources": ["inv.outputWatts"]},
+        "usb_c1": {"sources": ["pd.typec1Watts"]}, "usb_c2": {"sources": ["pd.typec2Watts"]},
+        "usb_a1": {"sources": ["pd.qcUsb1Watts"]}, "usb_a2": {"sources": ["pd.qcUsb2Watts"]},
+        "ac_enabled": {"sources": ["inv.cfgAcEnabled"], "enum": {"0": false, "1": true}},
+        "charging_state": {"sources": ["ems.chgState"], "enum": {"0": 0, "1": 1, "2": 2}}, "device_charge_minutes": {"sources": ["ems.chgRemainTime"]}
+      }
+    },
+    {
+      "id": "deltapro3", "name": "DELTA PRO 3", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA Pro 3. AC high-voltage and low-voltage ports are distinct; no combined AC-output state is inferred.",
+      "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},
+      "fields": {
+        "input_power": {"sources": ["powInSumW"]}, "output_power": {"sources": ["powOutSumW"]}, "battery_level": {"sources": ["cmsBattSoc"]},
+        "minimum_discharge_level": {"sources": ["cmsMinDsgSoc"]}, "maximum_charge_level": {"sources": ["cmsMaxChgSoc"]},
+        "ac_input": {"sources": ["powGetAcIn"]}, "dc_output": {"sources": ["powGet12v"]},
+        "usb_c1": {"sources": ["powGetTypec1"]}, "usb_c2": {"sources": ["powGetTypec2"]},
+        "usb_a1": {"sources": ["powGetQcusb1"]}, "usb_a2": {"sources": ["powGetQcusb2"]},
+        "dc_enabled": {"sources": ["flowInfo12v"], "enum": {"0": false, "2": true}}, "charging_state": {"sources": ["cmsChgDsgState"]},
+        "device_charge_minutes": {"sources": ["cmsChgRemTime"]}, "device_discharge_minutes": {"sources": ["cmsDsgRemTime"]}
+      }
+    },
+    {
+      "id": "deltaproultra", "name": "DELTA PRO ULTRA", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA Pro Ultra. Shared remaining-time direction and bit-packed outlet states are not inferred.",
+      "read": {"method": "POST", "path": "/iot-open/sign/device/quota"},
+      "fields": {
+        "input_power": {"sources": ["hs_yj751_pd_appshow_addr.wattsInSum"]}, "output_power": {"sources": ["hs_yj751_pd_appshow_addr.wattsOutSum"]},
+        "battery_level": {"sources": ["hs_yj751_pd_appshow_addr.soc"]},
+        "minimum_discharge_level": {"sources": ["hs_yj751_pd_app_set_info_addr.dsgMinSoc"]}, "maximum_charge_level": {"sources": ["hs_yj751_pd_app_set_info_addr.chgMaxSoc"]},
+        "usb_c1": {"sources": ["hs_yj751_pd_appshow_addr.outTypec1Pwr"]}, "usb_c2": {"sources": ["hs_yj751_pd_appshow_addr.outTypec2Pwr"]},
+        "usb_a1": {"sources": ["hs_yj751_pd_appshow_addr.outUsb1Pwr"]}, "usb_a2": {"sources": ["hs_yj751_pd_appshow_addr.outUsb2Pwr"]}
+      }
+    },
+    {
+      "id": "deltapro", "name": "DELTA PRO", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: DELTA Pro. GET quota/all avoids contradictory selected-quota method descriptions. Main-battery and station-total power are distinct.",
+      "read": {"method": "GET", "path": "/iot-open/sign/device/quota/all"},
+      "fields": {
+        "input_power": {"sources": ["pd.wattsInSum"]}, "output_power": {"sources": ["pd.wattsOutSum"]}, "battery_level": {"sources": ["pd.soc"]},
+        "minimum_discharge_level": {"sources": ["ems.minDsgSoc"]}, "maximum_charge_level": {"sources": ["ems.maxChargeSoc"]},
+        "ac_input": {"sources": ["inv.inputWatts"]}, "ac_output": {"sources": ["inv.outputWatts"]},
+        "usb_c1": {"sources": ["pd.typec1Watts"]}, "usb_c2": {"sources": ["pd.typec2Watts"]},
+        "usb_a1": {"sources": ["pd.qcUsb1Watts"]}, "usb_a2": {"sources": ["pd.qcUsb2Watts"]},
+        "ac_enabled": {"sources": ["inv.cfgAcEnabled"], "enum": {"0": false, "1": true}},
+        "device_charge_minutes": {"sources": ["ems.chgRemainTime"]}, "device_discharge_minutes": {"sources": ["ems.dsgRemainTime"]}
+      }
+    },
+    {
+      "id": "river2pro", "name": "RIVER 2 PRO", "revision": 1, "evidence": "documentation",
+      "note": "EcoFlow Developer API: River 2 Pro. Incomplete example: the supplied HTTP table has no station input total or confirmed complete input sum. USB-C input is separate. Monitoring cannot be activated until the input total is established.",
+      "read": {"method": "GET", "path": "/iot-open/sign/device/quota/all"},
+      "fields": {
+        "output_power": {"sources": ["pd.wattsOutSum"]}, "battery_level": {"sources": ["pd.soc"]},
+        "minimum_discharge_level": {"sources": ["bms_emsStatus.minDsgSoc"]}, "maximum_charge_level": {"sources": ["bms_emsStatus.maxChargeSoc"]},
+        "ac_input": {"sources": ["inv.inputWatts"]}, "pv_input": {"sources": ["mppt.inWatts"]}, "ac_output": {"sources": ["inv.outputWatts"]},
+        "dc_output": {"sources": ["pd.carWatts"]}, "usb_c1": {"sources": ["pd.typec1Watts"]}, "usb_a1": {"sources": ["pd.usb1Watts"]},
+        "ac_enabled": {"sources": ["mppt.cfgAcEnabled"], "enum": {"0": false, "1": true}}, "dc_enabled": {"sources": ["pd.carState"], "enum": {"0": false, "1": true}},
+        "device_discharge_minutes": {"sources": ["bms_emsStatus.dsgRemainTime"]}
+      }
+    }
+  ]
+}

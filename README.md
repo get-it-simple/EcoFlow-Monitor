@@ -2,10 +2,11 @@
 
 Windows monitoring for **EcoFlow devices**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.16.0**.
+battery charge. Version **0.18.0**.
 
-The application uses the official EcoFlow developer API. Real-device validation
-remains pending.
+The application uses the official EcoFlow developer API. DELTA 3 MAX is the
+user-confirmed working reference. Other model profiles are untested examples
+from the API documentation; see [device profiles](DEVICE_PROFILES.md).
 
 ![EcoFlow Monitor dashboard](assets/interface.png)
 
@@ -22,8 +23,8 @@ portable copies use their own folder when writable. Updates and uninstall preser
 settings, logs and developer keys. Updates close the installed application safely;
 close copies running in other Windows sessions before updating.
 
-Open **Connection** in the dashboard, enter your official EcoFlow developer access/secret keys, and click
-**Load my devices**. Select your device and save. The list contains your bound
+Open **Connection → Service** in the dashboard and enter your official EcoFlow developer access/secret keys.
+In **Devices**, click **Load my devices**, select your station and its profile, then save. The list contains your bound
 devices. Unsupported telemetry formats can be collected in local diagnostic logs
 to help add support. Developer keys are different
 from an EcoFlow mobile-app email/password.
@@ -160,22 +161,24 @@ keys never go in the JSON file. Close the application before editing settings by
 
 For 1Password, install its desktop app and CLI (`op` on PATH), then enable
 Windows Hello and **Settings > Developer > Integrate with 1Password CLI** in
-1Password. In EcoFlow connection settings, choose **1Password**, paste the access
+1Password. In **Connection → Service**, choose **1Password**, paste the access
 and secret fields' **Copy Secret Reference** links (`op://…`), and fill the latest
 keys before loading devices. Save settings to keep the references. Monitoring
 keeps keys encrypted in temporary Windows storage for 1–168 hours (24 by default).
 Every restart clears this cache and requests keys again. When the time expires,
 monitoring pauses and shows **Get new keys**, with a tray notification when available.
-1Password controls Windows Hello approval. Existing Windows credentials are retained when switching.
+1Password controls Windows Hello approval. Key references are masked with an
+explicit show action. After a failed request, click the main connection status
+to request keys again. Existing Windows credentials are retained when switching.
 
-To store a newly entered pair, expand **Save entered keys to 1Password** while
-using Windows Credential Manager, enter the vault and item title, and create the
+To store a new pair, choose **1Password** and expand **Save entered keys to 1Password**.
+Enter both keys in that section, then the vault and item title, and create the
 item. This creates a new Login immediately; save settings to use its references.
 Canceling settings leaves the created item in your vault.
 
 Settings use **Save**, **Reset draft**, and **Cancel**. A damaged settings file is
 preserved; an explicit recovery Save creates `settings.json.bak` before replacing
-it. **Connection → Logging** offers Off, Normal (application actions), and Detailed
+it. **Connection → Diagnostics** offers Off, Normal (application actions), and Detailed
 (API responses and telemetry processing). Save to apply the mode without restarting.
 Known sensitive fields are masked while their presence remains visible; new API
 fields may need additional masking. **Show log file in Explorer** selects the current

@@ -74,6 +74,7 @@ def main() -> None:
         "--icon", str(ROOT / "ecoflow_monitor" / "ui" / "assets" / "app.ico"),
         "--collect-data", "ecoflow_monitor.i18n", "--collect-data", "ecoflow_monitor.ui",
         "--collect-data", "ecoflow_monitor.integration_examples",
+        "--collect-data", "ecoflow_monitor.profile_data",
         str(ROOT / "ecoflow_monitor" / "__main__.py"),
     ]
     subprocess.run(command, cwd=ROOT, env=environment, check=True)

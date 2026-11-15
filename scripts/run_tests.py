@@ -16,6 +16,7 @@ AREAS = {
         "tests/test_i18n.py",
     ),
     "connection": (
+        "tests/test_device_profiles.py",
         "tests/test_connection_session.py",
         "tests/test_controller.py",
         "tests/test_polling.py",

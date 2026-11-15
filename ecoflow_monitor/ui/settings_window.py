@@ -31,6 +31,7 @@ from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.focus import FocusBinding
 from ecoflow_monitor.ui.localization import TranslationBinding
 from ecoflow_monitor.ui.dialogs import LanguageGuideDialog
+from ecoflow_monitor.ui.device_profiles import DeviceProfilesPanel
 
 
 class SettingsWindow(QDialog):
@@ -126,6 +127,19 @@ class SettingsWindow(QDialog):
 
     def _build_connection(self):
         layout = self._tab(t("connection_settings"))
+        self.connection_tabs = QTabWidget()
+        self.connection_tabs.tabBar().setDrawBase(False)
+        layout.addWidget(self.connection_tabs)
+        bodies = {}
+        for key in ("connection_devices", "connection_service", "connection_diagnostics"):
+            body = QWidget()
+            content = QVBoxLayout(body)
+            content.setContentsMargins(0, 24, 0, 0)
+            content.setSpacing(24)
+            self.connection_tabs.addTab(body, t(key))
+            bodies[key] = content
+        layout.addStretch()
+        layout = bodies["connection_service"]
         layout.addWidget(hint(t("connection_description")))
         self.credential_renewal = CredentialRenewalBanner(self.controller, self)
         layout.addWidget(self.credential_renewal)
@@ -154,6 +168,8 @@ class SettingsWindow(QDialog):
         self.onepassword.credentials_ready.connect(self._fill_credentials)
         self.onepassword.busy_changed.connect(self._credential_busy_changed)
         layout.addWidget(self.onepassword)
+        layout.addStretch()
+        layout = bodies["connection_devices"]
         self.discover_button = action(t("load_devices"), self.discover)
         self.devices = QComboBox()
         self.devices.setEditable(True)
@@ -168,8 +184,13 @@ class SettingsWindow(QDialog):
         layout.addLayout(device_row)
         layout.addLayout(form2)
         layout.addWidget(hint(t("load_devices_hint")))
+        self.device_profiles = DeviceProfilesPanel(self.controller, self)
+        layout.addWidget(self.device_profiles)
+        self.device_profiles.changed.connect(self._schedule_draft)
+        self.devices.currentTextChanged.connect(self._selected_device_changed)
+        self.finished.connect(self.device_profiles.close_operations)
         self.diagnostics_button = action(t("device_diagnostics_action"), self.diagnostics_requested.emit)
-        layout.addWidget(self.diagnostics_button)
+        bodies["connection_diagnostics"].addWidget(self.diagnostics_button)
         self.capacity = NumberField()
         self.capacity.setRange(1, 1000000)
         self.capacity.setDecimals(0)
@@ -218,6 +239,8 @@ class SettingsWindow(QDialog):
                 self.polling_section.content.addWidget(SettingRow(t(label), control))
                 controls.append(control)
             self.polling_fields[name] = tuple(controls)
+        layout.addStretch()
+        layout = bodies["connection_diagnostics"]
         logging_heading = QLabel(t("logging_title"))
         logging_heading.setObjectName("section_title")
         layout.addWidget(logging_heading)
@@ -236,6 +259,10 @@ class SettingsWindow(QDialog):
         self.log_status.setObjectName("form_error")
         layout.addWidget(self.log_status)
         layout.addStretch()
+
+    def _selected_device_changed(self):
+        serial = self.devices.currentData() if self.devices.currentIndex() >= 0 and self.devices.currentText() == self.devices.itemText(self.devices.currentIndex()) else self.devices.currentText().strip()
+        self.device_profiles.set_serial(serial or "")
 
     def _refresh_log_status(self):
         diagnostics = self.controller.diagnostics
@@ -443,6 +470,7 @@ class SettingsWindow(QDialog):
         self._baseline = settings
         self.show_keys.setChecked(False)
         self.onepassword.load(settings)
+        self.device_profiles.load(settings)
         self.access.clear()
         self.secret.clear()
         self.devices.clear()
@@ -454,6 +482,7 @@ class SettingsWindow(QDialog):
         if self.devices.findData(settings.serial) < 0:
             self.devices.addItem(self.controller.metadata.name(settings.serial), settings.serial)
         self.devices.setCurrentIndex(self.devices.findData(settings.serial))
+        self._selected_device_changed()
         self.capacity.setValue(settings.capacity_wh)
         self._refresh_capacity_status()
         self.capacity.setSuffix(" " + t("unit_watt_hour"))
@@ -567,6 +596,10 @@ class SettingsWindow(QDialog):
     def _close_credentials(self):
         self.onepassword.cancel(show_status=False)
         self.onepassword.credentials = None
+        self.onepassword.create_access.clear()
+        self.onepassword.create_secret.clear()
+        self.onepassword.show_references.setChecked(False)
+        self.onepassword.show_create_keys.setChecked(False)
         self.access.clear()
         self.secret.clear()
 
@@ -642,6 +675,7 @@ class SettingsWindow(QDialog):
         draft = replace(
             self._baseline, serial=serial or "", capacity_wh=self.capacity.value(),
             **self.onepassword.settings_fields(),
+            **self.device_profiles.settings_fields(),
             manual_min=self.minimum.value() if self.minimum.value() >= 0 else None,
             manual_max=self.maximum.value() if self.maximum.value() >= 0 else None,
             integrations=tuple(merged),
@@ -701,9 +735,9 @@ class SettingsWindow(QDialog):
             draft.validate()
             validate_bindings(draft.hotkeys)
             self._entered_credentials()
-            self._dirty = draft != self.controller.settings or bool(self.access.text().strip() or self.secret.text().strip())
+            self._dirty = draft != self.controller.settings or self.device_profiles.catalog_changed or bool(self.access.text().strip() or self.secret.text().strip())
             recording = any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values())
-            self.save_button.setEnabled(self._dirty and not self.onepassword.busy and not recording)
+            self.save_button.setEnabled(self._dirty and not self.onepassword.busy and not self.device_profiles.busy and not recording)
             self.error_label.clear()
             self._show_hotkey_issues(())
             if self._dirty:
@@ -721,7 +755,7 @@ class SettingsWindow(QDialog):
         return self.metrics.group(mode)
 
     def save(self):
-        if self.onepassword.busy or any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values()):
+        if self.onepassword.busy or self.device_profiles.busy or any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values()):
             return
         rollback: Callable[[], None] | None = None
         try:
@@ -729,7 +763,7 @@ class SettingsWindow(QDialog):
             validate_bindings(draft.hotkeys)
             if self.preflight is not None:
                 rollback = self.preflight(draft)
-            self.controller.apply_settings(draft, self._entered_credentials())
+            self.controller.apply_settings(draft, self._entered_credentials(), profile_catalog=self.device_profiles.catalog)
             name = self._loaded_device_names.get(draft.serial)
             if name:
                 self.controller.metadata.remember_name(draft.serial, name)

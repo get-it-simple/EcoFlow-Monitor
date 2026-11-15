@@ -117,7 +117,7 @@ QListWidget#navigation {{ background: transparent; border: none; padding: 0; }}
 QListWidget#navigation::item {{ padding: 0; margin: 0; border: none; background: transparent; }}
 QToolButton[icon_button="true"] {{ padding: 0; min-width: {px(34)}px; max-width: {px(34)}px; min-height: {px(34)}px; max-height: {px(34)}px; }}
 QToolButton[accordion="true"] {{ border: none; text-align: left; font-weight: 400; padding: {px(10)}px {px(16)}px; }}
-QLabel#status_badge {{ background: {c['raised']}; border-radius: {px(14)}px; padding: {px(6)}px {px(10)}px; font-size: {px(12)}px; font-weight: 600; }}
+QLabel#status_badge, QToolButton#status_badge {{ background: {c['raised']}; border-radius: {px(14)}px; padding: {px(6)}px {px(10)}px; font-size: {px(12)}px; font-weight: 600; min-height: 0; }}
 QWidget#title_bar {{ border-bottom: 1px solid {c['border']}; }}
 QWidget#sidebar {{ border-right: 1px solid {c['border']}; }}
 QWidget#settings_footer {{ border-top: 1px solid {c['border']}; }}

@@ -60,14 +60,14 @@ def test_groups_are_combined_only_when_due_and_bootstrap_is_once():
     state = PollingState(PollingPreferences())
     keys = CORE | {"ac_output", "minimum_discharge_level"}
     state.set_demand(keys, keys, 0)
-    assert set(state.begin(0)) == {SENSOR_FIELDS[key] for key in keys}
+    assert set(state.begin(0)) == keys
     complete(state, {"input_power": 0, "output_power": 420, "battery_level": 75, "ac_output": -420, "minimum_discharge_level": 10}, 0)
     assert state.due(29) == frozenset()
     assert state.due(30) == CORE
     assert state.due(60) == CORE | {"ac_output"}
     assert state.due(300) == keys
     state.set_demand({"minimum_discharge_level"}, {"minimum_discharge_level"}, 301)
-    assert set(state.begin(301)) == {"cmsMinDsgSoc"}
+    assert set(state.begin(301)) == {"minimum_discharge_level"}
 
 
 def test_loading_is_local_and_resuming_fresh_values_has_no_indicator():
@@ -144,7 +144,7 @@ def sensor_controller(tmp_path, qapp, session_cache):
     controller = Controller(SettingsStore(tmp_path / "settings.json"), credential_store=MemoryCredentials(),
                             client_factory=lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle)),
                             clock=lambda: now[0], credential_cache=session_cache)
-    controller.settings = replace(controller.settings, serial="TEST")
+    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),))
     controller.set_sensor_demand("dashboard", ())
     yield controller, now, calls, values, failures
     controller.stop()

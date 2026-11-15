@@ -3,21 +3,11 @@ import math
 import threading
 
 from ecoflow_monitor.domain import Telemetry
+from ecoflow_monitor.device_profiles import CORE, PORTS as PORT_NAMES, SENSORS, baseline_profile
 
 
-PORT_KEYS = {
-    "ac_input": "powGetAcIn", "pv_input": "powGetPv", "ac_output": "powGetAcOut",
-    "dc_output": "powGet12v", "usb_c1": "powGetTypec1", "usb_c2": "powGetTypec2",
-    "usb_c3": "powGetTypec3", "usb_a1": "powGetQcusb1", "usb_a2": "powGetQcusb2",
-}
-SENSOR_FIELDS = {
-    "input_power": "powInSumW", "output_power": "powOutSumW", "battery_level": "cmsBattSoc",
-    "minimum_discharge_level": "cmsMinDsgSoc", "maximum_charge_level": "cmsMaxChgSoc",
-    **PORT_KEYS, "anderson": "powGet12vList.powGet12vItem",
-    "ac_enabled": "flowInfoAcOut", "dc_enabled": "flowInfo12v", "charging_state": "cmsChgDsgState",
-    "device_discharge_minutes": "cmsDsgRemTime", "device_charge_minutes": "cmsChgRemTime",
-}
-CORE = frozenset(("input_power", "output_power", "battery_level"))
+SENSOR_FIELDS = {key: mapping.quotas[0] for key, mapping in baseline_profile().fields}
+PORT_KEYS = {key: SENSOR_FIELDS[key] for key in PORT_NAMES}
 LIMITS = frozenset(("minimum_discharge_level", "maximum_charge_level"))
 PORTS = frozenset((*PORT_KEYS, "anderson"))
 DASHBOARD_SENSORS = frozenset(SENSOR_FIELDS) - {"ac_input", "pv_input", "device_discharge_minutes", "device_charge_minutes"}
@@ -153,7 +143,7 @@ class PollingState:
             for key in keys:
                 self.samples[key] = replace(self.samples.get(key, SensorSample()), attempted_monotonic=now)
             self.revision += 1
-            return tuple(SENSOR_FIELDS[key] for key in SENSOR_FIELDS if key in keys)
+            return tuple(key for key in SENSORS if key in keys)
 
     def complete(self, patch: TelemetryPatch, utc: float, now: float) -> None:
         with self._lock:

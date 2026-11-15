@@ -17,6 +17,7 @@ from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
 from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.device_metadata import DeviceMetadataStore
+from ecoflow_monitor.device_profiles import builtin_catalog, load_catalog
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
@@ -76,6 +77,8 @@ class Controller(QObject):
     task_finished = Signal(str)
     unsupported_device = Signal()
     system_activity_changed = Signal(object)
+    profiles_ready = Signal(object)
+    profile_example_ready = Signal(object, object)
 
     def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None) -> None:
         super().__init__()
@@ -107,6 +110,7 @@ class Controller(QObject):
             self.settings = AppSettings()
             self.notice = str(error)
         self.diagnostics = diagnostics
+        self.profile_catalog = None if self.settings.custom_device_profiles else builtin_catalog()
         if self.diagnostics is not None:
             self.diagnostics.configure(self.settings.logging_mode)
         if self.notice:
@@ -393,6 +397,7 @@ class Controller(QObject):
         self._api_mode = "telemetry"
         polling = self.polling
         catalog = self.catalog
+        profile_catalog = self.profile_catalog
         def select_quotas():
             if cancelled.is_set():
                 return ()
@@ -405,11 +410,13 @@ class Controller(QObject):
             if credentials is None:
                 raise CredentialError("credentials_required")
             try:
-                client = self._client(credentials, cancelled)
+                client = self._client(credentials, cancelled, settings, profile_catalog)
                 if isinstance(client, EcoFlowClient):
                     client.catalog = catalog if catalog is not None else client.devices()
+                    device = next((item for item in client.catalog if item.serial == serial), None)
+                    client.profile = client.profile_catalog.resolve(dict(settings.device_profile_assignments).get(serial, ""), device.model_id if device else "")
                 if hasattr(client, "read_quotas"):
-                    return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified), getattr(client, "catalog", None))
+                    return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified), getattr(client, "catalog", None), getattr(client, "profile_catalog", None))
                 return ("telemetry", client.read(serial), getattr(client, "catalog", None))
             except EcoFlowError as error:
                 if error.state == ConnectionState.API_ERROR and internet_unavailable():
@@ -431,13 +438,44 @@ class Controller(QObject):
             return self.load_session_credentials(settings, cancelled)
         return self.credential_store.read(settings.credential_ref)
 
-    def _client(self, credentials, cancelled):
+    def _client(self, credentials, cancelled, settings=None, profile_catalog=None):
         if cancelled.is_set():
             raise ActivityCancelled()
         client = self.client_factory(credentials)
         if isinstance(client, EcoFlowClient):
             client.cancelled = cancelled
+            settings = settings or self.settings
+            snapshot = profile_catalog if profile_catalog is not None else self.profile_catalog
+            if snapshot is None or snapshot.custom_enabled != settings.custom_device_profiles:
+                snapshot = load_catalog(self.profile_directory, settings.custom_device_profiles)
+            client.profile_catalog = snapshot
+            device = next((item for item in self.catalog or () if item.serial == settings.serial), None)
+            client.profile = snapshot.resolve(dict(settings.device_profile_assignments).get(settings.serial, ""), device.model_id if device else "")
         return client
+
+    @property
+    def profile_directory(self):
+        return self.store.path.parent / "device-profiles"
+
+    @property
+    def device_profile(self):
+        if self.profile_catalog is None:
+            return None
+        device = next((item for item in self.catalog or () if item.serial == self.settings.serial), None)
+        return self.profile_catalog.resolve(dict(self.settings.device_profile_assignments).get(self.settings.serial, ""), device.model_id if device else "")
+
+    def scan_profiles(self, enabled):
+        if self._stopped or self.system_activity.paused or "profiles" in self._active:
+            return False
+        self._submit("profiles", lambda: load_catalog(self.profile_directory, enabled))
+        return True
+
+    @property
+    def can_retry_credentials(self):
+        return (self.settings.credential_source == "1password" and not self._stopped and not self.system_activity.paused
+                and "api" not in self._active and not self.credential_renewal_pending
+                and (self.credential_renewal_required or self.connection == ConnectionState.AUTH_ERROR
+                     or self.notice.startswith("onepassword_") and self.notice not in {"onepassword_loaded", "onepassword_created"}))
 
     def load_session_credentials(self, settings, cancelled):
         identity = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
@@ -514,15 +552,19 @@ class Controller(QObject):
             return
         self.credential_renewal_pending = True
         self.notice = ""
-        if self.settings.serial:
+        if self.settings.serial and self.polling.required:
+            self.polling.resume(self.clock())
             self.refresh()
         else:
             self.discover()
             self.changed.emit()
 
-    def apply_settings(self, settings: AppSettings, credentials: Credentials | None = None) -> None:
+    def apply_settings(self, settings: AppSettings, credentials: Credentials | None = None, *, profile_catalog=None) -> None:
         settings.validate()
         validate_bindings(settings.hotkeys)
+        if profile_catalog is not None and profile_catalog.custom_enabled != settings.custom_device_profiles:
+            raise ValueError("device_profile_invalid")
+        previous_profile_catalog = self.profile_catalog
         write_local = credentials is not None and settings.credential_source == "windows"
         if write_local:
             settings = replace(settings, credential_ref="EcoFlowMonitor/" + uuid.uuid4().hex)
@@ -539,11 +581,18 @@ class Controller(QObject):
             raise
         previous = self.settings
         self.settings = settings
+        profile_preferences_changed = (previous.custom_device_profiles != settings.custom_device_profiles
+                                       or previous.device_profile_assignments != settings.device_profile_assignments)
+        if profile_catalog is not None:
+            self.profile_catalog = profile_catalog
+        elif previous.custom_device_profiles != settings.custom_device_profiles:
+            self.profile_catalog = None if settings.custom_device_profiles else builtin_catalog()
+        profile_changed = profile_preferences_changed or previous_profile_catalog != self.profile_catalog
         self.polling.configure(settings.polling)
         if self.diagnostics is not None:
             self.diagnostics.configure(settings.logging_mode)
         event("settings_saved")
-        if credentials is None and replace(previous, logging_mode=settings.logging_mode, polling=settings.polling) == settings:
+        if not profile_changed and credentials is None and replace(previous, logging_mode=settings.logging_mode, polling=settings.polling) == settings:
             self._update_demand()
             if previous.polling != settings.polling and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE, ConnectionState.UNSUPPORTED}:
                 self._next_api = self.polling.next_due(self.clock())
@@ -560,10 +609,15 @@ class Controller(QObject):
         self._discovery_pending = None
         self._diagnostic_pending = False
         credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
-        if any(getattr(previous, name) != getattr(settings, name) for name in credential_fields):
+        if profile_changed or any(getattr(previous, name) != getattr(settings, name) for name in credential_fields):
             self.telemetry = None
             self.polling = PollingState(settings.polling)
             self.connection = ConnectionState.CONNECTING if settings.serial else ConnectionState.UNCONFIGURED
+        if profile_changed:
+            if settings.serial:
+                self.metadata.sampler(settings.serial).previous = None
+            for state in self.integration_states.values():
+                state.gate.suspend()
         self._next_api = 0
         self._update_demand()
         self._api_pending = bool(settings.serial)
@@ -744,6 +798,15 @@ class Controller(QObject):
         if self._stopped:
             self.task_finished.emit(kind)
             return
+        if kind in {"profiles", "profile_example"}:
+            if error is not None:
+                event("device_profile_operation_failed", level=logging.WARNING, operation=kind, exception_type=type(error).__name__)
+            if kind == "profiles":
+                self.profiles_ready.emit(result)
+            else:
+                self.profile_example_ready.emit(result, error)
+            self.task_finished.emit(kind)
+            return
         if kind == "metadata" and self._metadata_dirty:
             self._save_metadata()
         if kind == "api":
@@ -800,6 +863,8 @@ class Controller(QObject):
                     self.notice = "device_diagnostics_partial" if result[1] else "device_diagnostics_complete"
                 else:
                     event("telemetry_refresh_completed")
+                    if len(result) > 3 and result[3] is not None:
+                        self.profile_catalog = result[3]
                     if len(result) > 2 and result[2] is not None and self.catalog is None:
                         self.catalog = result[2]
                         self.metadata.remember(result[2])

@@ -314,6 +314,8 @@ def test_power_units_follow_discovered_catalog_and_live_language_changes(runtime
 def test_metric_tooltips_follow_language_changes(runtime, qapp):
     from ecoflow_monitor.ui.metrics import metric_tooltip
     controller = runtime.controller
+    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),))
+    controller.changed.emit()
     english = metric_tooltip("input_power")
     assert runtime.window.monitoring.readings["input_power"].toolTip() == english + "\n" + i18n.t("missing_data")
     controller.apply_settings(replace(controller.settings, language="uk"))

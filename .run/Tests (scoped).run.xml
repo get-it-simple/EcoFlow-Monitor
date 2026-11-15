@@ -13,7 +13,7 @@
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <option name="SCRIPT_NAME" value="scripts.run_tests" />
-    <option name="PARAMETERS" value="--area integrations --report build/scoped-tests.json" />
+    <option name="PARAMETERS" value="--area connection --area credentials --target tests/test_diagnostics.py --target tests/test_system_activity.py --report build/scoped-tests.json" />
     <option name="MODULE_MODE" value="true" />
     <method v="2" />
   </configuration>

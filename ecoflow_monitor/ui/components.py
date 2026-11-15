@@ -381,10 +381,12 @@ class ActionFooter(QScrollArea):
         return super().eventFilter(watched, event)
 
 
-class StatusBadge(QLabel):
-    def __init__(self, controller, parent=None):
+class StatusBadge(QToolButton):
+    def __init__(self, controller, parent=None, *, retry_credentials=False):
         super().__init__(parent)
         self.controller = controller
+        self.retry_credentials = retry_credentials
+        self.clicked.connect(self._retry_credentials)
         self.motion = motion_driver(controller)
         self.outlined = False
         self.compact = False
@@ -393,12 +395,36 @@ class StatusBadge(QLabel):
         self.motion.add(self)
         self.refresh()
 
+    def sizeHint(self):
+        scale = max(0.5, self.font().pixelSize() / 12)
+        return QSize(self.fontMetrics().horizontalAdvance(status_text(self.controller)) + round(40 * scale),
+                     max(round(28 * scale), self.fontMetrics().height() + round(12 * scale)))
+
+    def minimumSizeHint(self):
+        return QSize(round(40 * max(0.5, self.font().pixelSize() / 12)), self.sizeHint().height())
+
     def refresh(self):
         self.motion.refresh()
         self.setText("*  " + status_text(self.controller))
-        self.setToolTip(status_tooltip(self.controller))
-        self.setAccessibleName(status_tooltip(self.controller))
+        retry = self.retry_credentials and self.controller.can_retry_credentials
+        tooltip = status_tooltip(self.controller) + ("\n" + t("onepassword_status_retry") if retry else "")
+        self.setToolTip(tooltip)
+        self.setAccessibleName(tooltip)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus if retry else Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if retry else Qt.CursorShape.ArrowCursor)
         self.setStyleSheet(f"color: {status_color(self.controller)}; background: transparent; border: none;")
+        self.updateGeometry()
+
+    def _retry_credentials(self):
+        if self.retry_credentials and self.controller.can_retry_credentials:
+            self.controller.renew_credentials()
+
+    def keyPressEvent(self, event):
+        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+            self._retry_credentials()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def motion_active(self):
         return status_motion_active(self.motion)
@@ -410,6 +436,10 @@ class StatusBadge(QLabel):
         painter.setBrush(QColor(COLORS["raised"]))
         if not self.compact:
             painter.drawRoundedRect(self.rect(), self.height() / 2, self.height() / 2)
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(COLORS["focus"]), 2))
+            painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), self.height() / 2, self.height() / 2)
         painter.setPen(QColor(status_color(self.controller)))
         painter.setFont(self.font())
         padding = round(10 * max(0.5, self.font().pixelSize() / 12))

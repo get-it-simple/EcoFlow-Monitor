@@ -1,5 +1,5 @@
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QTabBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLineEdit, QTabBar, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.ecoflow import Credentials
 from ecoflow_monitor.adapters.credentials import CredentialError
@@ -22,6 +22,7 @@ class OnePasswordPanel(QWidget):
         self._request: SecretRequest | None = None
         self._saving = False
         self._save_credentials = None
+        self._retained_references = ("", "")
         self.credentials: Credentials | None = None
         self.session_loader = None
         self.external_runner = None
@@ -49,8 +50,12 @@ class OnePasswordPanel(QWidget):
         for field, key in ((self.access_ref, "onepassword_access_ref"), (self.secret_ref, "onepassword_secret_ref")):
             field.setPlaceholderText("op://Personal/EcoFlow/username" if field is self.access_ref else "op://Personal/EcoFlow/password")
             field.setAccessibleName(t(key))
+            field.setEchoMode(QLineEdit.EchoMode.Password)
             fields.addRow(t(key), field)
             field.textChanged.connect(self._invalidate)
+        self.show_references = QCheckBox(t("onepassword_show_references"))
+        self.show_references.toggled.connect(self._show_references)
+        fields.addRow(self.show_references)
         self.cache_hours = NumberField()
         self.cache_hours.setRange(1, 168)
         self.cache_hours.setDecimals(0)
@@ -68,6 +73,15 @@ class OnePasswordPanel(QWidget):
         self.vault = QLineEdit()
         self.vault.setPlaceholderText("Personal")
         self.title = QLineEdit("EcoFlow Monitor")
+        self.create_access = QLineEdit()
+        self.create_secret = QLineEdit()
+        for control, key in ((self.create_access, "access_key"), (self.create_secret, "secret_key")):
+            control.setEchoMode(QLineEdit.EchoMode.Password)
+            control.setAccessibleName(t(key))
+            save_form.addRow(t(key), control)
+        self.show_create_keys = QCheckBox(t("show_keys"))
+        self.show_create_keys.toggled.connect(self._show_create_keys)
+        save_form.addRow(self.show_create_keys)
         save_form.addRow(t("onepassword_vault"), self.vault)
         save_form.addRow(t("onepassword_title"), self.title)
         self.vault.setAccessibleName(t("onepassword_vault"))
@@ -111,17 +125,37 @@ class OnePasswordPanel(QWidget):
 
     def _source_changed(self):
         self._invalidate()
+        self.show_references.setChecked(False)
+        self.show_create_keys.setChecked(False)
+        self.create_access.clear()
+        self.create_secret.clear()
         self.references.setVisible(self.uses_onepassword)
         self.load_button.setVisible(self.uses_onepassword)
-        self.save_section.setVisible(not self.uses_onepassword)
+        self.save_section.setVisible(self.uses_onepassword)
+        self.setup_section.setVisible(self.uses_onepassword)
+
+    def _show_references(self, visible):
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self.access_ref.setEchoMode(mode)
+        self.secret_ref.setEchoMode(mode)
+
+    def _show_create_keys(self, visible):
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self.create_access.setEchoMode(mode)
+        self.create_secret.setEchoMode(mode)
 
     def load(self, settings):
         self.cancel(show_status=False)
+        self._retained_references = (settings.onepassword_access_ref, settings.onepassword_secret_ref)
         self.source.setCurrentIndex(self._onepassword_tab if settings.credential_source == "1password" else self._windows_tab)
         self.access_ref.setText(settings.onepassword_access_ref)
         self.secret_ref.setText(settings.onepassword_secret_ref)
         self.cache_hours.setValue(settings.onepassword_cache_ttl_seconds // 3600)
         self.credentials = None
+        self.show_references.setChecked(False)
+        self.show_create_keys.setChecked(False)
+        self.create_access.clear()
+        self.create_secret.clear()
         self.show_status("")
         self.save_section.set_expanded(False)
         self.setup_section.set_expanded(False)
@@ -130,8 +164,13 @@ class OnePasswordPanel(QWidget):
         if self.uses_onepassword:
             access = normalize_secret_reference(self.access_ref.text())
             secret = normalize_secret_reference(self.secret_ref.text())
+            self._retained_references = (access, secret)
         else:
-            access = secret = ""
+            try:
+                access = normalize_secret_reference(self.access_ref.text())
+                secret = normalize_secret_reference(self.secret_ref.text())
+            except ValueError:
+                access, secret = self._retained_references
         return dict(credential_source=self.source.tabData(self.source.currentIndex()), onepassword_access_ref=access, onepassword_secret_ref=secret,
                     onepassword_cache_ttl_seconds=int(self.cache_hours.value()) * 3600)
 
@@ -153,8 +192,8 @@ class OnePasswordPanel(QWidget):
         if self.busy:
             return
         try:
-            credentials = self._entered_credentials()
-            if credentials is None or not self.vault.text().strip() or not self.title.text().strip():
+            credentials = Credentials(self.create_access.text().strip(), self.create_secret.text().strip())
+            if not credentials.access_key or not credentials.secret_key or not self.vault.text().strip() or not self.title.text().strip():
                 raise OnePasswordError("onepassword_save_required")
         except (CredentialError, ValueError) as error:
             self.show_status(t(str(error)))
@@ -207,6 +246,8 @@ class OnePasswordPanel(QWidget):
             self.access_ref.setText(result.value.access_ref)
             self.secret_ref.setText(result.value.secret_ref)
             self.credentials = credentials
+            self.create_access.clear()
+            self.create_secret.clear()
             self.show_status(t("onepassword_created"))
         elif isinstance(result.value, Credentials):
             self.credentials = result.value
@@ -221,3 +262,8 @@ class OnePasswordPanel(QWidget):
             self.show_status(t("onepassword_cancelled") + (" " + t("onepassword_check_created") if self._saving else "") if show_status else "")
         self._save_credentials = None
         self._set_busy(False)
+
+    def hideEvent(self, event):
+        self.show_references.setChecked(False)
+        self.show_create_keys.setChecked(False)
+        super().hideEvent(event)
