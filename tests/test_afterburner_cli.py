@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from ecoflow_monitor.adapters.integrations import IntegrationAdapter, running_processes
+from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, running_processes
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationDefinition, afterburner_example
+from ecoflow_monitor.integration_state import ProcessIdentity
 from ecoflow_monitor.ui.integrations import IntegrationsEditor
 
 
@@ -100,6 +101,63 @@ def test_disabled_msi_does_not_scan_processes(msi_module, monkeypatch):
         pytest.fail("Disabled module must not scan processes")
     monkeypatch.setattr("ecoflow_monitor.adapters.integrations.psutil.process_iter", unexpected)
     assert IntegrationAdapter().inspect(replace(msi_module, enabled=False)).availability == "integration_disabled"
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_process_identity_requires_one_known_instance(msi_module, monkeypatch, count):
+    processes = tuple(SimpleNamespace(info={"name": "MSIAfterburner.exe", "exe": msi_module.executable},
+                                      pid=1234 + index, create_time=lambda: 1000.0) for index in range(count))
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.psutil.process_iter", lambda *args: processes)
+    observation = IntegrationAdapter().inspect(msi_module)
+    expected = ProcessIdentity(normalized_executable(msi_module.executable), 1234, 1000.0)
+    assert observation.ready
+    assert observation.process == (expected if count == 1 else None)
+
+
+def test_unknown_duplicate_prevents_persistent_process_identity(msi_module, monkeypatch):
+    known = SimpleNamespace(info={"name": "MSIAfterburner.exe", "exe": msi_module.executable}, pid=1234, create_time=lambda: 1000.0)
+    unknown = SimpleNamespace(info=known.info)
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.psutil.process_iter", lambda *args: (known, unknown))
+    assert IntegrationAdapter().inspect(msi_module).process is None
+
+
+def test_process_restart_between_reaction_steps_stops_transition(msi_module, monkeypatch):
+    adapter = IntegrationAdapter()
+    process = ProcessIdentity(normalized_executable(msi_module.executable), 1234, 1000.0)
+    current_process = [process]
+    monkeypatch.setattr(adapter, "inspect", lambda module: IntegrationObservation(
+        "integration_ready", executable=msi_module.executable, process=current_process[0]))
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        current_process[0] = replace(process, created=2000.0)
+        return subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", run)
+    target = replace(msi_module.profiles[0], activation=replace(msi_module.profiles[0].activation,
+                                                              commands=("{app} -profile1", "{app} -profile1")))
+    result = adapter.transition(msi_module, None, target, lambda: True)
+    assert not result.success and result.completed == 1 and result.error == "integration_cancelled"
+    assert len(calls) == 1
+
+
+def test_cli_launch_can_establish_identity_between_steps(msi_module, monkeypatch):
+    module = replace(msi_module, driver="cli", allow_launch=True)
+    adapter = IntegrationAdapter()
+    process = ProcessIdentity(normalized_executable(module.executable), 1234, 1000.0)
+    current_process = [None]
+    monkeypatch.setattr(adapter, "inspect", lambda selected: IntegrationObservation(
+        "integration_ready", executable=module.executable, process=current_process[0]))
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        current_process[0] = process
+        return subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", run)
+    target = replace(module.profiles[0], activation=replace(module.profiles[0].activation,
+                                                          commands=("{app} -profile1", "{app} -profile1")))
+    result = adapter.transition(module, None, target, lambda: True)
+    assert result.success and result.completed == 2 and result.process is None
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("failure,reason", [(5, "integration_permission_denied"), (740, "integration_elevation_required"),

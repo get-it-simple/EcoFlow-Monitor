@@ -22,6 +22,7 @@ from ecoflow_monitor.device_metadata import DeviceMetadataStore
 from ecoflow_monitor.device_profiles import builtin_catalog, load_catalog
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.integration_state import IntegrationStateStore, ProcessIdentity, command_fingerprint
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, SENSOR_FIELDS, PollingState, TelemetryPatch, dependencies
 from ecoflow_monitor.system_activity import ActivityCancelled, SystemActivity
@@ -59,10 +60,12 @@ class Task(QRunnable):
 class IntegrationState:
     observation: IntegrationObservation = field(default_factory=lambda: IntegrationObservation("integration_disabled"))
     active_profile: str | None = None
+    active_process: ProcessIdentity | None = None
     requested_profile: str | None = None
     transition_from: str | None = None
     result: TransitionResult | None = None
     busy: bool = False
+    dispatch_revision: int = 0
     gate: AutomationGate[str] = field(default_factory=AutomationGate)
     next_scan: float = 0
     auto_reason: str = "automation_paused"
@@ -142,6 +145,8 @@ class Controller(QObject):
         self.quotas_started.connect(self.changed, Qt.ConnectionType.QueuedConnection)
         self._update_demand()
         self.integration_states = {module.id: IntegrationState() for module in self.settings.integrations}
+        self.integration_cache = IntegrationStateStore(store.path.with_name("integration-state.json"))
+        self.integration_cache.configure(self.settings.integrations)
         self._generation = 0
         self._stopped = False
         self._credential_cancelled = threading.Event()
@@ -682,8 +687,11 @@ class Controller(QObject):
                 self.credential_renewal_required = True
         self._check_credential_expiry()
         previous_modules = {module.id: module for module in previous.integrations}
+        self.integration_cache.configure(settings.integrations)
         self.integration_states = {
-            module.id: self.integration_states[module.id] if previous_modules.get(module.id) == module else IntegrationState()
+            module.id: self.integration_states[module.id]
+            if module.id in previous_modules and previous_modules[module.id].enabled == module.enabled
+            and command_fingerprint(previous_modules[module.id]) == command_fingerprint(module) else IntegrationState()
             for module in settings.integrations
         }
         for module in settings.integrations:
@@ -714,6 +722,8 @@ class Controller(QObject):
         except SettingsError as error:
             self.notice = str(error)
         self.settings = settings
+        if "integrations" in changes:
+            self.integration_cache.configure(settings.integrations)
         self._update_demand()
         if "integrations" in changes and hasattr(self.integration_adapter, "retain_sessions"):
             self.integration_adapter.retain_sessions(settings.integrations)
@@ -748,6 +758,7 @@ class Controller(QObject):
     def request_profile(self, integration_id: str, profile_id: str, automatic: bool = False) -> None:
         if self._stopped or self.system_activity.paused:
             return
+        self.integration_cache.configure(self.settings.integrations)
         module = self.module(integration_id)
         module_index = self.settings.integrations.index(module) + 1
         event("profile_requested", module_index=module_index, automatic=automatic)
@@ -771,13 +782,26 @@ class Controller(QObject):
         generation = self._generation
         activity_epoch = self._activity_epoch
         state.busy = True
+        state.dispatch_revision += 1
         state.requested_profile = profile_id
         state.result = None
         def current():
             return (not self._stopped and not self.system_activity.paused and generation == self._generation
                     and activity_epoch == self._activity_epoch and self.module(integration_id).enabled)
         def operation(target_profile: IntegrationProfile = target):
-            return profile_id, automatic, self.integration_adapter.transition(module, previous, target_profile, current)
+            if not current():
+                return profile_id, automatic, TransitionResult(False, error="integration_cancelled")
+            try:
+                revision = self.integration_cache.begin(module)
+            except OSError:
+                logger.warning("Integration state could not be invalidated before dispatch")
+                return profile_id, automatic, TransitionResult(False, error="integration_command_failed")
+            if revision is None or not current():
+                return profile_id, automatic, TransitionResult(False, error="integration_cancelled")
+            outcome = self.integration_adapter.transition(module, previous, target_profile, current)
+            if outcome.success:
+                self.integration_cache.finish(module, revision, profile_id, outcome.process)
+            return profile_id, automatic, outcome
         self._submit(kind, operation)
         if kind in self._active:
             self._active[kind].integration_state = state
@@ -787,6 +811,9 @@ class Controller(QObject):
         if self._stopped or self.system_activity.paused:
             return
         self._check_credential_expiry()
+        self.integration_cache.configure(self.settings.integrations)
+        if self.integration_cache.dirty:
+            self._submit("integration_cache", self.integration_cache.flush)
         now = self.clock()
         self._update_demand()
         revision = (self.polling.revision, tuple((key, self.reading_state(key)) for key in self.polling.visible))
@@ -807,7 +834,7 @@ class Controller(QObject):
             kind = "scan:" + module.id
             if module.enabled and now >= state.next_scan and kind not in self._active:
                 state.next_scan = now + 2
-                self._submit(kind, lambda selected=module: self.integration_adapter.inspect(selected))
+                self._submit(kind, lambda selected=module, revision=state.dispatch_revision: self._inspect_integration(selected, revision))
             eligible = (self.access_allowed and module.enabled and module.auto_enabled and module.id not in self._resume_scans
                         and self.fresh_for(self._automation_sensors(module)) and state.observation.ready)
             reason = "automatic_mode" if eligible else "automation_paused"
@@ -818,12 +845,17 @@ class Controller(QObject):
             if not eligible:
                 state.gate.suspend()
                 continue
-            if state.busy or (state.result is not None and not state.result.success):
+            if state.busy:
                 continue
             rule = module.select(self.telemetry, state.observation.running)
             profile_id = state.gate.evaluate(rule.profile_id if rule else None, now, state.active_profile)
             if profile_id is not None:
                 self.request_profile(module.id, profile_id, automatic=True)
+
+    def _inspect_integration(self, module, revision):
+        observation = self.integration_adapter.inspect(module)
+        restored = self.integration_cache.restore(module, observation.process) if observation.ready else None
+        return observation, restored, revision
 
     def _completed(self, kind, generation, result, error) -> None:
         previous_connection = self.connection
@@ -932,8 +964,21 @@ class Controller(QObject):
                     self.credential_renewal_required = not self.credential_cache.ready
             elif kind.startswith("scan:"):
                 integration_id = kind.split(":", 1)[1]
-                previous_availability = self.integration_states[integration_id].observation.availability
-                self.integration_states[integration_id].observation = result if error is None else IntegrationObservation("integration_error")
+                state = self.integration_states[integration_id]
+                previous_availability = state.observation.availability
+                previous_process = state.observation.process
+                observation, restored, revision = result if error is None else (IntegrationObservation("integration_error"), None, state.dispatch_revision)
+                state.observation = observation
+                if not state.busy and revision == state.dispatch_revision:
+                    previous_target = state.active_process or previous_process
+                    if previous_target is not None and previous_target != observation.process:
+                        state.active_profile = None
+                        state.active_process = None
+                        state.transition_from = None
+                        state.gate.suspend()
+                    if restored is not None and (state.result is None or state.result.success or state.result.error == "integration_cancelled"):
+                        state.active_profile = restored
+                        state.active_process = observation.process
                 if error is None:
                     self._resume_scans.discard(integration_id)
                 availability = self.integration_states[integration_id].observation.availability
@@ -972,9 +1017,11 @@ class Controller(QObject):
               exit_code=outcome.exit_code, winerror=outcome.winerror, reason=outcome.error)
         if outcome.success:
             state.active_profile = profile_id
+            state.active_process = outcome.process
             state.transition_from = None
         elif not cancelled or outcome.completed:
             state.active_profile = None
+            state.active_process = None
             if interrupted:
                 state.transition_from = None
         if interrupted:
@@ -1026,6 +1073,7 @@ class Controller(QObject):
         if hasattr(self.integration_adapter, "close"):
             self.integration_adapter.close()
         self._pool.waitForDone(22000)
+        self.integration_cache.flush()
         if self.metadata.devices or self.metadata.samplers:
             self.metadata.save()
         if hasattr(self.integration_adapter, "close"):

@@ -53,6 +53,7 @@ AREAS = {
     ),
     "integrations": (
         "tests/test_integrations.py",
+        "tests/test_integration_state.py",
         "tests/test_ui_integrations.py",
         "tests/test_design_system.py::test_rule_dependencies_block_condition_disable_and_keep_rules",
         "tests/test_design_system.py::test_command_editor_preview_preserves_id_and_never_executes",

@@ -9,6 +9,7 @@ import psutil
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.integration_state import ProcessIdentity
 from ecoflow_monitor.system_activity import ActivityCancelled
 
 
@@ -21,6 +22,7 @@ class IntegrationObservation:
     running: frozenset[str] = frozenset()
     executable: str = ""
     detail: str = ""
+    process: ProcessIdentity | None = None
 
     @property
     def ready(self) -> bool:
@@ -36,27 +38,40 @@ class TransitionResult:
     error: str = ""
     exit_code: int | None = None
     winerror: int | None = None
+    process: ProcessIdentity | None = None
 
 
 @dataclass(frozen=True)
 class ProcessSnapshot:
     running: frozenset[str] = frozenset()
     inaccessible_names: frozenset[str] = frozenset()
+    identities: tuple[ProcessIdentity, ...] = ()
+    uncertain_paths: frozenset[str] = frozenset()
 
 
 def running_processes() -> ProcessSnapshot:
     running = set()
     inaccessible = set()
+    identities = []
+    uncertain = set()
     for process in psutil.process_iter(["name", "exe"]):
         try:
             path = process.info.get("exe")
             if isinstance(path, str) and path:
                 running.add(normalized_executable(path))
+                try:
+                    observed = ProcessIdentity(normalized_executable(path), process.pid, process.create_time())
+                    if observed.valid():
+                        identities.append(observed)
+                    else:
+                        uncertain.add(normalized_executable(path))
+                except (psutil.Error, OSError, AttributeError):
+                    uncertain.add(normalized_executable(path))
             elif isinstance(process.info.get("name"), str):
                 inaccessible.add(process.info["name"].casefold())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    return ProcessSnapshot(frozenset(running), frozenset(inaccessible))
+    return ProcessSnapshot(frozenset(running), frozenset(inaccessible), tuple(identities), frozenset(uncertain))
 
 
 class IntegrationAdapter:
@@ -117,13 +132,18 @@ class IntegrationAdapter:
         except (OSError, ValueError):
             return IntegrationObservation("integration_invalid_path", running)
         if normalized_executable(path) in running or (module.driver != "afterburner" and module.allow_launch):
-            return IntegrationObservation("integration_ready", running, path)
+            matches = tuple(item for item in snapshot.identities if item.executable == normalized_executable(path))
+            process = matches[0] if len(matches) == 1 and normalized_executable(path) not in snapshot.uncertain_paths else None
+            return IntegrationObservation("integration_ready", running, path, process=process)
         state = "integration_access_denied" if Path(path).name.casefold() in snapshot.inaccessible_names else "integration_not_running"
         return IntegrationObservation(state, running, path)
 
     def transition(self, module: IntegrationDefinition, previous: IntegrationProfile | None,
                    target: IntegrationProfile, current: Callable[[], bool]) -> TransitionResult:
         completed = 0
+        process = None
+        last_process = None
+        observed_target = False
         for phase, reaction in (("deactivation", previous.deactivation if previous else None), ("activation", target.activation)):
             if reaction is None or not reaction.enabled:
                 continue
@@ -134,6 +154,14 @@ class IntegrationAdapter:
                     observation = self.inspect(module)
                     if not observation.ready:
                         return TransitionResult(False, completed, phase, index, observation.detail or observation.availability)
+                    if observed_target and last_process is not None and last_process != observation.process:
+                        return TransitionResult(False, completed, phase, index, "integration_cancelled")
+                    if not observed_target:
+                        process = observation.process
+                    elif process != observation.process:
+                        process = None
+                    last_process = observation.process
+                    observed_target = True
                     args = module.expand(template, observation.executable)
                     if not current():
                         return TransitionResult(False, completed, phase, index, "integration_cancelled")
@@ -163,4 +191,4 @@ class IntegrationAdapter:
                     logger.error("Integration %s step %s failed (%s)", phase, index, type(error).__name__)
                     return TransitionResult(False, completed, phase, index, "integration_command_failed")
                 completed += 1
-        return TransitionResult(True, completed, exit_code=0 if completed else None)
+        return TransitionResult(True, completed, exit_code=0 if completed else None, process=process)

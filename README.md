@@ -135,6 +135,13 @@ completed commands may repeat. Disabling an integration or Auto, exiting, losing
 fresh telemetry, or finding no matching rule leaves the external state unchanged.
 Successful command dispatch does not confirm that an application applied a profile.
 
+The last successful profile is saved locally for each integration. Auto avoids
+resending it after sleep or restarting EcoFlow Monitor while the same target
+process is still running. Restarting the target application requires a new
+application of the matching profile. Manual MSI **Apply profile** can resend it.
+After a failure, Auto makes one new attempt when the matching profile changes,
+the target becomes available again, or Windows resumes with fresh readings.
+
 Monitoring, integration scans, Auto and animations pause while Windows sleeps,
 the session is locked, or its display is off. Work resumes automatically once
 Windows is awake, the session is unlocked and the display is on. Auto first waits
