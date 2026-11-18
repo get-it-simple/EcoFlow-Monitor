@@ -119,6 +119,7 @@ class Controller(QObject):
         self._diagnostic_failures = ()
         self._metadata_dirty = False
         self.notice = ""
+        self.startup_pending = False
         self.preview = None
         self.system_activity = SystemActivity()
         self._activity_epoch = 0
@@ -270,7 +271,7 @@ class Controller(QObject):
         if key == "maximum_charge_level" and self.maximum.source == "manual":
             return "ready"
         if key == "estimated_runtime":
-            keys = self.remaining_time_sensors
+            keys = self.remaining_presentation_sensors
         if self.connection == ConnectionState.AUTH_ERROR and "api" not in self._active:
             return "stale" if any(self.polling.samples.get(sensor) is not None and self.polling.samples[sensor].value is not None for sensor in keys) else "missing"
         return self.polling.presentation(keys, self.clock())
@@ -308,10 +309,27 @@ class Controller(QObject):
         return CORE | ({key} if limit.source != "manual" else set())
 
     @property
+    def remaining_presentation_sensors(self):
+        if self.telemetry is not None and (dict(self.telemetry.ports).get("ac_input") or 0) > 0:
+            return frozenset(("ac_input", "battery_level"))
+        return self.remaining_time_sensors
+
+    @property
     def remaining_time(self):
         if self.charging:
             return charge_hours(self.telemetry, self.effective_capacity, self.maximum.value, self.fresh_for(self.remaining_time_sensors))
         return self.runtime
+
+    @property
+    def remaining_presentation(self):
+        from ecoflow_monitor.domain import present_remaining_time
+        snapshot = self.telemetry
+        return present_remaining_time(
+            self.remaining_time, self.charging,
+            dict(snapshot.ports).get("ac_input") if snapshot is not None else None,
+            self.fresh_for({"ac_input"}), snapshot.soc_pct if snapshot is not None else None,
+            self.fresh_for({"battery_level"}),
+        )
 
     @property
     def device_name(self):

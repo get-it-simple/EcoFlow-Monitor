@@ -10,7 +10,7 @@ API_FIELDS = {key: mapping.quotas[0] for key, mapping in baseline_profile().fiel
 
 
 def metric_label(key: str, controller=None) -> str:
-    if key == "estimated_runtime" and controller is not None and controller.charging:
+    if key == "estimated_runtime" and controller is not None and controller.remaining_presentation.mode == "charge":
         return t("estimated_charge_time")
     if key.startswith("anderson_"):
         return t("anderson") + " " + key.removeprefix("anderson_")
@@ -19,9 +19,12 @@ def metric_label(key: str, controller=None) -> str:
 
 def metric_tooltip(key: str, controller=None) -> str:
     base = "anderson" if key.startswith("anderson_") else key
-    if base == "estimated_runtime" and controller is not None and controller.charging:
+    mains = base == "estimated_runtime" and controller is not None and controller.remaining_presentation.mode == "infinity"
+    if base == "estimated_runtime" and controller is not None and controller.remaining_presentation.mode == "charge":
         base = "estimated_charge_time"
     description = "usb_power_help" if base.startswith("usb_") else base + "_help"
+    if mains:
+        description = "runtime_mains_help"
     parts = [metric_label(key, controller), fill(t(description), width=85, break_long_words=False, break_on_hyphens=False)]
     profile = controller.device_profile if controller is not None else baseline_profile()
     mapping = dict(profile.fields).get(base) if profile is not None else None
@@ -32,7 +35,7 @@ def metric_tooltip(key: str, controller=None) -> str:
     if controller is not None:
         from datetime import datetime
         from ecoflow_monitor.polling import dependencies
-        sensors = controller.remaining_time_sensors if key == "estimated_runtime" else dependencies(key)
+        sensors = controller.remaining_presentation_sensors if key == "estimated_runtime" else dependencies(key)
         stamps = [sample.received_utc for sensor in sensors if (sample := controller.polling.samples.get(sensor)) is not None and sample.received_utc is not None]
         if stamps:
             parts.append(t("last_update").format(timestamp=datetime.fromtimestamp(min(stamps)).astimezone().strftime("%Y-%m-%d %H:%M:%S")))

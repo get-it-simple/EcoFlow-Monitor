@@ -54,7 +54,8 @@ def metric_text(controller, key: str) -> str:
     if key == "output_power":
         return number(snapshot.output_w if snapshot else None, t("unit_watt"))
     if key == "estimated_runtime":
-        return duration(controller.remaining_time)
+        presentation = controller.remaining_presentation
+        return "∞" if presentation.mode == "infinity" else duration(presentation.hours)
     if key in {"minimum_discharge_level", "maximum_charge_level"}:
         return number(controller.minimum.value if key == "minimum_discharge_level" else controller.maximum.value, "%")
     return number(dict(snapshot.ports).get(key) if snapshot else None, t("unit_watt"))

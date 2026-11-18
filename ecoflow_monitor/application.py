@@ -28,6 +28,7 @@ class Application(QObject):
     def __init__(self, settings_path: Path, native: bool = True, controller: Controller | None = None, diagnostics=None):
         super().__init__()
         self.native = native
+        self._startup_pending = False
         self.controller = controller if controller is not None else Controller(SettingsStore(settings_path), diagnostics=diagnostics)
         self.app = QApplication.instance()
         font = QFont(font_family())
@@ -82,6 +83,7 @@ class Application(QObject):
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
         self.tray.messageClicked.connect(self.activate_existing_window)
+        self.dashboard.startup_requested.connect(self.prepare_connections)
         self.controller.credentials_expired.connect(self._notify_credentials_expired)
         self.controller.preferences_changed.connect(self.preferences)
         self.controller.changed.connect(self._check_elevation)
@@ -294,6 +296,7 @@ class Application(QObject):
         message = t("startup_consent_description") + "\n\n" + "\n".join("• " + item for item in operations)
         def accepted(done):
             done()
+            self.controller.startup_pending = False
             self.controller.access_allowed = True
             if connection:
                 self._startup_waiting_catalog = True
@@ -302,6 +305,7 @@ class Application(QObject):
             else:
                 self._automatic_helpers_allowed = True
                 self._check_elevation()
+            self.controller.changed.emit()
         self._startup_waiting_catalog = False
         self.confirmations.enqueue(ConfirmationRequest("startup", lambda owner: self._permission_prompt(owner, "startup_consent_title", message),
                                                       accepted, lambda: not self._stopped))
@@ -312,7 +316,7 @@ class Application(QObject):
             self._automatic_helpers_allowed = True
             self._check_elevation()
 
-    def start(self):
+    def start(self, autostart=False):
         self.activity_watcher.start()
         self.controller.set_system_activity(self.activity_watcher.state)
         if self.native and QSystemTrayIcon.isSystemTrayAvailable():
@@ -320,12 +324,21 @@ class Application(QObject):
         self.widget.refresh()
         self._started = True
         self.preferences()
-        self.open_dashboard()
+        background = autostart and self.native and self.tray.isVisible()
+        if not background:
+            self.open_dashboard()
         if self.native:
             self._automatic_helpers_allowed = False
             self.controller.devices_ready.connect(self._startup_catalog_finished)
             self.controller.start(authorized=False)
-            self._startup_consent()
+            if background:
+                self._startup_pending = True
+                self.controller.startup_pending = True
+                self.controller.changed.emit()
+                if QSystemTrayIcon.supportsMessages():
+                    self.tray.showMessage(t("app_title"), t("startup_action_required"), QSystemTrayIcon.MessageIcon.Information, 10000)
+            else:
+                self._startup_consent()
 
     def hotkey(self, action: str):
         if self._stopped or self.controller.system_activity.paused:
@@ -356,6 +369,11 @@ class Application(QObject):
     def open_settings(self):
         self.open_dashboard(1)
 
+    def prepare_connections(self):
+        if getattr(self.controller, "startup_pending", False):
+            self._startup_pending = True
+        self.activate_existing_window()
+
     def open_dashboard(self, page=None):
         if self._stopped:
             return
@@ -368,6 +386,10 @@ class Application(QObject):
             return
         self.dashboard.raise_()
         self.dashboard.activateWindow()
+        if self._startup_pending:
+            self._startup_pending = False
+            self._startup_consent()
+            self.controller.changed.emit()
         self.confirmations.raise_active()
 
     def preview(self, settings):
@@ -401,7 +423,24 @@ class Application(QObject):
             if configured:
                 self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
             raise ValueError("click_through_unavailable")
+        startup_rollback = None
+        if settings.start_with_windows != previous.start_with_windows:
+            from ecoflow_monitor.adapters.startup import WindowsStartup, available
+            try:
+                if not self.native or not available():
+                    raise ValueError("startup_packaged_only")
+                startup_rollback = WindowsStartup().configure(settings.start_with_windows)
+            except OSError as error:
+                if configured:
+                    self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
+                raise OSError("startup_registration_failed") from error
+            except ValueError:
+                if configured:
+                    self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
+                raise
         def rollback():
+            if startup_rollback is not None:
+                startup_rollback()
             if configured:
                 self.hotkeys.configure(previous.hotkeys, self._enabled_hotkey_actions(previous))
         return rollback

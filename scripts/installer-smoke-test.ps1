@@ -11,9 +11,14 @@ if ($env:GITHUB_ACTIONS -ne "true" -or $env:RUNNER_OS -ne "Windows") {
 $root = Split-Path -Parent $PSScriptRoot
 $target = Join-Path $env:ProgramW6432 "EcoFlowMonitor"
 $registry = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GetItSimple.EcoFlowMonitor"
+$startupRegistry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$startupCommand = ""
 $installer = Join-Path $root "dist\installers\$Version\EcoFlowMonitor-$Version-x64-machine-setup.exe"
 if ((Test-Path -LiteralPath $registry) -or (Test-Path -LiteralPath $target)) {
     throw "Smoke test requires a clean runner without an existing EcoFlow Monitor installation."
+}
+if ((Get-ItemProperty -LiteralPath $startupRegistry -Name EcoFlowMonitor -ErrorAction SilentlyContinue).EcoFlowMonitor) {
+    throw "Smoke test requires a clean runner without EcoFlow Monitor startup registration."
 }
 $synthetic = Join-Path $env:RUNNER_TEMP "ecoflow-installer-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $synthetic | Out-Null
@@ -46,6 +51,9 @@ function Invoke-Setup([string]$Path, [string[]]$Arguments) {
 }
 
 function Assert-Installed {
+    if ($startupCommand -and (Get-ItemPropertyValue -LiteralPath $startupRegistry -Name EcoFlowMonitor) -ne $startupCommand) {
+        throw "Upgrade changed startup registration"
+    }
     $entry = Get-ItemProperty -LiteralPath $registry
     if ($entry.DisplayVersion -ne $Version -or $entry.InstallLocation -ne $target) {
         throw "Installed registry metadata mismatch"
@@ -68,6 +76,9 @@ $sourceHash = (Get-FileHash -LiteralPath (Join-Path $root "dist\$Version\EcoFlow
 if ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash -ne $sourceHash) { throw "Installed payload mismatch" }
 & python -m scripts.smoke_executable $executable
 if ($LASTEXITCODE -ne 0) { throw "Installed EXE smoke failed" }
+$startupCommand = '"{0}" --autostart' -f $executable
+New-Item -Path $startupRegistry -Force | Out-Null
+New-ItemProperty -LiteralPath $startupRegistry -Name EcoFlowMonitor -Value $startupCommand -PropertyType String -Force | Out-Null
 
 $running = Start-Process -FilePath $executable -ArgumentList @("--settings", "`"$runningSettings`"") -WindowStyle Hidden -PassThru
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -95,6 +106,9 @@ while (((Test-Path -LiteralPath $registry) -or (Test-Path -LiteralPath $executab
 }
 if (Test-Path -LiteralPath $registry) { throw "Uninstall registry entry remains" }
 if (Test-Path -LiteralPath $executable) { throw "Application executable remains" }
+if ((Get-ItemProperty -LiteralPath $startupRegistry -Name EcoFlowMonitor -ErrorAction SilentlyContinue).EcoFlowMonitor) {
+    throw "Uninstall left startup registration"
+}
 Assert-FilePreserved $settings $settingsHash "Uninstall"
 Assert-FilePreserved $runningSettings $runningSettingsHash "Uninstall"
 if (-not (Test-Path -LiteralPath (Join-Path $synthetic "logs"))) { throw "User logs were removed" }

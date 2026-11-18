@@ -4,6 +4,7 @@ param(
     [string]$OutputDirectory,
     [string]$MakeNsis,
     [switch]$Build,
+    [switch]$UseExisting,
     [string]$Python = "python"
 )
 
@@ -11,7 +12,8 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $root
 try {
-    if ($Build) {
+    if ($Build -and $UseExisting) { throw 'Choose either -Build or -UseExisting' }
+    if (-not $UseExisting) {
         $buildArguments = @((Join-Path $root "build.py"))
         if ($AppExe) { $buildArguments += @("--dist-dir", (Split-Path -Parent $AppExe)) }
         & $Python @buildArguments

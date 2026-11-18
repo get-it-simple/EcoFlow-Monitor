@@ -1,4 +1,5 @@
 from datetime import datetime
+import math
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -16,6 +17,7 @@ from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS, REFLOW_INTERVAL_MS
 from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
 from ecoflow_monitor.polling import PORT_KEYS
 from ecoflow_monitor.ui.polling import LoadingIndicator
+from ecoflow_monitor.ui.port_card import PortCard
 
 
 class MonitoringPage(QWidget):
@@ -88,20 +90,17 @@ class MonitoringPage(QWidget):
         balance_box.addWidget(self.balance_message)
         self.box.addWidget(self.balance_card)
         self.port_sections = {}
+        self.outputs_grid = QGridLayout()
         for group, title in (("inputs", "inputs"), ("ac", "ac_outlets"), ("other", "other_outputs")):
-            card = QFrame(self)
-            card.setObjectName("ports_card")
-            box = QVBoxLayout(card)
-            heading = QLabel(t(title), card)
-            heading.setObjectName("section_title")
-            box.addWidget(heading)
-            grid = QGridLayout()
-            box.addLayout(grid)
-            note = hint(t("outputs_read_only"))
-            note.setVisible(group != "inputs")
-            box.addWidget(note)
+            card = PortCard(group, self)
+            heading, grid, note = card.heading, card.grid, card.note
             self.port_sections[group] = (card, heading, grid, note)
-            self.box.addWidget(card)
+            if group == "inputs":
+                self.box.addWidget(card)
+            else:
+                self.outputs_grid.addWidget(card, 0 if group == "ac" else 1, 0)
+                card.toggle.clicked.connect(lambda collapsed, name=group: self.collapse_ports(name, collapsed))
+        self.box.addLayout(self.outputs_grid)
         self.port_values = {}
         self._port_signature = None
         bottom = ActionLayout()
@@ -156,6 +155,9 @@ class MonitoringPage(QWidget):
             note.setText(t("outputs_read_only"))
             card.layout().setContentsMargins(*(round(16 * scale),) * 4)
             grid.setSpacing(round(16 * scale))
+            card.configure(scale)
+            if group != "inputs":
+                card.set_collapsed(getattr(self.controller.settings, group + "_collapsed"))
         telemetry = self.controller.telemetry
         self.balance.configure(scale)
         self.battery_progress.configure(scale)
@@ -210,6 +212,21 @@ class MonitoringPage(QWidget):
                 row.state_loader.present(outlet_state, scale)
                 if state != "loading" and outlet_state != "loading":
                     value.setText(value.text() + " · " + t("output_on" if enabled is True else "output_off" if enabled is False else "missing_data"))
+        for group in ("ac", "other"):
+            card = self.port_sections[group][0]
+            group_keys = [key for key in keys if ("ac" if key == "ac_output" else "other") == group and key not in {"ac_input", "pv_input"}]
+            values = [ports.get(key) for key in group_keys]
+            valid = [value for key, value in zip(group_keys, values) if value is not None and not isinstance(value, bool) and math.isfinite(value) and self.controller.reading_state(key) == "ready"]
+            summary = number(sum(valid), t("unit_watt")) if valid else t("missing_data")
+            if valid and len(valid) != len(values):
+                summary += " · " + t("partial_data")
+            state_key = "ac_enabled" if group == "ac" else "dc_enabled"
+            enabled = getattr(telemetry, state_key, None)
+            if enabled is not None:
+                summary += " · " + ("" if group == "ac" else t("dc_output") + ": ") + t("output_on" if enabled else "output_off")
+                if self.controller.reading_state(state_key) != "ready":
+                    summary += " · " + t("sensor_" + self.controller.reading_state(state_key))
+            card.summary.setText(summary)
         self.limits.refresh()
         self.open_mini_button.setText(t("open_mini_widget"))
         self.refresh_integrations()
@@ -223,12 +240,27 @@ class MonitoringPage(QWidget):
         columns = 4 if width >= 840 * scale else 2 if width >= 420 * scale else 1
         port_width = max(1, width - 32 * scale)
         cell_width = max(round(240 * scale), *(row.minimumSizeHint().width() for row, value in self.port_values.values()))
-        port_columns = min(3, max(1, int((port_width + 16 * scale) // (cell_width + 16 * scale))))
+        ac_card, other_card = self.port_sections["ac"][0], self.port_sections["other"][0]
+        gap = round(24 * scale)
+        self.outputs_grid.setSpacing(gap)
+        minimum = max(round(300 * scale), cell_width + round(32 * scale))
+        joined = ac_card.collapsed and width >= 2 * minimum + gap
+        if joined != getattr(self, "_outputs_joined", None):
+            self._outputs_joined = joined
+            self.outputs_grid.removeWidget(ac_card)
+            self.outputs_grid.removeWidget(other_card)
+            self.outputs_grid.addWidget(ac_card, 0, 0)
+            self.outputs_grid.addWidget(other_card, 0 if joined else 1, 1 if joined else 0)
+            self.outputs_grid.setColumnStretch(0, 1)
+            self.outputs_grid.setColumnStretch(1, 1 if joined else 0)
+        widths = {group: (width - gap) / 2 - 32 * scale if joined and group != "inputs" else port_width for group in self.port_sections}
+        group_columns = {group: min(3, max(1, int((value + 16 * scale) // (cell_width + 16 * scale)))) for group, value in widths.items()}
         keys = tuple(key for key, (row, value) in self.port_values.items() if not row.isHidden())
-        signature = (port_columns, keys, scale)
+        signature = (tuple(group_columns.items()), keys, scale)
         if self._port_signature != signature:
             self._port_signature = signature
             for group, (card, title, grid, note) in self.port_sections.items():
+                port_columns = group_columns[group]
                 while grid.count():
                     grid.takeAt(0)
                 group_keys = [key for key in keys if ("inputs" if key in {"ac_input", "pv_input"} else "ac" if key == "ac_output" else "other") == group]
@@ -243,6 +275,10 @@ class MonitoringPage(QWidget):
             self.metric_grid.takeAt(0)
         for index, card in enumerate(self.cards):
             self.metric_grid.addWidget(card, index // columns, index % columns)
+
+    def collapse_ports(self, group, collapsed):
+        self.controller.update_preferences(**{group + "_collapsed": collapsed})
+        self.reflow()
 
     def schedule_reflow(self):
         if not self._reflow_timer.isActive():

@@ -16,6 +16,7 @@ from ecoflow_monitor.i18n import t
 
 class Dashboard(SettingsWindow):
     visibility_changed = Signal(bool)
+    startup_requested = Signal()
 
     def __init__(self, controller, open_mini):
         super().__init__(controller)
@@ -27,6 +28,7 @@ class Dashboard(SettingsWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle(t("app_title"))
         self.monitoring = MonitoringPage(controller, open_mini, self)
+        self.monitoring.notifications.navigate_requested.connect(self.navigate_notification)
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.monitoring)
@@ -115,6 +117,23 @@ class Dashboard(SettingsWindow):
             action.triggered.connect(lambda checked=False, page=index: self.navigation.setCurrentRow(page))
         menu.exec(self.navigation_button.mapToGlobal(self.navigation_button.rect().bottomLeft()))
         menu.deleteLater()
+
+    def navigate_notification(self, target, module_id=""):
+        if target == "startup":
+            self.startup_requested.emit()
+            return
+        if target in {"connection_service", "connection_diagnostics"}:
+            self.connection_tabs.setCurrentIndex(1 if target == "connection_service" else 2)
+            target = "connection_settings"
+        if target in self.page_keys:
+            self.navigation.setCurrentRow(self.page_keys.index(target))
+        if target == "integrations" and module_id:
+            index = self.integrations_editor.selector.findData(module_id)
+            if index >= 0:
+                self.integrations_editor.selector.setCurrentIndex(index)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def apply_appearance(self):
         scale = effective_scale(self, self.controller.ui_settings.scale)

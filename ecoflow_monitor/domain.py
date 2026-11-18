@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 from pathlib import PureWindowsPath
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar
 
 
 class ConnectionState(str, Enum):
@@ -72,6 +72,24 @@ def resolve_limit(api: float | None, manual: float | None) -> ResolvedLimit:
     if api is not None:
         return ResolvedLimit(api, "api")
     return ResolvedLimit(manual, "manual" if manual is not None else "unknown")
+
+
+@dataclass(frozen=True)
+class RemainingTimePresentation:
+    mode: Literal["infinity", "waiting", "charge", "runtime"]
+    hours: float | None = None
+    charge_fraction: float | None = None
+
+
+def present_remaining_time(hours: float | None, charging: bool, ac_power: float | None, ac_fresh: bool,
+                           soc: float | None, soc_fresh: bool) -> RemainingTimePresentation:
+    if ac_power is not None and not isinstance(ac_power, bool) and math.isfinite(ac_power) and ac_power > 0:
+        if ac_fresh and soc_fresh and soc is not None and not isinstance(soc, bool) and math.isfinite(soc) and 0 <= soc <= 100:
+            return RemainingTimePresentation("infinity", charge_fraction=soc / 100)
+        return RemainingTimePresentation("waiting")
+    if hours is not None:
+        return RemainingTimePresentation("charge" if charging else "runtime", hours=hours)
+    return RemainingTimePresentation("waiting")
 
 
 def runtime_hours(telemetry: Telemetry | None, capacity_wh: float, floor: float | None, fresh: bool) -> float | None:

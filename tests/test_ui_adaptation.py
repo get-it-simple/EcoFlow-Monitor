@@ -74,11 +74,11 @@ def test_monitoring_cards_have_padding_and_output_groups_reflow(runtime, qapp, l
             assert abs(card.width() - page.balance_card.width()) <= 1
             assert page.rect().contains(card.geometry())
             for index in range(grid.count()):
-                assert card.rect().contains(grid.itemAt(index).widget().geometry())
+                assert card.body.rect().contains(grid.itemAt(index).widget().geometry())
         ac = page.port_values["ac_output"][0]
         dc = page.port_values["dc_output"][0]
-        assert ac.parentWidget() is page.port_sections["ac"][0]
-        assert dc.parentWidget() is page.port_sections["other"][0]
+        assert ac.parentWidget() is page.port_sections["ac"][0].body
+        assert dc.parentWidget() is page.port_sections["other"][0].body
         grid = page.port_sections["other"][2]
         counts.append(max(grid.getItemPosition(index)[1] for index in range(grid.count())) + 1)
     assert counts[0] == 1 and counts[1] == 3

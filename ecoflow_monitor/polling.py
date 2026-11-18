@@ -10,7 +10,7 @@ SENSOR_FIELDS = {key: mapping.quotas[0] for key, mapping in baseline_profile().f
 PORT_KEYS = {key: SENSOR_FIELDS[key] for key in PORT_NAMES}
 LIMITS = frozenset(("minimum_discharge_level", "maximum_charge_level"))
 PORTS = frozenset((*PORT_KEYS, "anderson"))
-DASHBOARD_SENSORS = frozenset(SENSOR_FIELDS) - {"ac_input", "pv_input", "device_discharge_minutes", "device_charge_minutes"}
+DASHBOARD_SENSORS = frozenset(SENSOR_FIELDS) - {"pv_input", "device_discharge_minutes", "device_charge_minutes"}
 ATTRIBUTES = {
     "input_power": "input_w", "output_power": "output_w", "battery_level": "soc_pct",
     "minimum_discharge_level": "min_soc", "maximum_charge_level": "max_soc",
@@ -21,7 +21,7 @@ ATTRIBUTES = {
 
 def dependencies(key: str) -> frozenset[str]:
     if key == "estimated_runtime":
-        return CORE | LIMITS
+        return CORE | LIMITS | {"ac_input"}
     if key.startswith("anderson_"):
         return frozenset(("anderson",))
     return frozenset((key,)) if key in SENSOR_FIELDS else frozenset()

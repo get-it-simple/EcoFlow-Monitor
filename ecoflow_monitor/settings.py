@@ -151,8 +151,13 @@ class AppSettings:
     main_enabled: bool = False
     main_scale: float = 1
     widget: WidgetPreferences = field(default_factory=WidgetPreferences)
+    start_with_windows: bool = False
+    ac_collapsed: bool = False
+    other_collapsed: bool = False
 
     def validate(self) -> None:
+        if any(type(value) is not bool for value in (self.start_with_windows, self.ac_collapsed, self.other_collapsed)):
+            raise ValueError("Invalid startup or disclosure preference")
         if type(self.custom_device_profiles) is not bool or not isinstance(self.device_profile_assignments, tuple):
             raise ValueError("device_profile_invalid")
         assigned = set()
@@ -226,6 +231,8 @@ class AppSettings:
         self.validate()
         return {
             "version": 4,
+            "startup": {"enabled": self.start_with_windows},
+            "monitoring": {"ac_collapsed": self.ac_collapsed, "other_collapsed": self.other_collapsed},
             "widget": asdict(self.widget),
             "workspace": {"main_enabled": self.main_enabled, "main_scale": self.main_scale, "dashboard_geometry": list(self.dashboard_geometry), "main_overlay": asdict(self.main_overlay), "mini_overlay": asdict(self.mini_overlay), "metric_order": list(self.metric_order), "manual_min_retained": self.manual_min_retained, "manual_max_retained": self.manual_max_retained},
             "ecoflow": {"serial": self.serial, "credential_ref": self.credential_ref, "credential_source": self.credential_source,
@@ -253,6 +260,10 @@ class AppSettings:
         mini = data.get("mini_widget", {})
         workspace = data.get("workspace", {})
         diagnostics = data.get("logging", {})
+        startup = data.get("startup", {})
+        monitoring = data.get("monitoring", {})
+        if not isinstance(startup, dict) or not isinstance(monitoring, dict):
+            raise ValueError("Settings groups must be objects")
         if any(not isinstance(group, dict) for group in (eco, msi, automation, appearance, mini, workspace, diagnostics)):
             raise ValueError("Settings groups must be objects")
         onepassword = eco.get("onepassword", {})
@@ -282,6 +293,9 @@ class AppSettings:
             existing_actions = {binding["action"] for binding in bindings}
             bindings = [*bindings, *(asdict(binding) for binding in default_hotkeys() if binding.action in {"open_dashboard", "recover_widgets"} and binding.action not in existing_actions)]
         settings = cls(
+            start_with_windows=boolean(startup, "enabled", False),
+            ac_collapsed=boolean(monitoring, "ac_collapsed", False),
+            other_collapsed=boolean(monitoring, "other_collapsed", False),
             polling=PollingPreferences.from_dict(eco.get("polling", {})),
             widget=WidgetPreferences.from_dict(data.get("widget", {})),
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),

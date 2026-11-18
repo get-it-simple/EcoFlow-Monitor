@@ -262,6 +262,10 @@ validated:
   StrCpy $ElevateArguments "/S /ELEVATED"
   Call un.ElevateAndWait
   SetErrorLevel $ElevationExitCode
+  StrCmp $ElevationExitCode 0 0 done
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "EcoFlowMonitor"
+  StrCmp $0 '$\"$INSTDIR\${PRODUCT_EXE}$\" --autostart' 0 done
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "EcoFlowMonitor"
   Goto done
 files:
   StrCpy $ProcessTarget "$INSTDIR\${PRODUCT_EXE}"

@@ -166,7 +166,7 @@ def test_controller_requests_visible_sensors_and_calculation_dependencies(sensor
     controller.set_sensor_demand("widget", {"estimated_runtime"})
     controller.tick()
     wait(qapp, lambda: "api" not in controller._active)
-    assert set(calls[-1]) == {"cmsMinDsgSoc", "cmsMaxChgSoc"}
+    assert set(calls[-1]) == {"cmsMinDsgSoc", "cmsMaxChgSoc", "powGetAcIn"}
     assert controller.runtime is not None
     controller.set_sensor_demand("widget", ())
     count = len(calls)

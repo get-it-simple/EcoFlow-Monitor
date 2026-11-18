@@ -17,7 +17,7 @@ from scripts.smoke_executable import verify_icon, verify_version
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ID = "GetItSimple.EcoFlowMonitor"
 REPOSITORY = "get-it-simple/EcoFlow-Monitor"
-MANIFEST_VERSION = "1.10.0"
+MANIFEST_VERSION = "1.28.0"
 MANIFEST_TYPES = {
     f"{PACKAGE_ID}.yaml": "version",
     f"{PACKAGE_ID}.installer.yaml": "installer",

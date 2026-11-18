@@ -1,13 +1,14 @@
 from dataclasses import replace
 from datetime import datetime
 from collections.abc import Callable
+import logging
 from typing import cast
 
 from PySide6.QtCore import QPoint, QSize, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
-from ecoflow_monitor.diagnostics import reveal_log
+from ecoflow_monitor.diagnostics import event, reveal_log
 from ecoflow_monitor.adapters.credentials import CredentialError
 from ecoflow_monitor.adapters.ecoflow import Credentials
 from ecoflow_monitor.adapters.hotkeys import HotkeyError, validate_bindings
@@ -311,6 +312,11 @@ class SettingsWindow(QDialog):
         self.scale.setAccessibleName(t("scale"))
         general.addWidget(SettingRow(t("scale"), self.scale))
         self.animations = Switch(t("animations"))
+        from ecoflow_monitor.adapters.startup import available
+        self.start_with_windows = Switch(t("start_with_windows"))
+        self.start_with_windows.setEnabled(available())
+        self.start_with_windows.setToolTip(t("startup_description" if available() else "startup_packaged_only"))
+        general.addWidget(SettingRow(t("start_with_windows"), self.start_with_windows))
         self.monitor_labels_visible = Switch(t("monitor_labels_visible"))
         self.monitor_values_on_hover = Switch(t("monitor_values_on_hover"))
         for control, label in ((self.monitor_labels_visible, "monitor_labels_visible"), (self.monitor_values_on_hover, "monitor_values_on_hover"), (self.animations, "animations")):
@@ -505,6 +511,7 @@ class SettingsWindow(QDialog):
                 control.setAccessibleName(t("polling_" + name) + ": " + t(label))
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
+        self.start_with_windows.setChecked(settings.start_with_windows)
         self.main_enabled.setChecked(settings.widget.enabled)
         self.main_scale.setValue(settings.widget.scale * 100)
         self.main_alpha.setValue(settings.widget.opacity * 100)
@@ -682,6 +689,7 @@ class SettingsWindow(QDialog):
             logging_mode=self.logging_mode.currentData(),
             polling=PollingPreferences(**{name: PollingGroup(int(interval.value()), int(stale.value())) for name, (interval, stale) in self.polling_fields.items()}),
             animations=self.animations.isChecked(),
+            start_with_windows=self.start_with_windows.isChecked(),
             widget=self._widget_draft(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
@@ -768,8 +776,13 @@ class SettingsWindow(QDialog):
                 self.controller.metadata.remember_name(draft.serial, name)
                 self.controller._save_metadata()
         except (ValueError, OSError, SettingsError, CredentialError) as error:
+            rollback_failed = False
             if rollback is not None:
-                rollback()
+                try:
+                    rollback()
+                except (OSError, ValueError) as rollback_error:
+                    rollback_failed = True
+                    event("settings_rollback_failed", level=logging.ERROR, error_type=type(error).__name__, rollback_type=type(rollback_error).__name__)
             key = str(error)
             if isinstance(error, HotkeyError):
                 message = hotkey_error_text(error, self.integrations_editor.modules())
@@ -778,6 +791,8 @@ class SettingsWindow(QDialog):
                 self.error_label.show()
             else:
                 message = t(key) if t(key) != key else t("invalid_settings")
+            if rollback_failed:
+                message += "\n\n" + t("settings_rollback_failed")
             QMessageBox.warning(self, t("error_title"), message)
             return
         self.preview_changed.emit(None)

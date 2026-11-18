@@ -162,6 +162,8 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/verify-release.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Release verification failed' }
+          ./scripts/prepare-winget.ps1
           winget --version
           if ($LASTEXITCODE -ne 0) { throw 'WinGet is unavailable' }
           winget validate --manifest 'dist/release/${{ steps.version.outputs.value }}/winget' --disable-interactivity
@@ -178,7 +180,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: release-${{ github.repository }}-${{ github.ref_name }}
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
       - uses: actions/download-artifact@v7
         with:
           name: ecoflow-monitor-${{ github.ref_name }}
@@ -187,4 +199,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_VERSION" release/*.exe release/*.zip release/SHA256SUMS.txt --verify-tag --generate-notes --title "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY"
+        run: python -m scripts.publish_release --tag "$RELEASE_VERSION" --directory release

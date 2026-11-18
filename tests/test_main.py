@@ -8,6 +8,23 @@ import pytest
 entry = import_module("ecoflow_monitor.__main__")
 
 
+def test_duplicate_autostart_does_not_activate_existing_window(qapp, monkeypatch):
+    class Duplicate:
+        def start(self):
+            return False
+
+        def activate_existing(self):
+            pytest.fail("Background launch activated an existing window")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sys, "argv", ["ecoflow-monitor", "--autostart"])
+    monkeypatch.setitem(vars(entry), "InstanceController", Duplicate)
+    monkeypatch.setitem(vars(entry), "Application", lambda *args, **kwargs: pytest.fail("Duplicate launch initialized runtime"))
+    assert entry.main() == 0
+
+
 @pytest.mark.parametrize("activated,expected", [(True, 0), (False, 1)])
 def test_duplicate_launch_never_initializes_runtime_or_settings(qapp, tmp_path, monkeypatch, activated, expected):
     class Duplicate:

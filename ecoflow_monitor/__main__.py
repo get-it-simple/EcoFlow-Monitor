@@ -22,6 +22,7 @@ def main() -> int:
         return helper_main(sys.argv[1:])
     parser = argparse.ArgumentParser(description="EcoFlow device monitoring and saved GPU profile automation")
     parser.add_argument("--settings", type=Path)
+    parser.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--shutdown-for-update", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
@@ -40,6 +41,8 @@ def main() -> int:
             try:
                 guard = InstanceController()
                 if not guard.start():
+                    if args.autostart:
+                        return 0
                     if guard.activate_existing():
                         return 0
                     QMessageBox.warning(None, i18n.t("error_title"), i18n.t("instance_activation_failed"))
@@ -102,7 +105,7 @@ def _run_application(app, args, settings_path, guard, diagnostics) -> int:
             app.exit(0 if all(result[key] for key in ("main_visible", "mini_visible", "msi_hidden", "ukrainian", "integration_example", "custom_integration", "schema_roundtrip", "dashboard_visible", "design_tokens", "motion_tokens", "main_overlay_default_hidden", "main_overlay_visible", "adaptive_widget", "motion_disabled", "inter_font", "single_main_window")) else 1)
         QTimer.singleShot(750, finish)
     try:
-        runtime.start()
+        runtime.start(autostart=getattr(args, "autostart", False))
         return app.exec()
     finally:
         if guard is not None:

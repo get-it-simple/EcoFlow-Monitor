@@ -33,6 +33,10 @@ class MetricReading(MotionSurface):
         self.value.setWordWrap(key == "estimated_runtime")
         from ecoflow_monitor.ui.polling import LoadingIndicator
         self.loader = LoadingIndicator(controller, self.value)
+        self.infinity = None
+        if key == "estimated_runtime":
+            from ecoflow_monitor.ui.infinity import InfinityIndicator
+            self.infinity = InfinityIndicator(controller, self.value)
         policy = self.value.sizePolicy()
         policy.setRetainSizeWhenHidden(True)
         self.value.setSizePolicy(policy)
@@ -135,7 +139,20 @@ class MetricReading(MotionSurface):
         self.motion.refresh()
         text = metric_text(self.controller, self.key)
         state = self.controller.reading_state(self.key)
+        infinite = False
+        if self.infinity is not None:
+            mode = self.controller.remaining_presentation.mode
+            infinite = mode == "infinity"
+            if mode == "waiting":
+                state = "loading"
+            self.infinity.setGeometry(self.value.rect())
+            self.infinity.setVisible(infinite)
+            self.infinity.update()
+            self.motion.schedule()
         display = " " if state == "loading" else text
+        if infinite:
+            display = " "
+            state = "ready"
         label = metric_label(self.key, self.controller)
         width = getattr(self, "label_width", None)
         self.label.setText(self.label.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, width) if width is not None else label)
@@ -169,6 +186,10 @@ class MetricReading(MotionSurface):
             self._layout_loader(self.controller.reading_state(self.key))
 
     def _layout_loader(self, state):
+        if self.infinity is not None:
+            mode = self.controller.remaining_presentation.mode
+            state = "loading" if mode == "waiting" else "ready" if mode == "infinity" else state
+            self.infinity.setGeometry(self.value.rect())
         anchor = self if state == "refreshing" else self.value
         if self.loader.parentWidget() is not anchor:
             self.loader.setParent(anchor)

@@ -53,11 +53,19 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 
 ## Everyday controls
 
-- The dashboard opens on startup. Use its sidebar for monitoring and settings,
+- The dashboard opens on manual startup. Enable **Start with Windows** in
+  Appearance to start the installed or portable EXE in the tray after sign-in.
+  A Windows notification opens the connection approval when action is needed.
+  Use its sidebar for monitoring and settings,
   and enable the adaptive widget when needed. Closing the main window offers
   to save or discard pending changes, then hides it; use the tray menu to exit.
 - Launching the application again restores and focuses the dashboard.
   Only one instance runs per user in a Windows session, even from another folder.
+- Collapse AC outlets and Other outputs with the centered arrow shown on hover
+  or keyboard focus. Compact AC can share a row with Other outputs when space permits.
+- Time remaining shows an infinity symbol on fresh AC input; its green contour
+  reflects battery charge. A spinner marks an unavailable estimate. Notifications
+  open a current-status list with shortcuts to the related settings.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Hotkeys**. A shortcut owned by another
   application is reported as unavailable.

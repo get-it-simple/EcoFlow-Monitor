@@ -155,7 +155,9 @@ def test_notifications_include_all_modules_and_preserve_shortcut_conflicts(runti
     controller.apply_settings(replace(controller.settings, language="uk"))
     assert icon.toolTip() != text and icon.accessibleName() == i18n.t("notifications")
     controller.apply_settings(replace(controller.settings, integrations=()))
-    assert icon.isHidden()
+    assert not icon.isHidden() and icon.entries == ()
+    icon.click()
+    assert icon.dialog.entries == () and icon.dialog.isVisible()
 
 
 class WindowShows(QObject):
