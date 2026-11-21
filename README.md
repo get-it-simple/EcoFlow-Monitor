@@ -8,9 +8,12 @@ The application uses the official EcoFlow developer API. DELTA 3 MAX is the
 user-confirmed working reference. Other model profiles are untested examples
 from the API documentation; see [device profiles](DEVICE_PROFILES.md).
 
-![EcoFlow Monitor dashboard](assets/interface.png)
-![Widget](assets/1.png)
-![Widget](assets/2.png)
+Animated examples use demonstration data and cycle through charging,
+discharging, and balanced power. The dashboard includes the energy balance.
+
+![Dashboard: charging, discharging, and balanced power](assets/dashboard.gif)
+![Minimal widget: charging, discharging, and balanced power](assets/widget-minimal.gif)
+![Expanded widget: charging, discharging, and balanced power](assets/widget-expanded.gif)
 
 ## Install
 
