@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ecoflow_monitor import __version__, i18n
 from ecoflow_monitor.application import Application
-from ecoflow_monitor.settings import default_settings_path
+from ecoflow_monitor.settings import SettingsError, default_settings_path
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
 from ecoflow_monitor.instance_control import InstanceController
 from ecoflow_monitor.diagnostics import DiagnosticLog
@@ -53,7 +53,12 @@ def main() -> int:
         if args.smoke_test:
             with tempfile.TemporaryDirectory(prefix="ecoflow-smoke-") as directory:
                 return run_application(app, args, Path(directory) / "settings.json", guard)
-        return run_application(app, args, args.settings or default_settings_path(), guard)
+        try:
+            settings_path = args.settings or default_settings_path()
+        except SettingsError as error:
+            QMessageBox.warning(None, i18n.t("error_title"), i18n.t(str(error)))
+            return 1
+        return run_application(app, args, settings_path, guard)
     finally:
         if guard is not None:
             guard.close()

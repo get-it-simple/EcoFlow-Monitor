@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow devices**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.18.0**.
+battery charge. Version **0.19.2**.
 
 The application uses the official EcoFlow developer API. DELTA 3 MAX is the
 user-confirmed working reference. Other model profiles are untested examples
@@ -23,10 +23,12 @@ The installer installs for all users in Program Files and requests administrator
 approval. Windows 10 version 1809 or newer and Windows 11 x64 are supported.
 
 For portable use, extract the ZIP to a writable folder and run `EcoFlowMonitor.exe`.
-Installed copies save settings and logs in `%LOCALAPPDATA%\EcoFlowMonitor`;
-portable copies use their own folder when writable. Updates and uninstall preserve
-settings, logs and developer keys. Updates close the installed application safely;
-close copies running in other Windows sessions before updating.
+Installed copies save each user's data in `%LOCALAPPDATA%\GetItSimple\EcoFlowMonitor`.
+On first launch after an update, the app copies existing data from
+`%LOCALAPPDATA%\EcoFlowMonitor` if the new folder is absent. Portable copies use
+their own folder when writable. Updates and uninstall preserve settings, logs and
+developer keys. Updates close the installed application safely. Close copies running
+in other Windows sessions before updating.
 
 Open **Connection → Service** in the dashboard and enter your official EcoFlow developer access/secret keys.
 In **Devices**, click **Load my devices**, select your station and its profile, then save. The list contains your bound

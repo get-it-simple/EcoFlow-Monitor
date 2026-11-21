@@ -65,6 +65,32 @@ def test_lock_error_prevents_runtime_start(qapp, monkeypatch):
     assert entry.main() == 1
 
 
+def test_settings_path_error_reports_failure_and_releases_primary(qapp, monkeypatch):
+    class Primary:
+        closed = False
+
+        def start(self):
+            return True
+
+        def close(self):
+            self.closed = True
+
+    primary = Primary()
+    warnings = []
+
+    def fail():
+        raise entry.SettingsError("settings_save_error")
+
+    monkeypatch.setattr(sys, "argv", ["ecoflow-monitor"])
+    monkeypatch.setitem(vars(entry), "InstanceController", lambda: primary)
+    monkeypatch.setitem(vars(entry), "default_settings_path", fail)
+    monkeypatch.setitem(vars(entry), "run_application", lambda *args: pytest.fail("Runtime started without a settings path"))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    assert entry.main() == 1
+    assert primary.closed
+    assert warnings == [(None, entry.i18n.t("error_title"), entry.i18n.t("settings_save_error"))]
+
+
 def test_helper_entry_bypasses_main_instance_guard(monkeypatch):
     from ecoflow_monitor.adapters import elevation
     monkeypatch.setattr(sys, "argv", ["ecoflow-monitor", "--elevated-helper"])

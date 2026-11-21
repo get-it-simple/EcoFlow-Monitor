@@ -385,13 +385,35 @@ class SettingsStore:
                 os.unlink(temporary)
 
 
+def _installed_settings_path(local: Path) -> Path:
+    legacy = local / "EcoFlowMonitor"
+    data = local / "GetItSimple" / legacy.name
+    try:
+        if data.exists():
+            if not data.is_dir():
+                raise SettingsError("settings_save_error")
+        elif legacy.is_dir():
+            data.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=data.parent, prefix=".ecoflow-migration-") as directory:
+                staged = Path(directory) / data.name
+                shutil.copytree(legacy, staged)
+                try:
+                    staged.rename(data)
+                except OSError:
+                    if not data.is_dir():
+                        raise
+    except OSError:
+        raise SettingsError("settings_save_error") from None
+    return data / "settings.json"
+
+
 def default_settings_path() -> Path:
     base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
     if getattr(sys, "frozen", False) and (base / ".ecoflow-monitor-installed").is_file():
         local = os.environ.get("LOCALAPPDATA")
         if not local:
             raise SettingsError("settings_save_error")
-        return Path(local) / "EcoFlowMonitor" / "settings.json"
+        return _installed_settings_path(Path(local))
     try:
         with tempfile.TemporaryFile(dir=base):
             pass

@@ -95,10 +95,9 @@ def test_reordered_json_profiles_keep_their_slot_identity():
     assert [(profile.slot, profile.power_pct) for profile in sorted(settings.integrations[0].profiles, key=lambda item: item.slot)] == [(1, 100), (2, 95), (3, 90), (4, 85), (5, 51)]
 
 
-@pytest.mark.parametrize("installed", [False, True])
-def test_installed_settings_use_user_data_even_when_executable_directory_is_writable(tmp_path, monkeypatch, installed):
+@pytest.fixture
+def packaged_paths(tmp_path, monkeypatch):
     import sys
-    from ecoflow_monitor.settings import default_settings_path
 
     binary = tmp_path / "application"
     binary.mkdir()
@@ -106,8 +105,81 @@ def test_installed_settings_use_user_data_even_when_executable_directory_is_writ
     monkeypatch.setitem(vars(sys), "frozen", True)
     monkeypatch.setattr(sys, "executable", str(binary / "EcoFlowMonitor.exe"))
     monkeypatch.setenv("LOCALAPPDATA", str(local))
+    return binary, local
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_installed_settings_use_user_data_even_when_executable_directory_is_writable(packaged_paths, installed):
+    from ecoflow_monitor.settings import default_settings_path
+
+    binary, local = packaged_paths
     if installed:
         (binary / ".ecoflow-monitor-installed").write_text("scope=machine\n", encoding="utf-8")
-    expected = local / "EcoFlowMonitor/settings.json" if installed else binary / "settings.json"
+    expected = local / "GetItSimple/EcoFlowMonitor/settings.json" if installed else binary / "settings.json"
     assert default_settings_path() == expected
     assert not local.exists()
+
+
+def test_portable_unwritable_directory_retains_legacy_fallback(packaged_paths, monkeypatch):
+    from ecoflow_monitor.settings import default_settings_path
+
+    _, local = packaged_paths
+
+    def deny_write(**kwargs):
+        raise PermissionError("Synthetic write denial")
+
+    monkeypatch.setattr("ecoflow_monitor.settings.tempfile.TemporaryFile", deny_write)
+    assert default_settings_path() == local / "EcoFlowMonitor/settings.json"
+
+
+def test_installed_data_migrates_once_and_keeps_legacy_files(packaged_paths):
+    from ecoflow_monitor.settings import default_settings_path
+
+    binary, local = packaged_paths
+    (binary / ".ecoflow-monitor-installed").touch()
+    legacy = local / "EcoFlowMonitor"
+    data = local / "GetItSimple/EcoFlowMonitor"
+    files = {
+        "settings.json": b'{"version": 2, "language": "uk", "integrations": []}',
+        "settings.json.bak": b"previous settings",
+        "integration-state.json": b"state",
+        "logs/ecoflow-monitor.log": b"log entry",
+        "device-profiles/custom.json": b"profile",
+    }
+    for name, content in files.items():
+        path = legacy / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    assert default_settings_path() == data / "settings.json"
+    for name, content in files.items():
+        assert (data / name).read_bytes() == (legacy / name).read_bytes() == content
+    store = SettingsStore(data / "settings.json")
+    store.save(replace(store.load(), language="en"))
+    assert default_settings_path() == store.path
+    assert store.load().language == "en"
+    assert (legacy / "settings.json").read_bytes() == files["settings.json"]
+
+
+def test_failed_installed_data_copy_leaves_no_partial_destination(packaged_paths, monkeypatch):
+    from ecoflow_monitor.settings import default_settings_path
+
+    binary, local = packaged_paths
+    (binary / ".ecoflow-monitor-installed").touch()
+    legacy = local / "EcoFlowMonitor"
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_bytes(b"original")
+    data = local / "GetItSimple/EcoFlowMonitor"
+
+    def fail_copy(source, destination):
+        destination.mkdir()
+        (destination / "settings.json").write_bytes(b"partial copy")
+        raise PermissionError("Synthetic copy failure")
+
+    with monkeypatch.context() as failed_copy:
+        failed_copy.setattr("ecoflow_monitor.settings.shutil.copytree", fail_copy)
+        with pytest.raises(SettingsError, match="settings_save_error"):
+            default_settings_path()
+    assert not list(data.parent.iterdir())
+    assert (legacy / "settings.json").read_bytes() == b"original"
+    assert default_settings_path().read_bytes() == b"original"
