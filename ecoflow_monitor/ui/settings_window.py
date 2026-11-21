@@ -848,13 +848,6 @@ class SettingsWindow(QDialog):
         self._draft_changed()
 
     def sync_runtime_overlays(self):
-        try:
-            unchanged = self.gather(False) == self.controller.settings and not (self.access.text() or self.secret.text())
-        except (ValueError, OSError, SettingsError, CredentialError):
-            unchanged = False
-        if unchanged:
-            self.load_draft()
-            return
         self._loading = True
         for kind in ("main",):
             baseline = self._baseline.widget.overlay

@@ -613,6 +613,8 @@ def test_runtime_pause_stops_motion_preserves_draft_and_does_not_activate_window
         controller.set_system_activity(SystemActivity(display_off=True))
         assert not runtime.motion_driver._timer.isActive()
         assert runtime.confirmations._paused and not runtime.dashboard._log_status_timer.isActive()
+        controller.update_preferences(dashboard_geometry=(100, 100, 900, 700))
+        assert runtime.dashboard.onepassword.access_ref.text() == "op://Unsaved/Station/access"
         controller.set_system_activity(SystemActivity())
         wait_until(qapp, lambda: len(calls) == 2 and not controller._active)
         assert runtime.dashboard.onepassword.access_ref.text() == "op://Unsaved/Station/access"

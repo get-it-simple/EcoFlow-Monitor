@@ -78,6 +78,42 @@ def test_display_drafts_reset_save_cancel_and_merge(runtime):
         dialog.deleteLater()
 
 
+@pytest.mark.parametrize("access_ref,secret_ref", [
+    ("op://Unsaved/Station/access", ""),
+    ("op://Unsaved/Station/access", "unfinished"),
+    ("", ""),
+])
+def test_runtime_preferences_preserve_incomplete_credential_drafts(runtime, access_ref, secret_ref):
+    dialog = runtime.dashboard
+    panel = dialog.onepassword
+    panel.source.setCurrentIndex(1)
+    panel.access_ref.setText(access_ref)
+    panel.secret_ref.setText(secret_ref)
+    panel.create_access.setText("synthetic-vault-access")
+    panel.create_secret.setText("synthetic-vault-secret")
+    panel.vault.setText("Draft vault")
+    panel.title.setText("Draft item")
+    panel.save_section.set_expanded(True)
+    panel.show_references.setChecked(True)
+    assert dialog.gather(False) == runtime.controller.settings
+
+    runtime.controller.update_preferences(dashboard_geometry=(100, 100, 900, 700))
+    runtime.controller.update_widget(enabled=True)
+
+    assert panel.access_ref.text() == access_ref
+    assert panel.secret_ref.text() == secret_ref
+    assert panel.create_access.text() == "synthetic-vault-access"
+    assert panel.create_secret.text() == "synthetic-vault-secret"
+    assert panel.vault.text() == "Draft vault"
+    assert panel.title.text() == "Draft item"
+    assert panel.source.currentIndex() == 1
+    assert panel.save_section.header.isChecked()
+    assert panel.show_references.isChecked()
+    assert panel.credential_source == runtime.controller.settings.credential_source == "windows"
+    assert dialog.gather(False) == runtime.controller.settings
+    assert dialog.main_enabled.isChecked()
+
+
 @pytest.mark.parametrize("size", [(640, 620), (900, 700), (320, 310)])
 @pytest.mark.parametrize("fresh", [True, False])
 @pytest.mark.design
