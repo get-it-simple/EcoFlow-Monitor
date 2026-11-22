@@ -5,6 +5,12 @@ from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.common import hint
 
 
+class _PortDisclosureButton(QToolButton):
+    def paintEvent(self, event):
+        if self.parentWidget().underMouse() or self.hasFocus():
+            super().paintEvent(event)
+
+
 class PortCard(QFrame):
     def __init__(self, group, parent=None):
         super().__init__(parent)
@@ -27,7 +33,7 @@ class PortCard(QFrame):
         self.note = hint(t("outputs_read_only"))
         self.note.setVisible(group != "inputs")
         box.addWidget(self.note)
-        self.toggle = QToolButton(self)
+        self.toggle = _PortDisclosureButton(self)
         self.toggle.setProperty("icon_button", True)
         self.toggle.setCheckable(True)
         self.toggle.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -45,31 +51,21 @@ class PortCard(QFrame):
         label = t("expand_section" if collapsed else "collapse_section").format(section=self.heading.text())
         self.toggle.setAccessibleName(label)
         self.toggle.setToolTip(label)
-        self._update_arrow()
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if collapsed else Qt.ArrowType.UpArrow)
 
     def configure(self, scale):
         self.toggle.setFixedSize(round(34 * scale), round(34 * scale))
         self.set_collapsed(self.collapsed)
 
-    def _update_arrow(self):
-        visible = self.underMouse() or self.toggle.hasFocus()
-        hidden = not visible
-        if self.toggle.property("disclosure_hidden") != hidden:
-            self.toggle.setProperty("disclosure_hidden", hidden)
-            self.toggle.style().unpolish(self.toggle)
-            self.toggle.style().polish(self.toggle)
-            self.toggle.update()
-        self.toggle.setArrowType((Qt.ArrowType.DownArrow if self.collapsed else Qt.ArrowType.UpArrow) if visible else Qt.ArrowType.NoArrow)
-
     def enterEvent(self, event):
         super().enterEvent(event)
-        self._update_arrow()
+        self.toggle.update()
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
-        self._update_arrow()
+        self.toggle.update()
 
     def eventFilter(self, watched, event):
         if event.type() in {QEvent.Type.FocusIn, QEvent.Type.FocusOut}:
-            self._update_arrow()
+            self.toggle.update()
         return super().eventFilter(watched, event)

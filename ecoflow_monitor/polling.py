@@ -80,6 +80,14 @@ class TelemetryPatch:
 
 
 @dataclass(frozen=True)
+class PushedReading:
+    value: object
+    utc: float
+    monotonic: float
+    valid: bool = True
+
+
+@dataclass(frozen=True)
 class SensorSample:
     value: object = None
     received_utc: float | None = None
@@ -101,6 +109,7 @@ class PollingState:
         self.resumed = set()
         self.verified = False
         self.revision = 0
+        self.push_active = False
 
     def configure(self, preferences: PollingPreferences) -> None:
         with self._lock:
@@ -111,7 +120,7 @@ class PollingState:
             visible, required = frozenset(visible), frozenset(required)
             if (visible, required) == (self.visible, self.required):
                 return False
-            for key in visible - self.visible:
+            for key in visible - self.visible if not self.push_active else ():
                 sample = self.samples.get(key)
                 age = math.inf if sample is None or sample.received_monotonic is None else now - sample.received_monotonic
                 group = getattr(self.preferences, sensor_group(key))
@@ -127,6 +136,8 @@ class PollingState:
 
     def due(self, now: float) -> frozenset[str]:
         with self._lock:
+            if self.push_active:
+                return frozenset()
             needed = self.required | (CORE if self.required and not self.verified else frozenset())
             return frozenset(key for key in needed if key not in self.in_flight and
                              now - self.samples.get(key, SensorSample()).attempted_monotonic >=
@@ -154,6 +165,27 @@ class PollingState:
                                      replace(old, attempted_monotonic=now, status="invalid" if key in patch.invalid else "missing"))
             self.verified = self.verified or CORE <= values.keys()
             self._finish(patch.requested)
+
+    def start_push(self) -> None:
+        with self._lock:
+            self.waiting.clear()
+            self.resumed.clear()
+            self._finish(())
+            self.push_active = True
+
+    def receive(self, readings: dict[str, PushedReading]) -> None:
+        with self._lock:
+            for key, reading in readings.items():
+                old = self.samples.get(key, SensorSample())
+                self.samples[key] = (replace(old, value=reading.value, received_utc=reading.utc,
+                                             received_monotonic=reading.monotonic, status="valid") if reading.valid else
+                                     replace(old, status="invalid"))
+            self.revision += 1
+
+    def stop_push(self, now: float) -> None:
+        with self._lock:
+            self.push_active = False
+            self.resume(now)
 
     def fail(self, now: float) -> None:
         with self._lock:
@@ -185,6 +217,8 @@ class PollingState:
 
     def next_due(self, now: float) -> float:
         with self._lock:
+            if self.push_active:
+                return math.inf
             needed = self.required | (CORE if self.required and not self.verified else frozenset())
             return min((self.samples.get(key, SensorSample()).attempted_monotonic +
                         getattr(self.preferences, sensor_group(key)).interval_seconds for key in needed), default=math.inf)

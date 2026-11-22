@@ -15,7 +15,19 @@ def test_settings_roundtrip_preserves_order_and_does_not_contain_credentials(tmp
     payload = json.loads(store.path.read_text(encoding="utf-8"))
     assert payload["version"] == 4
     assert payload["integrations"][0]["system_rules"][0]["id"] == "b"
-    assert set(payload["ecoflow"]) == {"serial", "credential_ref", "credential_source", "onepassword", "device_support", "capacity_wh", "manual_min", "manual_max", "polling"}
+    assert set(payload["ecoflow"]) == {"serial", "credential_ref", "credential_source", "onepassword", "device_support", "capacity_wh", "manual_min", "manual_max", "polling", "telemetry_transport"}
+
+
+def test_existing_settings_default_to_mqtt_with_fallback_without_losing_https_preferences(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    original = replace(AppSettings(), serial="TEST", capacity_wh=1500)
+    payload = original.to_dict()
+    del payload["ecoflow"]["telemetry_transport"]
+    store.path.write_text(json.dumps(payload), encoding="utf-8")
+    assert store.load() == original
+    https_only = replace(original, telemetry_transport="https_only")
+    store.save(https_only)
+    assert store.load() == https_only
 
 
 def test_invalid_file_is_preserved_until_explicit_save_with_backup(tmp_path):

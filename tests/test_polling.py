@@ -144,7 +144,8 @@ def sensor_controller(tmp_path, qapp, session_cache):
     controller = Controller(SettingsStore(tmp_path / "settings.json"), credential_store=MemoryCredentials(),
                             client_factory=lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle)),
                             clock=lambda: now[0], credential_cache=session_cache)
-    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),))
+    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),),
+                                  telemetry_transport="https_only")
     controller.set_sensor_demand("dashboard", ())
     yield controller, now, calls, values, failures
     controller.stop()

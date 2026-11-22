@@ -131,6 +131,7 @@ def test_settings_initial_size_fits_content_or_scrolls(runtime, qapp, language, 
     runtime.controller.apply_settings(replace(runtime.controller.settings, language=language, scale=scale))
     dialog = ScreenConstrainedSettings(runtime.controller, runtime.window)
     scroller = dialog.tabs.widget(0)
+    dialog.connection_tabs.setCurrentIndex(1)
     extra = QLabel("Additional settings content")
     extra.setMinimumHeight(650)
     scroller.widget().layout().insertWidget(0, extra)

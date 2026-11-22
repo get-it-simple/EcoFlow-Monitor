@@ -214,6 +214,11 @@ Declining pauses automatic access until you explicitly request it. Device discov
 and monitoring share the current credential session. Device names refresh once at
 startup and remain available after saving or restarting.
 
+Choose the telemetry API in **Settings → Connection → Service**. The default
+uses MQTT for DELTA 3 MAX, switches to HTTPS polling if the stream is unavailable,
+and returns to MQTT when fresh readings resume. **HTTPS only** uses the configured
+polling intervals throughout. While MQTT is active, readings update as they arrive.
+
 **Collect device diagnostics** requests separate permission to record sanitized
 official API responses locally, including when ordinary logging is Off. Nothing is
 uploaded, and the saved logging mode stays the same. Review logs before sharing.
@@ -222,7 +227,7 @@ uploaded, and the saved logging mode stays the same. Review logs before sharing.
 
 - The verified telemetry profile is based on DELTA 3 Max documentation and a
   supplied runtime log. Other response formats need diagnostic review before
-  support can be added. Selective polling still needs live device verification.
+  support can be added. MQTT and selective polling still need live device verification.
   Port power retains the sign supplied by the API.
 - Cloud monitoring requires internet, an authorized account-bound device, and
   valid developer keys. Connection settings provide separate update intervals and
@@ -275,7 +280,8 @@ change is needed. Submit the JSON file to this project on GitHub.
 | --- | --- |
 | PySide6 | Desktop interface |
 | Inter | Bundled interface font; [SIL Open Font License](ecoflow_monitor/ui/assets/fonts/OFL.txt) |
-| httpx | Official EcoFlow API requests |
+| httpx | Official EcoFlow HTTPS requests |
+| paho-mqtt | EcoFlow MQTT telemetry over TLS |
 | psutil | Process discovery for integrations and application rules |
 | PyInstaller | Portable builds only |
 | packaging | Build tooling only |

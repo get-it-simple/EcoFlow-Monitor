@@ -1,16 +1,20 @@
 from dataclasses import replace
+import queue
 import threading
 import time
 
+import httpx
 import pytest
 from qt_helpers import wait_until as wait_for_condition
 
-from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowError
+from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
+from ecoflow_monitor.adapters.ecoflow_mqtt import MqttError, decode_report
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.integrations import IntegrationRule
 from ecoflow_monitor.adapters.integrations import IntegrationObservation, TransitionResult
 from ecoflow_monitor.settings import SettingsStore
+from ecoflow_monitor.system_activity import SystemActivity
 
 
 class MemoryCredentials:
@@ -57,6 +61,178 @@ def test_disabled_integration_has_no_process_watcher(controller):
     controller.tick()
     assert controller.integration_adapter.inspections == 0
     assert controller.integration_states["afterburner"].observation.availability == "integration_disabled"
+
+
+@pytest.fixture
+def mqtt_monitor(controller, request):
+    requests, streams = [], []
+    certification_status = getattr(request, "param", 200)
+    waiting_https = threading.Event()
+    release_https = threading.Event()
+    release_https.set()
+    now = [1000.0]
+    controller.clock = lambda: now[0]
+    controller.settings = replace(controller.settings, serial="TEST")
+    controller.credential_store.write(controller.settings.credential_ref, Credentials("synthetic-access", "synthetic-secret"))
+
+    def handle(request):
+        name = request.url.path.rsplit("/", 1)[-1]
+        requests.append(name)
+        if name == "list":
+            return httpx.Response(200, json={"code": "0", "data": [{"sn": "TEST", "deviceName": "DELTA 3 MAX", "online": 1}]})
+        if name == "certification":
+            if certification_status != 200:
+                return httpx.Response(certification_status)
+            return httpx.Response(200, json={"code": "0", "data": {
+                "url": "mqtt.ecoflow.com", "port": "8883", "protocol": "mqtts",
+                "certificateAccount": "synthetic-account", "certificatePassword": "synthetic-password"}})
+        assert name == "quota"
+        waiting_https.set()
+        assert release_https.wait(4)
+        return httpx.Response(200, json={"code": "0", "data": {"powInSumW": 10, "powOutSumW": 20, "cmsBattSoc": 40}})
+
+    def stream(access, serial, cancelled, receive):
+        assert access.host == "mqtt.ecoflow.com" and serial == "TEST"
+        reports = queue.Queue()
+        streams.append((reports, cancelled, receive))
+        while not cancelled.is_set():
+            try:
+                report = reports.get(timeout=0.02)
+            except queue.Empty:
+                continue
+            if report is None:
+                raise MqttError("stream_disconnected")
+            receive(decode_report(report))
+
+    controller.client_factory = lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle))
+    controller._mqtt_stream = stream
+    yield now, requests, streams, waiting_https, release_https
+    release_https.set()
+
+
+def test_mqtt_push_stops_polling_and_recovers_after_https_fallback(controller, mqtt_monitor, qapp):
+    now, requests, streams, waiting_https, release_https = mqtt_monitor
+    controller.refresh()
+    wait_until(qapp, lambda: len(streams) == 1)
+    assert controller.telemetry_source == "waiting_mqtt"
+    reports, _, _ = streams[0]
+    reports.put(b'{"cmsBattSoc":70,"powInSumW":0}')
+    wait_until(qapp, lambda: "battery_level" in controller._mqtt_session.readings)
+    assert controller.telemetry is None and requests == ["list", "certification"]
+    reports.put(b'{"powOutSumW":50,"powGet12vList":{"powGet12vItem":[0,3]}}')
+    wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    assert controller.fresh and controller.telemetry.soc_pct == 70 and controller.telemetry.input_w == 0
+    assert dict(controller.telemetry.ports)["anderson_2"] == 3
+
+    now[0] += 31
+    reports.put(b'{"cmsBattSoc":71}')
+    wait_until(qapp, lambda: controller.telemetry.soc_pct == 71)
+    assert controller.polling.samples["input_power"].received_monotonic == now[0] - 31
+    controller.tick()
+    assert requests == ["list", "certification"]
+
+    reports.put(None)
+    wait_until(qapp, lambda: controller.telemetry_source == "https_fallback" and controller.telemetry.soc_pct == 40)
+    assert requests.count("quota") == 1
+    now[0] += 30
+    waiting_https.clear()
+    release_https.clear()
+    controller.tick()
+    wait_until(qapp, lambda: len(streams) == 2)
+    controller.tick()
+    wait_until(qapp, waiting_https.is_set)
+    streams[1][0].put(b'{"cmsBattSoc":75,"powInSumW":0,"powOutSumW":65}')
+    wait_until(qapp, lambda: controller.telemetry.soc_pct == 75)
+    release_https.set()
+    wait_until(qapp, lambda: "api" not in controller._active)
+    assert controller.telemetry.soc_pct == 75 and controller.telemetry_source == "mqtt"
+    assert requests.count("certification") == 2 and requests.count("quota") == 2
+
+
+def test_mqtt_timeout_staleness_and_pause_reject_old_session_reports(controller, mqtt_monitor, qapp):
+    now, requests, streams, _, _ = mqtt_monitor
+    controller.refresh()
+    wait_until(qapp, lambda: len(streams) == 1)
+    now[0] += 20
+    controller.tick()
+    wait_until(qapp, lambda: controller.telemetry is not None)
+    assert controller.telemetry_source == "https_fallback" and streams[0][1].is_set()
+
+    now[0] += 30
+    controller.tick()
+    wait_until(qapp, lambda: len(streams) == 2)
+    report = b'{"cmsBattSoc":80,"powInSumW":0,"powOutSumW":65}'
+    streams[1][0].put(report)
+    wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    now[0] += controller.settings.polling.primary.stale_after_seconds
+    controller.tick()
+    assert not controller.fresh and streams[1][1].is_set()
+    wait_until(qapp, lambda: controller.telemetry.soc_pct == 40 and controller.fresh)
+
+    now[0] += 30
+    controller.tick()
+    wait_until(qapp, lambda: len(streams) == 3)
+    streams[2][0].put(report)
+    wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    streams[2][2](decode_report(b'{"cmsBattSoc":99}'))
+    controller.set_system_activity(SystemActivity(locked=True))
+    qapp.processEvents()
+    assert not controller.fresh and streams[2][1].is_set() and controller.telemetry.soc_pct == 80
+    controller.set_system_activity(SystemActivity())
+    wait_until(qapp, lambda: len(streams) == 4)
+    assert not controller.fresh
+    streams[3][0].put(report)
+    wait_until(qapp, lambda: controller.fresh)
+
+
+def test_saving_https_only_stops_active_mqtt_and_disables_probes(controller, mqtt_monitor, qapp):
+    now, requests, streams, _, _ = mqtt_monitor
+    controller.refresh()
+    wait_until(qapp, lambda: len(streams) == 1)
+    reports, cancelled, receive = streams[0]
+    reports.put(b'{"cmsBattSoc":80,"powInSumW":0,"powOutSumW":65}')
+    wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    controller.apply_settings(replace(controller.settings, language="uk"))
+    assert controller.telemetry_source == "mqtt" and not cancelled.is_set()
+    controller.apply_settings(replace(controller.settings, telemetry_transport="https_only"))
+    assert controller.telemetry_source == "https" and cancelled.is_set() and not controller.fresh
+    receive(decode_report(b'{"cmsBattSoc":99}'))
+    controller.tick()
+    wait_until(qapp, lambda: controller.fresh and controller.telemetry.soc_pct == 40)
+    now[0] += 91
+    controller.tick()
+    wait_until(qapp, lambda: requests.count("quota") == 2 and "api" not in controller._active)
+    assert requests.count("certification") == 1 and len(streams) == 1
+
+
+@pytest.mark.parametrize("mqtt_monitor", [403], indirect=True)
+def test_mqtt_certification_denial_still_allows_https_telemetry(controller, mqtt_monitor, qapp):
+    _, requests, streams, _, _ = mqtt_monitor
+    controller.refresh()
+    wait_until(qapp, lambda: controller.fresh)
+    assert controller.telemetry_source == "https_fallback" and controller.telemetry.soc_pct == 40
+    assert requests == ["list", "certification", "quota"] and not streams
+
+
+@pytest.mark.parametrize("language,https_label", [("uk", "Лише HTTPS"), ("en", "HTTPS only")])
+def test_transport_draft_applies_only_when_saved(controller, qapp, language, https_label):
+    from ecoflow_monitor.ui.settings_window import SettingsWindow
+
+    controller.apply_settings(replace(controller.settings, language=language))
+    window = SettingsWindow(controller)
+    try:
+        index = window.telemetry_transport.findData("https_only")
+        assert window.telemetry_transport.itemText(index) == https_label
+        window.telemetry_transport.setCurrentIndex(index)
+        assert window.gather(False).telemetry_transport == "https_only"
+        assert controller.settings.telemetry_transport == "mqtt_with_https_fallback"
+        window.load_draft()
+        assert window.telemetry_transport.currentData() == "mqtt_with_https_fallback"
+        window.telemetry_transport.setCurrentIndex(index)
+        window.save()
+        assert controller.store.load().telemetry_transport == "https_only"
+    finally:
+        window.close()
 
 
 def test_manual_profile_turns_auto_off_before_external_command(controller, qapp):
@@ -135,7 +311,7 @@ def test_refreshes_coalesce_to_one_pending_job(controller, qapp):
             release.wait(3)
             return Telemetry(0, 200, 80, 100, time.monotonic())
     controller.client_factory = lambda credentials: SlowClient()
-    controller.apply_settings(replace(controller.settings, serial="TEST"), Credentials("synthetic", "synthetic"))
+    controller.apply_settings(replace(controller.settings, serial="TEST", telemetry_transport="https_only"), Credentials("synthetic", "synthetic"))
     controller._api_pending = False
     controller.refresh()
     for _ in range(8):
