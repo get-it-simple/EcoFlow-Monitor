@@ -42,36 +42,79 @@ class TransitionResult:
 
 
 @dataclass(frozen=True)
+class ProcessEntry:
+    pid: int
+    name: str
+    executable: str
+    created: float | None
+
+    @property
+    def identity(self) -> ProcessIdentity | None:
+        if self.created is None:
+            return None
+        identity = ProcessIdentity(self.executable, self.pid, self.created)
+        return identity if identity.valid() else None
+
+
+@dataclass(frozen=True)
 class ProcessSnapshot:
     running: frozenset[str] = frozenset()
     inaccessible_names: frozenset[str] = frozenset()
     identities: tuple[ProcessIdentity, ...] = ()
     uncertain_paths: frozenset[str] = frozenset()
+    entries: tuple[ProcessEntry, ...] = ()
+
+    @classmethod
+    def from_entries(cls, entries):
+        entries = tuple(entries)
+        return cls(
+            frozenset(item.executable for item in entries if item.executable),
+            frozenset(item.name for item in entries if item.name and not item.executable),
+            tuple(identity for item in entries if (identity := item.identity) is not None),
+            frozenset(item.executable for item in entries if item.executable and item.identity is None),
+            entries,
+        )
+
+
+def _process_entry(process, info) -> ProcessEntry:
+    name = info.get("name") or ""
+    path = normalized_executable(info.get("exe") or "")
+    created = None
+    if path:
+        try:
+            created = process.create_time()
+        except (psutil.Error, OSError, AttributeError):
+            pass
+    return ProcessEntry(getattr(process, "pid", 0), name.casefold() or Path(path).name.casefold(), path, created)
 
 
 def running_processes() -> ProcessSnapshot:
-    running = set()
-    inaccessible = set()
-    identities = []
-    uncertain = set()
-    for process in psutil.process_iter(["name", "exe"]):
+    iterator = psutil.process_iter
+    if hasattr(iterator, "cache_clear"):
+        iterator.cache_clear()
+    return ProcessSnapshot.from_entries(_process_entry(process, process.info) for process in iterator(["name", "exe"]))
+
+
+def process_entry(pid: int) -> ProcessEntry | None:
+    try:
+        process = psutil.Process(pid)
+        return _process_entry(process, process.as_dict(attrs=["name", "exe"]))
+    except (psutil.Error, OSError, ValueError):
+        return None
+
+
+def integration_process_names(modules) -> frozenset[str]:
+    names = {"msiafterburner.exe"} if any(module.driver == "afterburner" and not module.executable for module in modules) else set()
+    targets = {module.executable for module in modules if module.executable}
+    names.update(Path(rule.executable).name.casefold() for module in modules for rule in module.application_rules)
+    for path in targets:
+        names.add(Path(path).name.casefold())
         try:
-            path = process.info.get("exe")
-            if isinstance(path, str) and path:
-                running.add(normalized_executable(path))
-                try:
-                    observed = ProcessIdentity(normalized_executable(path), process.pid, process.create_time())
-                    if observed.valid():
-                        identities.append(observed)
-                    else:
-                        uncertain.add(normalized_executable(path))
-                except (psutil.Error, OSError, AttributeError):
-                    uncertain.add(normalized_executable(path))
-            elif isinstance(process.info.get("name"), str):
-                inaccessible.add(process.info["name"].casefold())
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return ProcessSnapshot(frozenset(running), frozenset(inaccessible), tuple(identities), frozenset(uncertain))
+            names.add(Path(local_executable(path)).name.casefold())
+        except (ValueError, OSError):
+            pass
+    names.discard("")
+    return frozenset(names)
 
 
 class IntegrationAdapter:
@@ -101,6 +144,10 @@ class IntegrationAdapter:
         session = self.sessions.get(module.id)
         return bool(module.enabled and session is not None and session.matches(module) and session.ready)
 
+    def helper_handle(self, module: IntegrationDefinition):
+        session = self.sessions.get(module.id)
+        return session.handle if session is not None and session.matches(module) and session.ready else None
+
     def retain_sessions(self, modules):
         definitions = {module.id: module for module in modules if module.enabled}
         for identity, session in tuple(self.sessions.items()):
@@ -111,10 +158,11 @@ class IntegrationAdapter:
     def close(self):
         self.retain_sessions(())
 
-    def inspect(self, module: IntegrationDefinition) -> IntegrationObservation:
+    def inspect(self, module: IntegrationDefinition, snapshot: ProcessSnapshot | None = None) -> IntegrationObservation:
         if not module.enabled:
             return IntegrationObservation("integration_disabled")
-        snapshot = running_processes()
+        if snapshot is None:
+            snapshot = running_processes()
         running = snapshot.running
         selected = module.executable
         if module.driver == "afterburner" and not selected:
@@ -175,7 +223,8 @@ class IntegrationAdapter:
                                                     exit_code=response["exit_code"], winerror=response["winerror"])
                         completed += 1
                         continue
-                    result = subprocess.run(args, shell=False, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW,
+                    result = subprocess.run(args, shell=False, timeout=5,
+                                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.NORMAL_PRIORITY_CLASS,
                                             cwd=str(Path(observation.executable).parent), check=False,
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     if result.returncode != 0:

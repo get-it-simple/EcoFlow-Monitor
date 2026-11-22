@@ -1,5 +1,6 @@
 import threading
 
+from ecoflow_monitor.adapters.ecoflow_mqtt import MqttCancellation
 from ecoflow_monitor.device_profiles import CORE
 from ecoflow_monitor.polling import PushedReading, TelemetryPatch
 
@@ -7,7 +8,7 @@ from ecoflow_monitor.polling import PushedReading, TelemetryPatch
 class MqttSession:
     def __init__(self, serial: str):
         self.serial = serial
-        self.cancelled = threading.Event()
+        self.cancelled = MqttCancellation()
         self.deadline = float("inf")
         self.active = False
         self.readings: dict[str, PushedReading] = {}
@@ -35,4 +36,7 @@ class MqttSession:
                    now - self.readings[key].monotonic < stale_after for key in CORE)
 
     def core_expired(self, now: float, stale_after: float) -> bool:
-        return any(now - self.last_valid[key] >= stale_after for key in CORE)
+        return now >= self.core_deadline(stale_after)
+
+    def core_deadline(self, stale_after: float) -> float:
+        return min(self.last_valid[key] for key in CORE) + stale_after

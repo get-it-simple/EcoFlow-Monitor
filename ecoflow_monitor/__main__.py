@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ecoflow_monitor import __version__, i18n
+from ecoflow_monitor.adapters.power_efficiency import enable_efficiency_mode
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.settings import SettingsError, default_settings_path
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
@@ -71,6 +72,8 @@ def run_application(app, args, settings_path, guard) -> int:
 
 def _run_application(app, args, settings_path, guard, diagnostics) -> int:
     runtime = Application(settings_path, native=not args.smoke_test, diagnostics=diagnostics)
+    if not args.smoke_test:
+        enable_efficiency_mode()
     if guard is not None:
         guard.activation_requested.connect(runtime.activate_existing_window)
         guard.shutdown_requested.connect(app.quit)

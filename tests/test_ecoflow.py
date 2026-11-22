@@ -1,6 +1,5 @@
 import json
 import ssl
-import threading
 from types import SimpleNamespace
 
 import httpx
@@ -8,7 +7,7 @@ import pytest
 from paho.mqtt import client as mqtt
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError, flatten_parameters, normalize_telemetry, signed_headers
-from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttError, decode_report, stream_telemetry
+from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttCancellation, MqttError, decode_report, stream_telemetry
 from ecoflow_monitor.domain import ConnectionState
 
 
@@ -119,7 +118,7 @@ def test_signed_mqtt_certification_never_logs_broker_credentials(tmp_path):
 
 def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(monkeypatch):
     topic = "/open/test-account/TEST/quota"
-    cancelled = threading.Event()
+    cancelled = MqttCancellation()
     subscribed = []
     received = []
     disconnected = []
@@ -146,7 +145,10 @@ def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(
             assert qos == 0
             return mqtt.MQTT_ERR_SUCCESS, 1
 
-        def loop(self, timeout):
+        def socket(self):
+            return self
+
+        def loop_read(self):
             self.on_connect(self, None, None, mqtt.ReasonCode(mqtt.PacketTypes.CONNACK), None)
             self.on_subscribe(self, None, 1, [mqtt.ReasonCode(mqtt.PacketTypes.SUBACK, identifier=0)], None)
             for selected, retain in ((topic + "/other", False), (topic, True), (topic, False)):
@@ -155,10 +157,14 @@ def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(
             cancelled.set()
             return mqtt.MQTT_ERR_SUCCESS
 
+        def loop_misc(self):
+            return mqtt.MQTT_ERR_SUCCESS
+
         def disconnect(self):
             disconnected.append(True)
 
     monkeypatch.setattr(mqtt, "Client", Client)
+    monkeypatch.setattr("ecoflow_monitor.adapters.ecoflow_mqtt.select", lambda read, write, errors, timeout: (read[:1], [], []))
     access = BrokerAccess("mqtt.ecoflow.com", 8883, "test-account", "test-password")
     stream_telemetry(access, "TEST", cancelled, received.append)
     assert subscribed == [topic] and disconnected == [True]

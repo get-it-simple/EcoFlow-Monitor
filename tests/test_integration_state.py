@@ -352,7 +352,7 @@ def test_old_scan_cannot_restore_profile_before_later_success(automation, qapp):
     old_scan = controller._inspect_integration(module, state.dispatch_revision)
     controller.request_profile(module.id, "profile_5")
     wait_until(qapp, lambda: not controller._active)
-    controller._completed("scan:" + module.id, controller._generation, old_scan, None)
+    controller._completed("scan_all", controller._generation, (None, {module.id: (old_scan, None)}), None)
     assert state.active_profile == "profile_5"
     assert controller.integration_cache.restore(module, target[0]) == "profile_5"
 

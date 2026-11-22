@@ -8,8 +8,11 @@ from pathlib import Path
 import queue
 import re
 import subprocess
+import sys
 import threading
 from typing import Any
+
+from PySide6.QtCore import QObject, Signal
 
 
 REDACTED = "[REDACTED]"
@@ -132,7 +135,8 @@ def reveal_log(path: Path) -> bool:
     try:
         if not path.is_file():
             return False
-        subprocess.Popen(["explorer.exe", "/select," + str(path.resolve())], shell=False)
+        subprocess.Popen(["explorer.exe", "/select," + str(path.resolve())], shell=False,
+                         creationflags=subprocess.NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0)
         return True
     except OSError:
         return False
@@ -186,6 +190,10 @@ class DailySizeFileHandler(BaseRotatingHandler):
                 remaining -= 1
 
 
+class DiagnosticStatus(QObject):
+    changed = Signal()
+
+
 class DiagnosticLog(logging.Handler):
     def __init__(self, path: Path, *, disabled: bool = False, max_bytes: int = 3 * 1024 * 1024,
                  backup_count: int | None = None, queue_size: int = 1024) -> None:
@@ -194,6 +202,7 @@ class DiagnosticLog(logging.Handler):
         self.disabled = disabled
         self.mode = "off"
         self.failed = False
+        self.status = DiagnosticStatus()
         self._max_bytes = max_bytes
         self._backup_count = backup_count
         self._queue = queue.Queue(queue_size)
@@ -223,6 +232,7 @@ class DiagnosticLog(logging.Handler):
                 self._thread = threading.Thread(target=self._write, name="ecoflow-diagnostics", daemon=True)
                 self._thread.start()
         event("logging_mode_changed", mode=mode)
+        self.status.changed.emit()
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._state_lock:
@@ -267,6 +277,7 @@ class DiagnosticLog(logging.Handler):
     def _write(self) -> None:
         while True:
             item = self._queue.get()
+            status_changed = False
             try:
                 if item is None:
                     return
@@ -278,6 +289,7 @@ class DiagnosticLog(logging.Handler):
                         if self._sink is None:
                             self.path.parent.mkdir(parents=True, exist_ok=True)
                             self._sink = DailySizeFileHandler(self.path, self._max_bytes, self._backup_count)
+                            status_changed = True
                             self._sink.setFormatter(logging.Formatter("%(message)s"))
                             self._sink.prune()
                         if self._dropped:
@@ -286,8 +298,11 @@ class DiagnosticLog(logging.Handler):
                         self._write_line(line)
                     except (OSError, ValueError):
                         self.failed = True
+                        status_changed = True
             finally:
                 self._queue.task_done()
+                if status_changed:
+                    self.status.changed.emit()
 
     def _write_line(self, line: str) -> None:
         record = logging.LogRecord(LOGGER_NAME, logging.INFO, "", 0, line, (), None)

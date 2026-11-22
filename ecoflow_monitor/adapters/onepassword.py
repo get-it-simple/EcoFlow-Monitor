@@ -46,7 +46,7 @@ def run_cli(arguments: list[str], cancelled: threading.Event, payload: bytes | N
         process: subprocess.Popen[bytes] = subprocess.Popen(
             [executable, *arguments], stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=desktop_environment(), shell=False, text=False,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=(subprocess.CREATE_NO_WINDOW | subprocess.NORMAL_PRIORITY_CLASS) if os.name == "nt" else 0,
         )
     except OSError:
         raise OnePasswordError("onepassword_start_error") from None
@@ -135,8 +135,10 @@ class RequestResult:
 
 
 class SecretRequest:
-    def __init__(self, operation: Callable[[threading.Event], Credentials | SavedItem]):
+    def __init__(self, operation: Callable[[threading.Event], Credentials | SavedItem],
+                 completed: Callable[["SecretRequest"], None] | None = None):
         self._operation = operation
+        self._completed = completed
         self._cancelled = threading.Event()
         self._results: Queue[RequestResult] = Queue(maxsize=1)
         self._thread = threading.Thread(target=self._run)
@@ -172,3 +174,5 @@ class SecretRequest:
             self._operation = None
         if not self._cancelled.is_set():
             self._results.put_nowait(result)
+            if self._completed is not None:
+                self._completed(self)

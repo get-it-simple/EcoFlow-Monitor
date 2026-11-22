@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from ecoflow_monitor.adapters.hotkeys import HotkeyError, HotkeyIssue, HotkeyManager, validate_bindings
 from ecoflow_monitor.adapters.accent import AccentWatcher
 from ecoflow_monitor.adapters.motion import MotionPreference
+from ecoflow_monitor.adapters.process_events import ProcessExitNotifications, duplicate_wait_handle
 from ecoflow_monitor.adapters.system_activity import SystemActivityWatcher
 from ecoflow_monitor.adapters.windows import activate_window
 from ecoflow_monitor.controller import Controller
@@ -29,7 +30,8 @@ class Application(QObject):
         super().__init__()
         self.native = native
         self._startup_pending = False
-        self.controller = controller if controller is not None else Controller(SettingsStore(settings_path), diagnostics=diagnostics)
+        self.controller = controller if controller is not None else Controller(
+            SettingsStore(settings_path), diagnostics=diagnostics, native_process_events=native)
         self.app = QApplication.instance()
         font = QFont(font_family())
         font.setPixelSize(14)
@@ -69,17 +71,14 @@ class Application(QObject):
         self._elevation_checked = {}
         self._elevation_prompted = {}
         self._activity_paused = False
-        self._paused_timers = []
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.menu = QMenu()
         self.menu.setStyleSheet(menu_style())
         self._helper_actions = {}
-        self._menu_timer = QTimer(self)
-        self._menu_timer.setInterval(500)
-        self._menu_timer.timeout.connect(self._sync_menu)
+        self._helper_exits = ProcessExitNotifications(self) if native else None
+        if self._helper_exits is not None:
+            self._helper_exits.exited.connect(self._sync_menu)
         self.menu.aboutToShow.connect(self._sync_menu)
-        self.menu.aboutToShow.connect(self._menu_timer.start)
-        self.menu.aboutToHide.connect(self._menu_timer.stop)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
         self.tray.messageClicked.connect(self.activate_existing_window)
@@ -87,12 +86,13 @@ class Application(QObject):
         self.controller.credentials_expired.connect(self._notify_credentials_expired)
         self.controller.preferences_changed.connect(self.preferences)
         self.controller.changed.connect(self._check_elevation)
-        self.controller.changed.connect(self._sync_menu)
+        self.controller.task_finished.connect(self._helper_task_finished)
         self.window.visibility_changed.connect(self._sync_menu)
         self.controller.elevation_needed.connect(self._queue_elevation)
         self.app.aboutToQuit.connect(self.stop)
         self.activity_watcher = SystemActivityWatcher(self, native=native)
         self.activity_watcher.changed.connect(self.controller.set_system_activity)
+        self.activity_watcher.clock_changed.connect(self.controller.wake)
         self.controller.system_activity_changed.connect(self._system_activity_changed)
         self.preferences()
 
@@ -101,20 +101,14 @@ class Application(QObject):
             return
         self._activity_paused = activity.paused
         self.confirmations.set_paused(activity.paused)
+        self.dashboard.onepassword.set_paused(activity.paused)
         if activity.paused:
-            timers = (self._menu_timer, self.dashboard._log_status_timer, self.dashboard.onepassword._timer)
-            self._paused_timers = [timer for timer in timers if timer.isActive()]
-            for timer in self._paused_timers:
-                timer.stop()
+            if self._helper_exits is not None:
+                self._helper_exits.clear()
         else:
-            for timer in self._paused_timers:
-                if timer is self._menu_timer and not self.menu.isVisible():
-                    continue
-                if timer is self.dashboard.onepassword._timer and self.dashboard.onepassword._request is None:
-                    continue
-                timer.start()
-            self._paused_timers.clear()
             self._elevation_checked.clear()
+            self._sync_menu()
+            self.dashboard.refresh_visible_log_status()
 
     def _notify_credentials_expired(self):
         if self.native and self.tray.isVisible() and QSystemTrayIcon.supportsMessages():
@@ -222,12 +216,24 @@ class Application(QObject):
             return
         self.monitor_action.setChecked(self.window.isVisible())
         self.main_action.setChecked(self.widget.isVisible())
+        if self._activity_paused:
+            return
+        handles = set()
+        adapter = self.controller.integration_adapter
         for module in self.controller.settings.integrations:
             action = self._helper_actions.get(module.id)
             if action is not None:
-                ready = self.controller.integration_adapter.helper_ready(module)
+                ready = adapter.helper_ready(module)
                 action.setChecked(ready)
                 action.setEnabled(not ready and "elevate:" + module.id not in self.controller._active)
+                if ready and self._helper_exits is not None and hasattr(adapter, "helper_handle") and (handle := adapter.helper_handle(module)):
+                    handles.add(handle)
+        if self._helper_exits is not None:
+            self._helper_exits.reconcile(handles, duplicate_wait_handle)
+
+    def _helper_task_finished(self, kind):
+        if kind.startswith("elevate:"):
+            self._sync_menu()
 
     def _check_elevation(self):
         if not self.native or self._stopped or self.controller.system_activity.paused or not self._automatic_helpers_allowed:
@@ -490,12 +496,12 @@ class Application(QObject):
             return
         self._stopped = True
         self.activity_watcher.stop()
-        self._paused_timers.clear()
+        if self._helper_exits is not None:
+            self._helper_exits.clear()
         self.confirmations.close()
         self.motion_driver.stop()
         if self.dashboard is not None:
             self.dashboard._draft_timer.stop()
-            self.dashboard._log_status_timer.stop()
             self.dashboard._geometry_timer.stop()
             self.dashboard._screen_tracker.stop()
             self.dashboard._close_credentials()
@@ -503,7 +509,6 @@ class Application(QObject):
         if self._dialog is not None and self._dialog is not self.dashboard:
             self._dialog.reject()
         self.controller.preview = None
-        self._menu_timer.stop()
         self.accent.stop()
         self.motion.stop()
         if getattr(self.app, "ecoflow_accent", None) is self.accent:

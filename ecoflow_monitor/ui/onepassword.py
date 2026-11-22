@@ -1,4 +1,4 @@
-from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal, Slot
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLineEdit, QTabBar, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.ecoflow import Credentials
@@ -15,11 +15,13 @@ class OnePasswordPanel(QWidget):
     source_changed = Signal()
     credentials_ready = Signal(object)
     busy_changed = Signal(bool)
+    request_completed = Signal(object)
 
     def __init__(self, entered_credentials, manual_fields, parent=None):
         super().__init__(parent)
         self._entered_credentials = entered_credentials
         self._request: SecretRequest | None = None
+        self._paused = False
         self._saving = False
         self._save_credentials = None
         self._retained_references = ("", "")
@@ -114,9 +116,7 @@ class OnePasswordPanel(QWidget):
         row.addWidget(self.status, 1)
         row.addWidget(self.cancel_button)
         layout.addLayout(row)
-        self._timer = QTimer(self)
-        self._timer.setInterval(50)
-        self._timer.timeout.connect(self._poll)
+        self.request_completed.connect(self._finish_request, Qt.ConnectionType.QueuedConnection)
         self.source.currentChanged.connect(self._source_changed)
         self._source_changed()
 
@@ -229,12 +229,11 @@ class OnePasswordPanel(QWidget):
 
     def _start(self, operation, saving):
         self._saving = saving
-        request = SecretRequest(operation)
+        request = SecretRequest(operation, self.request_completed.emit)
         self._request = request
-        request.start()
         self._set_busy(True)
         self.show_status(t("onepassword_waiting"))
-        self._timer.start()
+        request.start()
 
     def _set_busy(self, busy):
         for widget in (self.source, self.references, self.load_button, self.save_section, *self.storage_rows.values()):
@@ -246,15 +245,18 @@ class OnePasswordPanel(QWidget):
         self.status.setText(text)
         self.status.setVisible(bool(text))
 
-    def _poll(self):
-        request = self._request
-        if request is None:
+    def set_paused(self, paused):
+        self._paused = paused
+        if not paused and self._request is not None:
+            self._finish_request(self._request)
+
+    @Slot(object)
+    def _finish_request(self, request):
+        if self._paused or request is not self._request:
             return
         result: RequestResult | None = request.take_result()
         if result is None:
             return
-        self._timer.stop()
-        request.close()
         self._request = None
         self._set_busy(False)
         if result.error:
@@ -277,7 +279,6 @@ class OnePasswordPanel(QWidget):
         self.credentials_ready.emit(self.credentials)
 
     def cancel(self, *, show_status=True):
-        self._timer.stop()
         if self._request is not None:
             self._request.close()
             self._request = None

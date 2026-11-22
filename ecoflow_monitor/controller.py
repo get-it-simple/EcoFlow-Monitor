@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, replace
 import hmac
 import logging
+import math
 import secrets
 import threading
 import time
@@ -11,7 +12,8 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal
 
 from ecoflow_monitor import __version__, i18n
 from ecoflow_monitor.diagnostics import DiagnosticLog, event
-from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult
+from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult, integration_process_names, running_processes
+from ecoflow_monitor.adapters.process_events import ProcessTracker, relevant_processes
 from ecoflow_monitor.adapters.credentials import CredentialError, CredentialStore
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttError, stream_telemetry, valid_topic_segment
@@ -101,12 +103,14 @@ class Controller(QObject):
     profiles_ready = Signal(object)
     profile_example_ready = Signal(object, object)
     mqtt_readings_ready = Signal(object)
+    credential_cache_updated = Signal()
 
-    def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None, *, mqtt_stream=stream_telemetry) -> None:
+    def __init__(self, store: SettingsStore, credential_store=None, integration_adapter=None, client_factory=None, clock=time.monotonic, credential_cache=None, diagnostics: DiagnosticLog | None = None, *, mqtt_stream=stream_telemetry, native_process_events=False) -> None:
         super().__init__()
         self.store = store
         self.credential_store = credential_store if credential_store is not None else CredentialStore()
         self.integration_adapter = integration_adapter if integration_adapter is not None else IntegrationAdapter()
+        self._shared_process_snapshot = integration_adapter is None
         self.client_factory = client_factory if client_factory is not None else EcoFlowClient
         self.clock = clock
         self.credential_cache = credential_cache if credential_cache is not None else SessionCredentialCache(clock=clock)
@@ -174,8 +178,16 @@ class Controller(QObject):
         self._telemetry_epoch = 0
         self.mqtt_readings_ready.connect(self._accept_mqtt, Qt.ConnectionType.QueuedConnection)
         self._timer = QTimer(self)
-        self._timer.setInterval(250)
+        self._timer.setSingleShot(True)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self.tick)
+        self.preferences_changed.connect(self.wake)
+        self.quotas_started.connect(self.wake, Qt.ConnectionType.QueuedConnection)
+        self.credential_cache_updated.connect(self.wake, Qt.ConnectionType.QueuedConnection)
+        self._processes = ProcessTracker(lambda: self.clock(), self) if native_process_events and integration_adapter is None else None
+        self._inspected_process_revision = -1
+        if self._processes is not None:
+            self._processes.changed.connect(self.wake)
         self._activity_timer = QTimer(self)
         self._activity_timer.setSingleShot(True)
         self._activity_timer.timeout.connect(self._apply_system_activity)
@@ -192,6 +204,8 @@ class Controller(QObject):
             self._credential_cancelled.set()
             self._work_cancelled.set()
             self._timer.stop()
+            if self._processes is not None:
+                self._processes.stop()
             self._api_pending = False
             self._diagnostic_pending = False
             if "api" in self._active and self._api_mode == "devices" and self._discovery_pending is None:
@@ -218,8 +232,6 @@ class Controller(QObject):
                 self._api_pending = bool(self.settings.serial)
             for state in self.integration_states.values():
                 state.next_scan = 0
-            if self._started:
-                self._timer.start()
             if self._metadata_dirty:
                 self._save_metadata()
             self._check_credential_expiry()
@@ -252,6 +264,7 @@ class Controller(QObject):
             return
         self._demands[source] = frozenset(keys)
         self._update_demand()
+        self.wake()
         self.changed.emit()
 
     def _automation_sensors(self, module):
@@ -385,9 +398,11 @@ class Controller(QObject):
             self.connection = ConnectionState.AUTH_ERROR
             self._next_api = float("inf")
             self.changed.emit()
-        if not self.system_activity.paused:
-            self._timer.start()
         self.tick()
+
+    def wake(self):
+        if self._started and not self._stopped and not self.system_activity.paused and self._timer.remainingTime() != 0:
+            self._timer.start(0)
 
     def _submit(self, kind: str, operation: Callable) -> None:
         if self._stopped or self.system_activity.paused or kind in self._active:
@@ -431,6 +446,7 @@ class Controller(QObject):
             self.access_allowed = True
             if self.connection in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}:
                 self._reset_mqtt()
+            self.wake()
         if not self.access_allowed:
             return
         if self._check_credential_expiry():
@@ -626,6 +642,7 @@ class Controller(QObject):
             self.telemetry = self.polling.snapshot(self.telemetry, utc, received)
             self._clear_connection_notice()
         self.connection = ConnectionState.LIVE if self.polling.fresh(CORE, now) else ConnectionState.STALE
+        self.wake()
         self.changed.emit()
 
     def _stop_mqtt(self):
@@ -738,7 +755,9 @@ class Controller(QObject):
             operation = lambda: read_credentials(*identity, cancelled)
             return self.interactions.run_external(operation, cancelled) if self.interactions is not None else operation()
         if identity == (self.settings.onepassword_access_ref, self.settings.onepassword_secret_ref):
-            return self.credential_cache.get(identity, settings.onepassword_cache_ttl_seconds, cancelled, load)
+            credentials = self.credential_cache.get(identity, settings.onepassword_cache_ttl_seconds, cancelled, load)
+            self.credential_cache_updated.emit()
+            return credentials
         return load()
 
     def collect_diagnostics(self):
@@ -981,6 +1000,7 @@ class Controller(QObject):
             return
         state = self.integration_states[integration_id]
         state.gate.reset()
+        self.wake()
         if not state.busy:
             state.result = None
         self.update_preferences(integrations=tuple(replace(item, auto_enabled=enabled) if item.id == integration_id else item for item in self.settings.integrations))
@@ -1040,8 +1060,8 @@ class Controller(QObject):
     def tick(self) -> None:
         if self._stopped or self.system_activity.paused:
             return
+        self._timer.stop()
         credentials_expired = self._check_credential_expiry()
-        self.integration_cache.configure(self.settings.integrations)
         if self.integration_cache.dirty:
             self._submit("integration_cache", self.integration_cache.flush)
         now = self.clock()
@@ -1058,15 +1078,14 @@ class Controller(QObject):
         elif self.connection == ConnectionState.STALE and self.fresh:
             self.connection = ConnectionState.LIVE
             self.changed.emit()
-        if (not credentials_expired and self.access_allowed and self.settings.serial and "api" not in self._active
-                and (now >= self._next_api or self.connection != ConnectionState.AUTH_ERROR and self._mqtt_probe_due(now))):
+        if not credentials_expired and now >= self._api_deadline():
             self.refresh(user_initiated=False)
+        process_scan = self._refresh_integration_observations(now)
+        automation_due = math.inf
         for module in self.settings.integrations:
             state = self.integration_states[module.id]
-            kind = "scan:" + module.id
-            if module.enabled and now >= state.next_scan and kind not in self._active:
-                state.next_scan = now + 2
-                self._submit(kind, lambda selected=module, revision=state.dispatch_revision: self._inspect_integration(selected, revision))
+            if process_scan and module.enabled:
+                continue
             eligible = (self.access_allowed and module.enabled and module.auto_enabled and module.id not in self._resume_scans
                         and self.fresh_for(self._automation_sensors(module)) and state.observation.ready)
             reason = "automatic_mode" if eligible else "automation_paused"
@@ -1083,9 +1102,91 @@ class Controller(QObject):
             profile_id = state.gate.evaluate(rule.profile_id if rule else None, now, state.active_profile)
             if profile_id is not None:
                 self.request_profile(module.id, profile_id, automatic=True)
+            else:
+                due = state.gate.next_evaluation(state.active_profile)
+                if due > now:
+                    automation_due = min(automation_due, due)
+        self._arm_next_tick(now, automation_due)
 
-    def _inspect_integration(self, module, revision):
-        observation = self.integration_adapter.inspect(module)
+    def _api_deadline(self):
+        if (not self.access_allowed or not self.settings.serial or not self.polling.required
+                or self.credential_renewal_required or "api" in self._active
+                or self.connection in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}
+                and not self.credential_renewal_pending):
+            return math.inf
+        mqtt_retry = self._mqtt_retry_at if self._mqtt_probe_due(math.inf) else math.inf
+        return min(self._next_api, mqtt_retry)
+
+    def _arm_next_tick(self, now, automation_due):
+        if not self._started or self._stopped or self.system_activity.paused:
+            return
+        session = self._mqtt_session
+        mqtt_due = math.inf if session is None else (
+            session.core_deadline(self.settings.polling.primary.stale_after_seconds) if session.active else session.deadline)
+        scan_due = self._integration_scan_deadline()
+        cache_due = math.inf
+        if self.settings.credential_source == "1password" and not self.credential_renewal_pending and not self.credential_renewal_required:
+            cache_due = self.clock() + self.credential_cache.seconds_until_expiry(self.settings.onepassword_cache_ttl_seconds)
+        stale_due = self.polling.next_stale(self.polling.required, now)
+        if not self.polling.samples and self.telemetry is not None and self.fresh:
+            stale_due = self.telemetry.received_monotonic + self.settings.polling.primary.stale_after_seconds
+        deadline = min(automation_due, mqtt_due, scan_due, cache_due, self._api_deadline(), stale_due)
+        if deadline < math.inf:
+            delay = min(2_147_483_647, max(0, deadline - self.clock()) * 1000)
+            self._timer.start(math.ceil(delay))
+
+    def _refresh_integration_observations(self, now):
+        modules = tuple(module for module in self.settings.integrations if module.enabled)
+        tracker = self._processes
+        snapshot = revision = None
+        if tracker is not None:
+            tracker.configure(modules)
+            tracker.advance(now)
+            if "process_snapshot" not in self._active and (token := tracker.begin_snapshot(now)) is not None:
+                def seeds():
+                    return relevant_processes(integration_process_names(modules))
+
+                self._submit("process_snapshot", seeds)
+                self._active["process_snapshot"].snapshot_token = token
+            if not tracker.initialized:
+                return True
+            revision = tracker.revision
+            due = revision != self._inspected_process_revision or any(self.integration_states[module.id].next_scan == 0 for module in modules)
+            if not due or "scan_all" in self._active:
+                return due
+            snapshot = tracker.snapshot()
+        elif "scan_all" in self._active or not any(now >= self.integration_states[module.id].next_scan for module in modules):
+            return False
+
+        requests = tuple((module, self.integration_states[module.id].dispatch_revision) for module in modules)
+        for module in modules:
+            self.integration_states[module.id].next_scan = now + 2
+
+        def inspect_all():
+            shared = snapshot
+            if shared is None and self._shared_process_snapshot:
+                shared = running_processes()
+            outcomes = {}
+            for module, dispatch_revision in requests:
+                try:
+                    outcomes[module.id] = self._inspect_integration(module, dispatch_revision, shared), None
+                except Exception as error:
+                    outcomes[module.id] = None, error
+            return revision, outcomes
+
+        self._submit("scan_all", inspect_all)
+        return tracker is not None
+
+    def _integration_scan_deadline(self):
+        if self._processes is not None:
+            return self._processes.deadline(snapshot_busy="process_snapshot" in self._active)
+        if "scan_all" in self._active:
+            return math.inf
+        return min((self.integration_states[module.id].next_scan for module in self.settings.integrations if module.enabled),
+                   default=math.inf)
+
+    def _inspect_integration(self, module, revision, snapshot=None):
+        observation = self.integration_adapter.inspect(module) if snapshot is None else self.integration_adapter.inspect(module, snapshot)
         restored = self.integration_cache.restore(module, observation.process) if observation.ready else None
         return observation, restored, revision
 
@@ -1108,6 +1209,12 @@ class Controller(QObject):
             self.notice = ""
 
     def _completed(self, kind, generation, result, error) -> None:
+        try:
+            self._accept_completion(kind, generation, result, error)
+        finally:
+            self.wake()
+
+    def _accept_completion(self, kind, generation, result, error) -> None:
         previous_connection = self.connection
         task = self._active.pop(kind, None)
         if kind.startswith("elevate:"):
@@ -1115,6 +1222,14 @@ class Controller(QObject):
                 self.integration_adapter.retain_sessions(() if self._stopped else self.settings.integrations)
         if self._stopped:
             self.task_finished.emit(kind)
+            return
+        if kind == "process_snapshot":
+            accepted = self._processes.finish_snapshot(task.snapshot_token, result if error is None else None)
+            if accepted and error is not None:
+                for module in self.settings.integrations:
+                    if module.enabled:
+                        self._finish_scan(module.id, None, error)
+                self.changed.emit()
             return
         if kind.startswith("mqtt:"):
             if task.mqtt_session is self._mqtt_session:
@@ -1219,28 +1334,13 @@ class Controller(QObject):
                 if self.credential_renewal_pending:
                     self.credential_renewal_pending = False
                     self.credential_renewal_required = not self.credential_cache.ready
-            elif kind.startswith("scan:"):
-                integration_id = kind.split(":", 1)[1]
-                state = self.integration_states[integration_id]
-                previous_availability = state.observation.availability
-                previous_process = state.observation.process
-                observation, restored, revision = result if error is None else (IntegrationObservation("integration_error"), None, state.dispatch_revision)
-                state.observation = observation
-                if not state.busy and revision == state.dispatch_revision:
-                    previous_target = state.active_process or previous_process
-                    if previous_target is not None and previous_target != observation.process:
-                        state.active_profile = None
-                        state.active_process = None
-                        state.transition_from = None
-                        state.gate.suspend()
-                    if restored is not None and (state.result is None or state.result.success or state.result.error == "integration_cancelled"):
-                        state.active_profile = restored
-                        state.active_process = observation.process
-                if error is None:
-                    self._resume_scans.discard(integration_id)
-                availability = self.integration_states[integration_id].observation.availability
-                if previous_availability != availability:
-                    event("integration_availability_changed", module_index=self.settings.integrations.index(self.module(integration_id)) + 1, state=availability)
+            elif kind == "scan_all":
+                process_revision, outcomes = result if error is None else (None, {
+                    module.id: (None, error) for module in self.settings.integrations if module.enabled})
+                if self._processes is None or process_revision == self._processes.revision:
+                    self._inspected_process_revision = process_revision
+                    for integration_id, (observation, failure) in outcomes.items():
+                        self._finish_scan(integration_id, observation, failure)
             elif kind.startswith("elevate:"):
                 self.notice = "integration_helper_failed" if error else "integration_helper_ready"
             elif kind.startswith("elevation_check:"):
@@ -1257,6 +1357,29 @@ class Controller(QObject):
             self._continue_api()
             self.changed.emit()
         self.task_finished.emit(kind)
+
+    def _finish_scan(self, integration_id, result, error):
+        state = self.integration_states[integration_id]
+        previous = state.observation
+        observation, restored, revision = result if error is None else (IntegrationObservation("integration_error"), None, state.dispatch_revision)
+        state.observation = observation
+        if not state.busy and revision == state.dispatch_revision:
+            previous_target = state.active_process or previous.process
+            if previous_target is not None and previous_target != observation.process:
+                state.active_profile = None
+                state.active_process = None
+                state.transition_from = None
+                state.gate.suspend()
+            if restored is not None and (state.result is None or state.result.success or state.result.error == "integration_cancelled"):
+                state.active_profile = restored
+                state.active_process = observation.process
+        if error is None:
+            self._resume_scans.discard(integration_id)
+        else:
+            logger.error("Integration observation failed (%s)", type(error).__name__)
+        if previous.availability != observation.availability:
+            event("integration_availability_changed", module_index=self.settings.integrations.index(self.module(integration_id)) + 1,
+                  state=observation.availability)
 
     def _finish_dispatch(self, kind, result, error, task, interrupted=False):
         integration_id = kind.split(":", 1)[1]
@@ -1316,6 +1439,8 @@ class Controller(QObject):
             return
         event("application_stopping")
         self._stopped = True
+        if self._processes is not None:
+            self._processes.stop()
         self._stop_mqtt()
         self._discovery_snapshot = None
         self._credential_cancelled.set()

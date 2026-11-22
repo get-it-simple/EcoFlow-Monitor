@@ -205,7 +205,7 @@ def test_controller_independent_auto_manual_and_no_repeat(controller: Controller
     second = replace(first, id="second", label="Second")
     controller.apply_settings(replace(controller.settings, integrations=(first, second)))
     calls = []
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, module: IntegrationObservation("integration_ready"))
+    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, module, snapshot=None: IntegrationObservation("integration_ready"))
     from ecoflow_monitor.adapters.integrations import TransitionResult
     monkeypatch.setattr(IntegrationAdapter, "transition", lambda self, module, previous, target, current: calls.append((module.id, target.id)) or TransitionResult(True))
     for state in controller.integration_states.values():

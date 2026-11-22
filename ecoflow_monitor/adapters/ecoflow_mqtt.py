@@ -1,9 +1,12 @@
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 import json
 import re
+from select import select
+import socket
 import ssl
-from threading import Event
+from threading import Event, Lock
 from typing import Callable
 
 from ecoflow_monitor.device_profiles import SENSORS, baseline_profile
@@ -15,6 +18,37 @@ MAX_REPORT_BYTES = 64 * 1024
 
 class MqttError(Exception):
     pass
+
+
+class MqttCancellation(Event):
+    def __init__(self):
+        super().__init__()
+        self._lock = Lock()
+        self._sender = None
+
+    def set(self):
+        with self._lock:
+            if self.is_set():
+                return
+            super().set()
+            if self._sender is not None:
+                try:
+                    self._sender.send(b"\0")
+                except OSError:
+                    pass
+
+    @contextmanager
+    def wakeup_socket(self):
+        reader, sender = socket.socketpair()
+        with reader, sender:
+            sender.setblocking(False)
+            with self._lock:
+                self._sender = sender
+            try:
+                yield reader
+            finally:
+                with self._lock:
+                    self._sender = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +100,7 @@ def decode_report(payload: bytes) -> TelemetryPatch:
     return TelemetryPatch(tuple(key for key, _ in values) + invalid, values, invalid=invalid)
 
 
-def stream_telemetry(access: BrokerAccess, serial: str, cancelled: Event, receive: Callable[[TelemetryPatch], None]) -> None:
+def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellation, receive: Callable[[TelemetryPatch], None]) -> None:
     from paho.mqtt import client as mqtt
 
     if not valid_topic_segment(serial):
@@ -106,12 +140,24 @@ def stream_telemetry(access: BrokerAccess, serial: str, cancelled: Event, receiv
     try:
         if client.connect(access.host, access.port, keepalive=30) != mqtt.MQTT_ERR_SUCCESS:
             raise MqttError("connection_failed")
-        while not cancelled.is_set():
-            code = client.loop(timeout=0.25)
-            if failure:
-                raise MqttError(failure)
-            if code != mqtt.MQTT_ERR_SUCCESS:
-                raise MqttError("stream_disconnected")
+        with cancelled.wakeup_socket() as wakeup:
+            while not cancelled.is_set():
+                broker = client.socket()
+                if broker is None:
+                    raise MqttError("stream_disconnected")
+                pending = isinstance(broker, ssl.SSLSocket) and broker.pending() > 0
+                readable, writable, _ = select([broker, wakeup], [broker] if client.want_write() else [], [], 0 if pending else 5)
+                if wakeup in readable or cancelled.is_set():
+                    break
+                code = client.loop_read() if broker in readable or pending else mqtt.MQTT_ERR_SUCCESS
+                if code == mqtt.MQTT_ERR_SUCCESS and broker in writable:
+                    code = client.loop_write()
+                if code == mqtt.MQTT_ERR_SUCCESS:
+                    code = client.loop_misc()
+                if failure:
+                    raise MqttError(failure)
+                if code != mqtt.MQTT_ERR_SUCCESS:
+                    raise MqttError("stream_disconnected")
     except OSError:
         raise MqttError("transport_failure") from None
     finally:

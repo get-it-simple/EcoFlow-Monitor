@@ -1,4 +1,5 @@
 import json
+import math
 import secrets
 import threading
 import time
@@ -63,6 +64,13 @@ class SessionCredentialCache:
             self._expired = True
             self._storage.delete()
             return True
+
+    def seconds_until_expiry(self, ttl_seconds: int) -> float:
+        with self._lock:
+            if self._obtained is None:
+                return math.inf
+            monotonic, utc = self._obtained
+            return max(0.0, ttl_seconds - max(self._clock() - monotonic, self._utc_clock() - utc))
 
     def get(self, identity: tuple[str, str], ttl_seconds: int, cancelled: threading.Event,
             loader: Callable[[], Credentials]) -> Credentials:

@@ -102,10 +102,11 @@ class SettingsWindow(QDialog):
         self._translations = TranslationBinding(self)
         controller.runtime_preferences_changed.connect(self.sync_runtime_preferences)
         self._log_reveal_failed = False
-        self._log_status_timer = QTimer(self)
-        self._log_status_timer.setInterval(1000)
-        self._log_status_timer.timeout.connect(self._refresh_log_status)
-        self._log_status_timer.start()
+        self.tabs.currentChanged.connect(self.refresh_visible_log_status)
+        self.connection_tabs.currentChanged.connect(self.refresh_visible_log_status)
+        controller.preferences_changed.connect(self.refresh_visible_log_status)
+        if controller.diagnostics is not None:
+            controller.diagnostics.status.changed.connect(self.refresh_visible_log_status, Qt.ConnectionType.QueuedConnection)
         self._refresh_log_status()
         install_scrollbars(self)
 
@@ -286,6 +287,10 @@ class SettingsWindow(QDialog):
         self.log_link.setToolTip(t("logging_reveal") if exists else t("logging_file_missing"))
         key = "logging_unavailable" if inaccessible or (diagnostics is not None and diagnostics.failed) else "logging_reveal_failed" if self._log_reveal_failed else ""
         self.log_status.setText(t(key) if key else "")
+
+    def refresh_visible_log_status(self, *_):
+        if self.log_link.isVisible() and not self.controller.system_activity.paused:
+            self._refresh_log_status()
 
     def _reveal_log(self):
         path = self.controller.store.path.parent / "logs" / "ecoflow-monitor.log"
@@ -878,6 +883,7 @@ class SettingsWindow(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.refresh_visible_log_status()
         self.integrations_section.set_expanded(True)
         self._fit_content()
 

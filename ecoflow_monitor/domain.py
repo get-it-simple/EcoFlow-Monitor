@@ -208,3 +208,8 @@ class AutomationGate(Generic[ProfileKey]):
         self._requested = slot if success else None
         self._failed = not success
         self._confirmed = False
+
+    def next_evaluation(self, observed: ProfileKey | None) -> float:
+        if self._candidate is None or self._failed or self._candidate in (observed, self._requested):
+            return math.inf
+        return max(self._since + 5, self._last_dispatch + 10)

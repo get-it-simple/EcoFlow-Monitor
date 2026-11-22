@@ -155,15 +155,18 @@ application of the matching profile. Manual MSI **Apply profile** can resend it.
 After a failure, Auto makes one new attempt when the matching profile changes,
 the target becomes available again, or Windows resumes with fresh readings.
 
-Monitoring, integration scans, Auto and animations pause while Windows sleeps,
+Integration rules use Windows process events when available. A shared check
+every two seconds covers process discovery if the event subscription is unavailable.
+
+Monitoring, process tracking, Auto and animations pause while Windows sleeps,
 the session is locked, or its display is off. Work resumes automatically once
 Windows is awake, the session is unlocked and the display is on. Auto first waits
 for new readings and a new target check, then applies its normal stability delay.
 Display dimming alone does not pause work. Saved Auto choices, settings drafts and
 window visibility are retained; resuming does not bring windows to the foreground.
 
-EcoFlow Monitor allows Windows to sleep and turn off its display normally. It does
-not keep the PC awake, change power settings or schedule wake-ups. A CLI command
+EcoFlow Monitor requests Windows Efficiency mode for its own process where
+supported. Windows can still sleep and turn off its display normally. A CLI command
 already running can finish within its existing timeout; remaining transition
 commands are cancelled. A partial transition may repeat completed commands if Auto
 selects that profile again after recovery. Key expiry includes time spent asleep;

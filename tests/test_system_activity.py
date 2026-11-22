@@ -612,7 +612,7 @@ def test_runtime_pause_stops_motion_preserves_draft_and_does_not_activate_window
         visible = (runtime.dashboard.isVisible(), runtime.widget.isVisible())
         controller.set_system_activity(SystemActivity(display_off=True))
         assert not runtime.motion_driver._timer.isActive()
-        assert runtime.confirmations._paused and not runtime.dashboard._log_status_timer.isActive()
+        assert runtime.confirmations._paused and runtime.dashboard.onepassword._paused
         controller.update_preferences(dashboard_geometry=(100, 100, 900, 700))
         assert runtime.dashboard.onepassword.access_ref.text() == "op://Unsaved/Station/access"
         controller.set_system_activity(SystemActivity())
@@ -620,22 +620,33 @@ def test_runtime_pause_stops_motion_preserves_draft_and_does_not_activate_window
         assert runtime.dashboard.onepassword.access_ref.text() == "op://Unsaved/Station/access"
         assert (runtime.dashboard.isVisible(), runtime.widget.isVisible()) == visible
         assert not activated and not runtime.confirmations._paused
-        assert runtime.dashboard._log_status_timer.isActive()
+        assert not runtime.dashboard.onepassword._paused
     finally:
         close_runtime(runtime, qapp)
 
 
-def test_resume_does_not_restart_closed_menu_or_finished_provider_timer(activity_controller, qapp):
+def test_provider_completion_is_delivered_only_after_resume(activity_controller, qapp):
     controller, now, calls = activity_controller
     runtime = Application(controller.store.path, native=False, controller=controller)
+    release = threading.Event()
+    panel = runtime.dashboard.onepassword
+    credentials = Credentials("synthetic-access", "synthetic-secret")
+    received = []
+    panel.request_completed.connect(received.append)
     try:
-        runtime._menu_timer.start()
-        runtime.dashboard.onepassword._timer.start()
+        def load(cancelled):
+            assert release.wait(4)
+            return credentials
+
+        panel._start(load, saving=False)
         controller.set_system_activity(SystemActivity(locked=True))
-        assert not runtime._menu_timer.isActive() and not runtime.dashboard.onepassword._timer.isActive()
+        release.set()
+        wait_until(qapp, lambda: bool(received))
+        assert panel.busy and panel.credentials is None
         controller.set_system_activity(SystemActivity())
-        assert not runtime._menu_timer.isActive() and not runtime.dashboard.onepassword._timer.isActive()
+        assert not panel.busy and panel.credentials is credentials
     finally:
+        release.set()
         close_runtime(runtime, qapp)
 
 
