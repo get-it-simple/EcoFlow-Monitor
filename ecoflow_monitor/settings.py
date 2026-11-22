@@ -154,6 +154,7 @@ class AppSettings:
     start_with_windows: bool = False
     ac_collapsed: bool = False
     other_collapsed: bool = False
+    telemetry_transport: str = "mqtt_with_https_fallback"
 
     def validate(self) -> None:
         if any(type(value) is not bool for value in (self.start_with_windows, self.ac_collapsed, self.other_collapsed)):
@@ -174,6 +175,8 @@ class AppSettings:
         if not isinstance(self.polling, PollingPreferences):
             raise ValueError("polling_interval_error")
         self.polling.validate()
+        if self.telemetry_transport not in ("mqtt_with_https_fallback", "https_only"):
+            raise ValueError("invalid_settings")
         self.widget.validate()
         self.main_overlay.validate()
         self.mini_overlay.validate()
@@ -239,7 +242,7 @@ class AppSettings:
                         "onepassword": {"access_ref": self.onepassword_access_ref, "secret_ref": self.onepassword_secret_ref, "cache_ttl_seconds": self.onepassword_cache_ttl_seconds},
                         "device_support": {"custom_enabled": self.custom_device_profiles, "assignments": dict(self.device_profile_assignments)},
                         "capacity_wh": self.capacity_wh, "manual_min": self.manual_min, "manual_max": self.manual_max,
-                        "polling": asdict(self.polling)},
+                        "polling": asdict(self.polling), "telemetry_transport": self.telemetry_transport},
             "integrations": [module.to_dict() for module in self.integrations],
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
@@ -297,6 +300,7 @@ class AppSettings:
             ac_collapsed=boolean(monitoring, "ac_collapsed", False),
             other_collapsed=boolean(monitoring, "other_collapsed", False),
             polling=PollingPreferences.from_dict(eco.get("polling", {})),
+            telemetry_transport=string(eco, "telemetry_transport", defaults.telemetry_transport),
             widget=WidgetPreferences.from_dict(data.get("widget", {})),
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),
             credential_source=string(eco, "credential_source", "windows"),

@@ -198,7 +198,7 @@ def test_monitor_reuses_session_keys_without_persisting_plaintext(controller, qa
             return Telemetry(0, 10, 80, 100, time.monotonic())
     monkeypatch.setattr("ecoflow_monitor.controller.read_credentials", read)
     controller.client_factory = Client
-    configure_onepassword(controller, serial="synthetic-device")
+    configure_onepassword(controller, serial="synthetic-device", telemetry_transport="https_only")
     for count in (1, 2):
         controller.refresh()
         wait_until(qapp, lambda: "api" not in controller._active)

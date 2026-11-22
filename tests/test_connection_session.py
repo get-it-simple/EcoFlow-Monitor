@@ -296,7 +296,8 @@ def test_startup_catalog_is_loaded_once_and_shared_with_telemetry(runtime, qapp,
     controller = runtime.controller
     now = [1000.0]
     controller.clock = lambda: now[0]
-    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),))
+    controller.settings = replace(controller.settings, serial="TEST", device_profile_assignments=(("TEST", "builtin:delta3max"),),
+                                  telemetry_transport="https_only")
     controller.access_allowed = False
     requests = []
     def handle(request):
@@ -317,6 +318,7 @@ def test_startup_catalog_is_loaded_once_and_shared_with_telemetry(runtime, qapp,
     wait(qapp, lambda: "api" not in controller._active)
     assert requests.count("/iot-open/sign/device/list") == 1
     assert requests.count("/iot-open/sign/device/quota") == 2
+    assert "/iot-open/sign/certification" not in requests
     assert controller.device_name == "Fresh name"
 
 

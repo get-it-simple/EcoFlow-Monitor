@@ -141,6 +141,14 @@ class SettingsWindow(QDialog):
             bodies[key] = content
         layout.addStretch()
         layout = bodies["connection_service"]
+        self.telemetry_transport = QComboBox()
+        self.telemetry_transport.setAccessibleName(t("telemetry_transport"))
+        self.telemetry_transport.addItem(t("telemetry_mqtt_with_fallback"), "mqtt_with_https_fallback")
+        self.telemetry_transport.addItem(t("telemetry_https_only"), "https_only")
+        layout.addWidget(SettingRow(t("telemetry_transport"), self.telemetry_transport))
+        self.telemetry_source = hint("")
+        layout.addWidget(self.telemetry_source)
+        self.controller.changed.connect(self._refresh_telemetry_source)
         layout.addWidget(hint(t("connection_description")))
         self.credential_renewal = CredentialRenewalBanner(self.controller, self)
         layout.addWidget(self.credential_renewal)
@@ -502,6 +510,8 @@ class SettingsWindow(QDialog):
         self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.logging_mode.setCurrentIndex(max(0, self.logging_mode.findData(settings.logging_mode)))
+        self.telemetry_transport.setCurrentIndex(self.telemetry_transport.findData(settings.telemetry_transport))
+        self._refresh_telemetry_source()
         for name, (interval, stale) in self.polling_fields.items():
             group = getattr(settings.polling, name)
             interval.setValue(group.interval_seconds)
@@ -652,6 +662,13 @@ class SettingsWindow(QDialog):
             self.devices.addItem(self.controller.metadata.name(selected), selected)
             self.devices.setCurrentIndex(self.devices.count() - 1)
 
+    def _refresh_telemetry_source(self):
+        source = self.controller.telemetry_source
+        labels = {"waiting_mqtt": "telemetry_waiting_mqtt", "mqtt": "telemetry_active_mqtt",
+                  "https_fallback": "telemetry_active_fallback", "https": "telemetry_active_https"}
+        self.telemetry_source.setText(t(labels[source]) if source else "")
+        self.telemetry_source.setVisible(bool(source))
+
     def _refresh_capacity_status(self):
         if not hasattr(self, "capacity_status"):
             return
@@ -687,6 +704,7 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             logging_mode=self.logging_mode.currentData(),
+            telemetry_transport=self.telemetry_transport.currentData(),
             polling=PollingPreferences(**{name: PollingGroup(int(interval.value()), int(stale.value())) for name, (interval, stale) in self.polling_fields.items()}),
             animations=self.animations.isChecked(),
             start_with_windows=self.start_with_windows.isChecked(),

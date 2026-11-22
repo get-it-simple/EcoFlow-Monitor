@@ -19,6 +19,7 @@ from ecoflow_monitor.system_activity import ActivityCancelled
 
 
 HOST = "https://api.ecoflow.com"
+MQTT_CERTIFICATION = "/iot-open/sign/certification"
 QUOTAS = baseline_profile().quotas(SENSORS)
 
 
@@ -155,11 +156,12 @@ class EcoFlowClient:
         except (ValueError, RecursionError):
             payload = None
         hidden = (*hidden, headers["sign"], headers["nonce"])
-        event("api_response", level=logging.DEBUG, sensitive=hidden, operation=operation,
-              http_status=response.status_code, elapsed_ms=round((time.monotonic() - started) * 1000, 2),
-              body_bytes=len(response.content), retry_after_seconds=metric(response.headers.get("Retry-After")),
-              payload=payload, body_format="json" if payload is not None else "non_json_or_null")
-        if self.diagnostic_capture is not None:
+        if path != MQTT_CERTIFICATION:
+            event("api_response", level=logging.DEBUG, sensitive=hidden, operation=operation,
+                  http_status=response.status_code, elapsed_ms=round((time.monotonic() - started) * 1000, 2),
+                  body_bytes=len(response.content), retry_after_seconds=metric(response.headers.get("Retry-After")),
+                  payload=payload, body_format="json" if payload is not None else "non_json_or_null")
+        if self.diagnostic_capture is not None and path != MQTT_CERTIFICATION:
             self.diagnostic_capture("device_diagnostic_response", sensitive=hidden, endpoint=path,
                                     http_status=response.status_code, payload=payload,
                                     body_format="json" if payload is not None else "non_json_or_null")
@@ -171,6 +173,9 @@ class EcoFlowClient:
         if not isinstance(payload, dict) or str(payload.get("code")) != "0":
             raise EcoFlowError(ConnectionState.API_ERROR)
         return payload.get("data")
+
+    def mqtt_certification(self) -> Any:
+        return self._request("GET", MQTT_CERTIFICATION, {})
 
     def devices(self) -> tuple[Device, ...]:
         data = self._request("GET", "/iot-open/sign/device/list", {})
