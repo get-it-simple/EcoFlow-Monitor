@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPointF, QRect, Qt
+from PySide6.QtGui import QEnterEvent, QScreen
 from PySide6.QtTest import QTest
 
 from ecoflow_monitor import i18n
@@ -83,6 +84,75 @@ def test_collapse_preserves_settings_draft_and_live_summary(runtime, qapp):
     assert runtime.controller.settings.capacity_wh == 3000
     assert runtime.controller.settings.ac_collapsed and runtime.controller.settings.other_collapsed
     assert runtime.controller.store.load().ac_collapsed
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("width", [800, 1300])
+@pytest.mark.parametrize("collapsed", [False, True])
+def test_output_disclosure_hover_preserves_geometry(runtime, qapp, monkeypatch, width, collapsed):
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: QRect(0, 0, 1600, 1000))
+    monkeypatch.setattr(QScreen, "geometry", lambda self: QRect(0, 0, 1600, 1000))
+    controller = runtime.controller
+    controller.update_preferences(ac_collapsed=collapsed, other_collapsed=collapsed)
+    dashboard = runtime.dashboard
+    dashboard.show()
+    dashboard.resize(width, 580)
+    page = dashboard.monitoring
+    scroll = dashboard.tabs.currentWidget()
+    viewport = scroll.viewport()
+    cards = [page.port_sections[group][0] for group in ("ac", "other")]
+    qapp.processEvents()
+    page.reflow()
+    QTest.qWait(35)
+    assert dashboard.width() == width
+    assert (cards[0].y() == cards[1].y()) == (collapsed and width == 1300)
+
+    def geometry():
+        return (
+            dashboard.geometry(), viewport.geometry(), page.geometry(),
+            tuple((card.geometry(), card.toggle.geometry()) for card in cards),
+            scroll.verticalScrollBar().value(), scroll.verticalScrollBar().maximum(),
+        )
+
+    for card in cards:
+        button = card.toggle
+        button.clearFocus()
+        qapp.sendEvent(card, QEvent(QEvent.Type.Leave))
+        page.refresh()
+        QTest.qWait(35)
+        scroll.ensureWidgetVisible(button)
+        initial = geometry()
+        region = QRect(button.mapTo(viewport, button.rect().topLeft()), button.size())
+        assert viewport.rect().contains(region)
+        hidden = viewport.grab(region).toImage()
+        assert hidden == viewport.grab(region.translated(-region.width(), 0)).toImage()
+
+        local = button.mapTo(card, button.rect().center())
+        enter = QEnterEvent(QPointF(local), QPointF(card.mapTo(dashboard, local)), QPointF(card.mapToGlobal(local)))
+        qapp.sendEvent(card, enter)
+        QTest.qWait(35)
+        assert geometry() == initial
+        assert viewport.grab(region).toImage() != hidden
+        assert button.arrowType() == (Qt.ArrowType.DownArrow if collapsed else Qt.ArrowType.UpArrow)
+
+        qapp.sendEvent(card, QEvent(QEvent.Type.Leave))
+        QTest.qWait(35)
+        assert geometry() == initial
+        assert viewport.grab(region).toImage() == hidden
+
+        button.setFocus(Qt.FocusReason.TabFocusReason)
+        QTest.qWait(35)
+        assert geometry() == initial
+        assert viewport.grab(region).toImage() != hidden
+        button.clearFocus()
+        QTest.qWait(35)
+        assert geometry() == initial
+        assert viewport.grab(region).toImage() == hidden
+
+    cards[0].toggle.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.keyClick(cards[0].toggle, Qt.Key.Key_Space)
+    assert controller.settings.ac_collapsed is not collapsed
+    assert controller.settings.other_collapsed is collapsed
 
 
 def test_notifications_empty_live_updates_and_target_preserve_drafts(runtime, qapp):
