@@ -321,7 +321,8 @@ def test_settings_change_cancels_later_commands(controller: Controller, qapp, mo
     started = threading.Event()
     release = threading.Event()
     calls = []
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     def run(args, **kwargs):
         calls.append(args)
         started.set()
@@ -564,7 +565,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     state = controller.integration_states[module.id]
     state.observation = IntegrationObservation("integration_ready", executable=sys.executable)
     state.active_profile = "a"
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     calls = []
     def run(args, **kwargs):
         calls.append(args[1])
@@ -575,6 +577,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     controller.telemetry = Telemetry(0, 100, 50, 0, now[0])
     controller.connection = ConnectionState.LIVE
     controller.tick()
+    wait_for(qapp, lambda: not controller._active)
+    assert state.observation.ready
     now[0] = 105
     controller.tick()
     wait_for(qapp, lambda: not state.busy)
@@ -582,6 +586,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     assert state.result.completed == 1 and not state.result.success
     now[0] = 125
     controller.tick()
+    wait_for(qapp, lambda: not controller._active)
+    assert state.observation.ready
     assert calls == ["--off", "--on"]
     controller.request_profile(module.id, "b")
     wait_for(qapp, lambda: not state.busy)
@@ -597,7 +603,8 @@ def test_no_rule_stale_disable_and_shutdown_do_not_deactivate(controller: Contro
     state.active_profile = "a"
     calls = []
     monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", lambda *args, **kwargs: calls.append(args))
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     controller.telemetry = Telemetry(0, 100, 50, 0, controller.clock())
     controller.connection = ConnectionState.LIVE
     controller.tick()
