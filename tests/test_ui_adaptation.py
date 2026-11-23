@@ -85,6 +85,31 @@ def test_monitoring_cards_have_padding_and_output_groups_reflow(runtime, qapp, l
 
 
 @pytest.mark.design
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("scale", [1, 2])
+def test_monitoring_transport_flows_beside_or_below_last_update(runtime, qapp, language, scale):
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, language=language, scale=scale, serial="TEST",
+                                      telemetry_transport="https_only"))
+    controller.metadata.remember_name("TEST", "Long synthetic station name " * 4)
+    controller.set_sensor_demand("layout-check", {"battery_level"})
+    controller.changed.emit()
+    window = runtime.dashboard
+    window.resize(round(1500 * scale), round(900 * scale))
+    window.show()
+    page = window.monitoring
+    label = page.updated
+    for width, suffix in ((1500, " · HTTPS"), (800, "\nHTTPS"), (1500, " · HTTPS")):
+        window.resize(round(width * scale), round(900 * scale))
+        QTest.qWait(80)
+        assert label.isVisible() and label.text().endswith(suffix)
+        assert page.rect().contains(label.geometry())
+        assert window.tabs.currentWidget().horizontalScrollBar().maximum() == 0
+        if width == 1500:
+            assert label.contentsRect().width() >= label.fontMetrics().horizontalAdvance(label.text())
+
+
+@pytest.mark.design
 @pytest.mark.parametrize("opacity", [0, 0.82, 1])
 @pytest.mark.parametrize("language", ["en", "uk"])
 def test_widget_values_grow_to_available_space_and_keep_text_inside(runtime, qapp, opacity, language):

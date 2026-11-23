@@ -356,6 +356,49 @@ def test_initial_paused_controller_start_does_not_schedule_work(activity_control
     assert controller._timer.isActive() and not controller.access_allowed and not calls
 
 
+def test_display_off_preference_saves_and_only_controls_the_display_reason(activity_controller, qapp):
+    controller, _, calls = activity_controller
+    window = Dashboard(controller, lambda: None)
+    try:
+        assert window.pause_on_display_off.isChecked()
+        window.pause_on_display_off.setChecked(False)
+        assert controller.settings.pause_on_display_off
+        window.load_draft()
+        assert window.pause_on_display_off.isChecked()
+
+        display_off = SystemActivity(display_off=True)
+        controller.set_system_activity(display_off)
+        assert controller.system_activity.paused
+        window.pause_on_display_off.setChecked(False)
+        window.save()
+        assert not controller.system_activity.paused and not controller.store.load().pause_on_display_off
+        controller.refresh()
+        wait_until(qapp, lambda: len(calls) == 1 and not controller._active)
+        controller.set_system_activity(display_off.transition("display_on"))
+        controller.set_system_activity(display_off)
+        qapp.processEvents()
+        assert not controller.system_activity.paused and len(calls) == 1
+
+        sleeping = display_off.transition("lock").transition("suspend")
+        controller.set_system_activity(sleeping)
+        controller.set_system_activity(sleeping.transition("resume"))
+        assert controller.system_activity.paused and controller.system_activity.awaiting_user
+        awake = sleeping.transition("resume_user")
+        controller.set_system_activity(awake)
+        assert controller.system_activity.paused and controller.system_activity.locked
+        controller.set_system_activity(awake.transition("unlock"))
+        wait_until(qapp, lambda: len(calls) == 2)
+        assert not controller.system_activity.paused
+
+        window.pause_on_display_off.setChecked(True)
+        window.save()
+        assert controller.system_activity.paused and controller.store.load().pause_on_display_off
+        controller.set_system_activity(display_off.transition("display_on"))
+        wait_until(qapp, lambda: len(calls) == 3)
+    finally:
+        window.deleteLater()
+
+
 def test_resume_requires_valid_new_dependency_values(activity_controller, qapp):
     controller, now, calls = activity_controller
     controller.refresh()

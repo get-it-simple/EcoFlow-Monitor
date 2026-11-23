@@ -15,18 +15,18 @@ from ecoflow_monitor.diagnostics import DiagnosticLog, event
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult, integration_process_names, running_processes
 from ecoflow_monitor.adapters.process_events import ProcessTracker, relevant_processes
 from ecoflow_monitor.adapters.credentials import CredentialError, CredentialStore
-from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
+from ecoflow_monitor.adapters.ecoflow import Credentials, Device, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttError, stream_telemetry, valid_topic_segment
 from ecoflow_monitor.adapters.onepassword import read_credentials
 from ecoflow_monitor.adapters.hotkeys import validate_bindings
 from ecoflow_monitor.adapters.windows import internet_unavailable
 from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.device_metadata import DeviceMetadataStore
-from ecoflow_monitor.device_profiles import BASELINE, builtin_catalog, load_catalog
+from ecoflow_monitor.device_profiles import BASELINE, ProfileCatalog, builtin_catalog, load_catalog
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
 from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile, reaction_value_keys
 from ecoflow_monitor.integration_state import IntegrationStateStore, ProcessIdentity, command_fingerprint
-from ecoflow_monitor.mqtt_session import MqttSession
+from ecoflow_monitor.mqtt_session import MqttAccess, MqttSession
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, SENSOR_FIELDS, PollingState, TelemetryPatch, dependencies
 from ecoflow_monitor.system_activity import ActivityCancelled, SystemActivity
@@ -35,6 +35,8 @@ from ecoflow_monitor.telemetry_values import app_readings, value_dependencies
 
 
 logger = logging.getLogger(__name__)
+MQTT_RETRY_INITIAL = 5.0
+MQTT_RETRY_MAX = 60.0
 
 
 class TaskSignals(QObject):
@@ -91,6 +93,19 @@ class DiscoverySnapshot:
         return hmac.compare_digest(credential_identity, self.credential_identity) if credential_identity is not None else settings.credential_ref == self.settings.credential_ref
 
 
+@dataclass(frozen=True)
+class MqttSetup:
+    catalog: tuple[Device, ...] | None = None
+    profiles: ProfileCatalog | None = None
+    access: MqttAccess | None = None
+    failure: EcoFlowError | MqttError | None = None
+    secrets: tuple[str, ...] = field(default=(), repr=False)
+
+    @property
+    def denied(self) -> bool:
+        return isinstance(self.failure, EcoFlowError) and self.failure.state == ConnectionState.AUTH_ERROR
+
+
 class Controller(QObject):
     changed = Signal()
     preferences_changed = Signal()
@@ -130,7 +145,7 @@ class Controller(QObject):
         self.notice = ""
         self.startup_pending = False
         self.preview = None
-        self.system_activity = SystemActivity()
+        self.system_activity = self._reported_activity = SystemActivity()
         self._activity_epoch = 0
         self._resume_fields = None
         self._resume_scans = set()
@@ -177,8 +192,12 @@ class Controller(QObject):
         self._mqtt_pool = QThreadPool(self)
         self._mqtt_pool.setMaxThreadCount(1)
         self._mqtt_session: MqttSession | None = None
+        self._mqtt_access: MqttAccess | None = None
+        self._mqtt_auth_blocked = False
+        self._mqtt_certification_retry_at = 0.0
+        self.mqtt_access_status = ""
         self._mqtt_retry_at = 0.0
-        self._mqtt_retry_delay = 30.0
+        self._mqtt_retry_delay = MQTT_RETRY_INITIAL
         self._mqtt_fallback = False
         self._telemetry_epoch = 0
         self.mqtt_readings_ready.connect(self._accept_mqtt, Qt.ConnectionType.QueuedConnection)
@@ -199,6 +218,9 @@ class Controller(QObject):
         self.changed.connect(self._update_export)
 
     def set_system_activity(self, activity: SystemActivity) -> None:
+        self._reported_activity = activity
+        if not self.settings.pause_on_display_off:
+            activity = replace(activity, display_off=False)
         if self._stopped or activity == self.system_activity:
             return
         was_paused = self.system_activity.paused
@@ -209,8 +231,7 @@ class Controller(QObject):
                 self.telemetry_export.stop()
                 self._last_export = None
                 self._export_deadline = math.inf
-            if self._mqtt_session is not None:
-                self._reset_mqtt()
+            self._stop_mqtt()
             self._credential_cancelled.set()
             self._work_cancelled.set()
             self._timer.stop()
@@ -221,6 +242,8 @@ class Controller(QObject):
             if "api" in self._active and self._api_mode == "devices" and self._discovery_pending is None:
                 self._discovery_pending = (None,)
             self.credential_renewal_pending = False
+            if self.mqtt_access_status == "mqtt_access_renewing":
+                self.mqtt_access_status = ""
             self._resume_fields = set()
             self._resume_scans = {module.id for module in self.settings.integrations if module.enabled}
             for state in self.integration_states.values():
@@ -232,13 +255,17 @@ class Controller(QObject):
     def _apply_system_activity(self):
         if self._stopped:
             return
-        if not self.system_activity.paused:
+        if not self.system_activity.paused and self._work_cancelled.is_set():
             self._credential_cancelled = threading.Event()
             self._work_cancelled = threading.Event()
             self._configure_export()
             self._update_demand()
             self.polling.resume(self.clock())
             if self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}:
+                if self.settings.telemetry_transport == "mqtt_with_https_fallback" and self._mqtt_retry_at < math.inf:
+                    self._mqtt_retry_at = 0
+                    self._mqtt_retry_delay = MQTT_RETRY_INITIAL
+                    self._mqtt_fallback = True
                 self._next_api = 0
                 self._api_pending = bool(self.settings.serial)
             for state in self.integration_states.values():
@@ -510,7 +537,8 @@ class Controller(QObject):
         if not self.polling.required:
             self._next_api = float("inf")
             return
-        if self._mqtt_probe_due(self.clock()):
+        if self.clock() >= self._mqtt_probe_deadline():
+            self._api_pending = self._mqtt_fallback and self.clock() >= self._next_api
             self._start_mqtt_setup()
             return
         if self._mqtt_session is not None and (self._mqtt_session.active or not self._mqtt_fallback):
@@ -587,16 +615,37 @@ class Controller(QObject):
             return "https"
         if self._mqtt_session is not None and self._mqtt_session.active:
             return "mqtt"
-        return "https_fallback" if self._mqtt_fallback else "waiting_mqtt" if self._mqtt_session is not None else ""
+        if self._mqtt_fallback or self._mqtt_auth_blocked or self.clock() < self._mqtt_certification_retry_at:
+            return "https_fallback"
+        return "waiting_mqtt" if self._mqtt_session is not None else ""
 
-    def _mqtt_probe_due(self, now):
-        return (self.settings.telemetry_transport == "mqtt_with_https_fallback" and self._mqtt_session is None
-                and bool(self.polling.required) and now >= self._mqtt_retry_at)
+    def _mqtt_probe_deadline(self):
+        if (self.settings.telemetry_transport != "mqtt_with_https_fallback" or self._mqtt_session is not None
+                or not self.polling.required or self._mqtt_auth_blocked):
+            return math.inf
+        return max(self._mqtt_retry_at, self._mqtt_certification_retry_at)
 
-    def _start_mqtt_setup(self):
+    @property
+    def can_renew_mqtt_access(self) -> bool:
+        return (self.settings.telemetry_transport == "mqtt_with_https_fallback" and bool(self.settings.serial)
+                and self.access_allowed and not self._stopped and not self.system_activity.paused
+                and not self.credential_renewal_required and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}
+                and "api" not in self._active and self.clock() >= self._mqtt_certification_retry_at)
+
+    def renew_mqtt_access(self) -> None:
+        if self.can_renew_mqtt_access and not self._check_credential_expiry():
+            self.mqtt_access_status = "mqtt_access_renewing"
+            self._start_mqtt_setup(renewal=True)
+
+    def _start_mqtt_setup(self, *, renewal=False):
         settings, cancelled = self.settings, self._credential_cancelled
-        session = self._mqtt_session = MqttSession(settings.serial)
+        session = MqttSession(settings.serial)
+        if not renewal:
+            self._mqtt_session = session
         catalog, profiles = self.catalog, self.profile_catalog
+        cached = self._mqtt_access
+        request_reason = "manual" if renewal else (
+            "broker_rejected" if self.mqtt_access_status == "mqtt_access_rejected" else "initial")
         event("mqtt_setup_started", operation=session.operation)
 
         def operation():
@@ -605,33 +654,46 @@ class Controller(QObject):
                 raise CredentialError("credentials_required")
             client = self._client(credentials, cancelled, settings, profiles)
             if not isinstance(client, EcoFlowClient):
-                return None, None, None, None, ()
+                return MqttSetup()
             device = self._resolve_client_device(client, settings, catalog)
+            setup = MqttSetup(client.catalog, client.profile_catalog)
             if (device is None or client.profile is None or client.profile.reference != BASELINE
                     or not valid_topic_segment(settings.serial)):
-                return client.catalog, client.profile_catalog, None, None, ()
+                return setup
             if session.cancelled.is_set():
                 raise ActivityCancelled()
+            identity = self._discovery_identity(credentials)
+            matching = cached if cached is not None and hmac.compare_digest(cached.credential_identity, identity) else None
+            if matching is not None and not renewal:
+                return replace(setup, access=matching, secrets=(credentials.access_key, credentials.secret_key))
+            event("mqtt_access_requested", operation=session.operation, reason=request_reason)
             try:
                 access = BrokerAccess.from_response(client.mqtt_certification())
             except (EcoFlowError, MqttError) as error:
-                return client.catalog, client.profile_catalog, None, error, ()
-            return client.catalog, client.profile_catalog, access, None, (credentials.access_key, credentials.secret_key)
+                return replace(setup, access=matching, failure=error)
+            return replace(setup, access=MqttAccess(identity, access), secrets=(credentials.access_key, credentials.secret_key))
 
-        if self.telemetry is None:
+        if not renewal and self.telemetry is None:
             self.connection = ConnectionState.CONNECTING
         self._api_mode = "mqtt_setup"
         self._submit("api", operation)
         self._active["api"].mqtt_session = session
+        self._active["api"].mqtt_renewal = renewal
         self.changed.emit()
 
-    def _finish_mqtt_setup(self, session, result, error):
-        if session is not self._mqtt_session:
+    def _finish_mqtt_setup(self, session, result: MqttSetup | None, error, *, renewal):
+        if not renewal and session is not self._mqtt_session:
+            return
+        if renewal:
+            self.mqtt_access_status = "mqtt_access_renew_failed"
+        if renewal and error is not None:
             return
         auth_failed = isinstance(error, CredentialError) or isinstance(error, EcoFlowError) and error.state == ConnectionState.AUTH_ERROR
         if auth_failed:
+            self._clear_mqtt_access()
             self._reset_mqtt()
             self._mqtt_retry_at = self._next_api = float("inf")
+            self._api_pending = False
             self.connection = ConnectionState.AUTH_ERROR
             if isinstance(error, CredentialError):
                 self.notice = str(error)
@@ -648,11 +710,41 @@ class Controller(QObject):
         if error is not None:
             self._fallback_mqtt(error)
             return
-        catalog, profiles, access, failure, secrets = result
-        self._remember_catalog(catalog, profiles)
-        if access is None:
-            self._fallback_mqtt(failure, retry=failure is not None)
+        assert result is not None
+        self._remember_catalog(result.catalog, result.profiles)
+        if result.failure is not None:
+            if result.access is None:
+                self._mqtt_access = None
+            if result.denied:
+                self._mqtt_auth_blocked = True
+            if not renewal:
+                self._fallback_mqtt(result.failure, retry=not result.denied)
             return
+        if result.access is None:
+            if not renewal:
+                self._fallback_mqtt(None, retry=False)
+            return
+        source = "cache" if result.access is self._mqtt_access else "api"
+        event("mqtt_access_ready", operation=session.operation, source=source)
+        self._mqtt_access = result.access
+        if renewal:
+            self._mqtt_auth_blocked = False
+            self._mqtt_retry_at = 0
+            self._mqtt_retry_delay = MQTT_RETRY_INITIAL
+            self.mqtt_access_status = "mqtt_access_renewed"
+            self._stop_mqtt()
+            if not self.polling.required:
+                return
+            self._mqtt_session = session
+            self._use_https_fallback(self.clock())
+        elif self.mqtt_access_status == "mqtt_access_rejected":
+            self.mqtt_access_status = ""
+        self._start_mqtt_stream(session, result.access, result.secrets)
+
+    def _start_mqtt_stream(self, session, cached, secrets):
+        access = cached.broker
+        session.reused_access = cached.attempted
+        self._mqtt_access = replace(cached, attempted=True)
         session.deadline = self.clock() + 120
 
         def receive(patch):
@@ -697,7 +789,7 @@ class Controller(QObject):
             session.active = True
             self._telemetry_epoch += 1
             self._mqtt_fallback = False
-            self._mqtt_retry_delay = 30
+            self._mqtt_retry_delay = MQTT_RETRY_INITIAL
             self._next_api = float("inf")
             self.polling.start_push()
             self._resume_fields = set()
@@ -733,23 +825,36 @@ class Controller(QObject):
     def _reset_mqtt(self):
         self._stop_mqtt()
         self._mqtt_retry_at = 0
-        self._mqtt_retry_delay = 30
+        self._mqtt_retry_delay = MQTT_RETRY_INITIAL
         self._mqtt_fallback = False
 
-    def _fallback_mqtt(self, error, *, retry=True):
-        session = self._mqtt_session
-        was_using_https = self._mqtt_fallback
-        self._stop_mqtt()
-        self._mqtt_fallback = True
-        now = self.clock()
-        delay = max(self._mqtt_retry_delay, getattr(error, "retry_after", None) or 0)
-        self._mqtt_retry_at = now + delay if retry else float("inf")
-        self._mqtt_retry_delay = min(2 * self._mqtt_retry_delay, 300)
-        if not was_using_https:
+    def _clear_mqtt_access(self):
+        self._mqtt_access = None
+        self._mqtt_auth_blocked = False
+        self.mqtt_access_status = ""
+
+    def _use_https_fallback(self, now):
+        if not self._mqtt_fallback:
+            self._mqtt_fallback = True
             self.polling.resume(now)
             self._next_api = 0
             self._api_pending = True
+
+    def _fallback_mqtt(self, error, *, retry=True):
+        session = self._mqtt_session
         reason = str(error) if isinstance(error, MqttError) else type(error).__name__ if error is not None else "profile_unavailable"
+        if session is not None and reason == "broker_auth_rejected":
+            self._mqtt_access = None
+            self._mqtt_auth_blocked = not session.reused_access
+            if self.mqtt_access_status != "mqtt_access_renewing":
+                self.mqtt_access_status = "mqtt_access_rejected"
+            retry = session.reused_access
+        self._stop_mqtt()
+        now = self.clock()
+        delay = max(self._mqtt_retry_delay, getattr(error, "retry_after", None) or 0)
+        self._mqtt_retry_at = now + delay if retry else float("inf")
+        self._mqtt_retry_delay = min(2 * self._mqtt_retry_delay, MQTT_RETRY_MAX)
+        self._use_https_fallback(now)
         event("mqtt_fallback", operation=session.operation if session is not None else None, reason=reason,
               retry_in_seconds=delay if retry else None)
         self.changed.emit()
@@ -860,6 +965,7 @@ class Controller(QObject):
             return False
         if self.credential_renewal_required:
             self._stop_mqtt()
+            self._clear_mqtt_access()
             self._credential_cancelled.set()
             self._api_pending = False
             self._next_api = float("inf")
@@ -875,6 +981,7 @@ class Controller(QObject):
             notice = str(error)
         self.credential_renewal_required = True
         self._stop_mqtt()
+        self._clear_mqtt_access()
         event("credentials_expired", level=logging.WARNING)
         self._credential_cancelled.set()
         self._api_pending = False
@@ -890,6 +997,7 @@ class Controller(QObject):
         if self._stopped or self.system_activity.paused or self.settings.credential_source != "1password" or "api" in self._active:
             return
         self.access_allowed = True
+        self._clear_mqtt_access()
         self._reset_mqtt()
         self._credential_cancelled.set()
         event("credential_renewal_requested")
@@ -936,6 +1044,8 @@ class Controller(QObject):
             raise
         previous = self.settings
         self.settings = settings
+        if previous.pause_on_display_off != settings.pause_on_display_off:
+            self.set_system_activity(self._reported_activity)
         profile_preferences_changed = (previous.custom_device_profiles != settings.custom_device_profiles
                                        or previous.device_profile_assignments != settings.device_profile_assignments)
         if profile_catalog is not None:
@@ -948,7 +1058,8 @@ class Controller(QObject):
             self.diagnostics.configure(settings.logging_mode)
         event("settings_saved")
         if not profile_changed and credentials is None and replace(previous, logging_mode=settings.logging_mode,
-                polling=settings.polling, telemetry_export=settings.telemetry_export) == settings:
+                polling=settings.polling, telemetry_export=settings.telemetry_export,
+                pause_on_display_off=settings.pause_on_display_off) == settings:
             if previous.telemetry_export != settings.telemetry_export:
                 self._configure_export()
             self._update_demand()
@@ -960,8 +1071,14 @@ class Controller(QObject):
             return
         credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
         device_changed = profile_changed or any(getattr(previous, name) != getattr(settings, name) for name in credential_fields)
+        credentials_changed = credentials is not None or any(
+            getattr(previous, name) != getattr(settings, name) for name in credential_fields[1:])
+        if credentials_changed:
+            self._clear_mqtt_access()
+        elif self.mqtt_access_status == "mqtt_access_renewing" or previous.telemetry_transport != settings.telemetry_transport:
+            self.mqtt_access_status = ""
         session = self._mqtt_session
-        if (device_changed or previous.telemetry_transport != settings.telemetry_transport
+        if (device_changed or credentials_changed or previous.telemetry_transport != settings.telemetry_transport
                 or session is not None and session.deadline == float("inf")):
             self._reset_mqtt()
         self._credential_cancelled.set()
@@ -1053,6 +1170,8 @@ class Controller(QObject):
         except SettingsError as error:
             self.notice = str(error)
         self.settings = settings
+        if previous.pause_on_display_off != settings.pause_on_display_off:
+            self.set_system_activity(self._reported_activity)
         if "integrations" in changes:
             self.integration_cache.configure(settings.integrations)
         self._update_demand()
@@ -1173,6 +1292,9 @@ class Controller(QObject):
         if self.integration_cache.dirty:
             self._submit("integration_cache", self.integration_cache.flush)
         now = self.clock()
+        if 0 < self._mqtt_certification_retry_at <= now:
+            self._mqtt_certification_retry_at = 0
+            self.changed.emit()
         self._update_demand()
         self._check_mqtt(now)
         revision = (self.polling.revision, tuple((key, self.reading_state(key)) for key in self.polling.visible))
@@ -1222,8 +1344,7 @@ class Controller(QObject):
                 or self.connection in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}
                 and not self.credential_renewal_pending):
             return math.inf
-        mqtt_retry = self._mqtt_retry_at if self._mqtt_probe_due(math.inf) else math.inf
-        return min(self._next_api, mqtt_retry)
+        return min(self._next_api, self._mqtt_probe_deadline())
 
     def _arm_next_tick(self, now, automation_due):
         if not self._started or self._stopped or self.system_activity.paused:
@@ -1239,7 +1360,9 @@ class Controller(QObject):
         if not self.polling.samples and self.telemetry is not None and self.fresh:
             stale_due = self.telemetry.received_monotonic + self.settings.polling.primary.stale_after_seconds
         self._update_export()
-        deadline = min(automation_due, mqtt_due, scan_due, cache_due, self._api_deadline(), stale_due, self._export_deadline)
+        certification_due = self._mqtt_certification_retry_at if self._mqtt_certification_retry_at > now else math.inf
+        deadline = min(automation_due, mqtt_due, scan_due, cache_due, certification_due,
+                       self._api_deadline(), stale_due, self._export_deadline)
         if deadline < math.inf:
             delay = min(2_147_483_647, max(0, deadline - self.clock()) * 1000)
             self._timer.start(math.ceil(delay))
@@ -1363,8 +1486,13 @@ class Controller(QObject):
                 self.polling.abandon()
             session = getattr(task, "mqtt_session", None)
             if session is not None or getattr(task, "telemetry_epoch", self._telemetry_epoch) != self._telemetry_epoch:
-                if session is not None and generation == self._generation and not task.cancelled.is_set():
-                    self._finish_mqtt_setup(session, result, error)
+                if session is not None:
+                    retry_after = getattr(result.failure, "retry_after", None) if isinstance(result, MqttSetup) else None
+                    if retry_after is not None and 0 < retry_after < math.inf:
+                        self._mqtt_certification_retry_at = max(
+                            self._mqtt_certification_retry_at, self.clock() + retry_after)
+                    if generation == self._generation and not task.cancelled.is_set() and self.access_allowed:
+                        self._finish_mqtt_setup(session, result, error, renewal=task.mqtt_renewal)
                 self._continue_api()
                 self.changed.emit()
                 self.task_finished.emit(kind)
@@ -1392,6 +1520,7 @@ class Controller(QObject):
                         self.polling.fail(self.clock())
                         self.connection = state
                         if state == ConnectionState.AUTH_ERROR:
+                            self._clear_mqtt_access()
                             self._reset_mqtt()
                             self._mqtt_retry_at = float("inf")
                         if state == ConnectionState.UNSUPPORTED:
@@ -1553,6 +1682,7 @@ class Controller(QObject):
         if self._processes is not None:
             self._processes.stop()
         self._stop_mqtt()
+        self._clear_mqtt_access()
         self._discovery_snapshot = None
         self._credential_cancelled.set()
         self._work_cancelled.set()

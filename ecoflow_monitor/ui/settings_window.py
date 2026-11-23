@@ -24,6 +24,7 @@ from ecoflow_monitor.ui.metric_visibility import MetricVisibilityEditor
 from ecoflow_monitor.ui.hotkey_editor import HotkeyComboEditor, hotkey_error_text
 from ecoflow_monitor.ui.theme import bind_style, settings_style
 from ecoflow_monitor.ui.percent_editor import PercentEditor
+from ecoflow_monitor.ui.polling import telemetry_source_text
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.metrics import metric_tooltip
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
@@ -149,6 +150,10 @@ class SettingsWindow(QDialog):
         layout.addWidget(SettingRow(t("telemetry_transport"), self.telemetry_transport))
         self.telemetry_source = hint("")
         layout.addWidget(self.telemetry_source)
+        self.mqtt_renew_button = action(t("mqtt_access_renew"), self.controller.renew_mqtt_access)
+        layout.addWidget(self.mqtt_renew_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.mqtt_renew_status = hint("")
+        layout.addWidget(self.mqtt_renew_status)
         self.controller.changed.connect(self._refresh_telemetry_source)
         self.export_section = self._export_section()
         layout.addWidget(self.export_section)
@@ -398,6 +403,8 @@ class SettingsWindow(QDialog):
         self.start_with_windows.setEnabled(available())
         self.start_with_windows.setToolTip(t("startup_description" if available() else "startup_packaged_only"))
         general.addWidget(SettingRow(t("start_with_windows"), self.start_with_windows))
+        self.pause_on_display_off = Switch(t("pause_on_display_off"))
+        general.addWidget(SettingRow(t("pause_on_display_off"), self.pause_on_display_off))
         self.monitor_labels_visible = Switch(t("monitor_labels_visible"))
         self.monitor_values_on_hover = Switch(t("monitor_values_on_hover"))
         for control, label in ((self.monitor_labels_visible, "monitor_labels_visible"), (self.monitor_values_on_hover, "monitor_values_on_hover"), (self.animations, "animations")):
@@ -596,6 +603,7 @@ class SettingsWindow(QDialog):
         self.scale.setValue(settings.scale * 100)
         self.animations.setChecked(settings.animations)
         self.start_with_windows.setChecked(settings.start_with_windows)
+        self.pause_on_display_off.setChecked(settings.pause_on_display_off)
         self.main_enabled.setChecked(settings.widget.enabled)
         self.main_scale.setValue(settings.widget.scale * 100)
         self.main_alpha.setValue(settings.widget.opacity * 100)
@@ -737,11 +745,15 @@ class SettingsWindow(QDialog):
             self.devices.setCurrentIndex(self.devices.count() - 1)
 
     def _refresh_telemetry_source(self):
-        source = self.controller.telemetry_source
-        labels = {"waiting_mqtt": "telemetry_waiting_mqtt", "mqtt": "telemetry_active_mqtt",
-                  "https_fallback": "telemetry_active_fallback", "https": "telemetry_active_https"}
-        self.telemetry_source.setText(t(labels[source]) if source else "")
+        source = telemetry_source_text(self.controller.telemetry_source)
+        self.telemetry_source.setText(source)
         self.telemetry_source.setVisible(bool(source))
+        mqtt_enabled = self.controller.settings.telemetry_transport == "mqtt_with_https_fallback"
+        self.mqtt_renew_button.setVisible(mqtt_enabled)
+        self.mqtt_renew_button.setEnabled(self.controller.can_renew_mqtt_access)
+        status = self.controller.mqtt_access_status
+        self.mqtt_renew_status.setText(t(status) if status else "")
+        self.mqtt_renew_status.setVisible(mqtt_enabled and bool(status))
 
     def _refresh_capacity_status(self):
         if not hasattr(self, "capacity_status"):
@@ -783,6 +795,7 @@ class SettingsWindow(QDialog):
             polling=PollingPreferences(**{name: PollingGroup(int(interval.value()), int(stale.value())) for name, (interval, stale) in self.polling_fields.items()}),
             animations=self.animations.isChecked(),
             start_with_windows=self.start_with_windows.isChecked(),
+            pause_on_display_off=self.pause_on_display_off.isChecked(),
             widget=self._widget_draft(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),

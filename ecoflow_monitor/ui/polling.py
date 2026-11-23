@@ -8,6 +8,16 @@ from ecoflow_monitor.ui.motion import motion_driver
 from ecoflow_monitor.ui.tokens import COLORS, TOKENS
 
 
+def telemetry_source_text(source: str, *, compact: bool = False) -> str:
+    if compact and source in {"mqtt", "https"}:
+        return source.upper()
+    if compact and source == "https_fallback":
+        return t("telemetry_fallback_short")
+    keys = {"waiting_mqtt": "telemetry_waiting_mqtt", "mqtt": "telemetry_active_mqtt",
+            "https_fallback": "telemetry_active_fallback", "https": "telemetry_active_https"}
+    return t(keys[source]) if source else ""
+
+
 class SensorDemand(QObject):
     def __init__(self, controller, dashboard, widget):
         super().__init__(dashboard)
