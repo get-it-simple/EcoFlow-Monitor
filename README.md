@@ -159,9 +159,10 @@ the target becomes available again, or Windows resumes with fresh readings.
 Integration rules use Windows process events when available. A shared check
 every two seconds covers process discovery if the event subscription is unavailable.
 
-Monitoring, process tracking, Auto and animations pause while Windows sleeps,
-the session is locked, or its display is off. Work resumes automatically once
-Windows is awake, the session is unlocked and the display is on. Auto first waits
+Monitoring, process tracking, Auto and animations pause while Windows sleeps
+or the session is locked. They also pause when the display turns off by default.
+Change this in **Settings → Appearance → General → Pause when the display turns off**.
+Work resumes automatically once all applicable pause conditions clear. Auto first waits
 for new readings and a new target check, then applies its normal stability delay.
 Display dimming alone does not pause work. Saved Auto choices, settings drafts and
 window visibility are retained; resuming does not bring windows to the foreground.
@@ -222,6 +223,7 @@ Choose the telemetry API in **Settings → Connection → Service**. The default
 uses MQTT for DELTA 3 MAX, switches to HTTPS polling if the stream is unavailable,
 and returns to MQTT when fresh readings resume. **HTTPS only** uses the configured
 polling intervals throughout. While MQTT is active, readings update as they arrive.
+Monitoring shows the current transport next to the last update when space permits.
 
 **Collect device diagnostics** requests separate permission to record sanitized
 official API responses locally, including when ordinary logging is Off. Nothing is

@@ -98,6 +98,7 @@ class NotificationWindow(DesignDialog):
             empty = QLabel(t("notifications_empty"))
             empty.setWordWrap(True)
             self.content.addWidget(empty)
+            empty.show()
         for notice in entries:
             card = QFrame(self)
             card.setObjectName("card")

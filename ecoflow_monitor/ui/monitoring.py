@@ -16,7 +16,7 @@ from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS, REFLOW_INTERVAL_MS
 from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
 from ecoflow_monitor.polling import PORT_KEYS
-from ecoflow_monitor.ui.polling import LoadingIndicator
+from ecoflow_monitor.ui.polling import LoadingIndicator, telemetry_source_text
 from ecoflow_monitor.ui.port_card import PortCard
 
 
@@ -29,11 +29,9 @@ class MonitoringPage(QWidget):
         self.box.setContentsMargins(32, 24, 32, 32)
         self.box.setSpacing(24)
         self.heading_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        title_box = QVBoxLayout()
         self.updated = hint("")
         self.updated.setTextFormat(Qt.TextFormat.PlainText)
-        title_box.addWidget(self.updated)
-        self.heading_row.addLayout(title_box, 1)
+        self.heading_row.addWidget(self.updated, 1)
         badges = QWidget(self)
         badge_row = QHBoxLayout(badges)
         badge_row.setContentsMargins(0, 0, 0, 0)
@@ -138,7 +136,10 @@ class MonitoringPage(QWidget):
         settings = self.controller.ui_settings
         scale = getattr(self.window(), "_scale", effective_scale(self, settings.scale))
         telemetry = self.controller.telemetry
-        self.updated.setText(self.controller.device_name + " · " + (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M")) if telemetry else t("never_updated")))
+        timestamp = (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M"))
+                     if telemetry else t("never_updated"))
+        self._update_text = f"{self.controller.device_name} · {timestamp}"
+        self._source_text = telemetry_source_text(self.controller.telemetry_source, compact=True)
         self.status.refresh()
         self.notifications.refresh(self.controller, self.hotkey_notice)
         for key, reading in self.readings.items():
@@ -236,7 +237,14 @@ class MonitoringPage(QWidget):
         scale = getattr(self.window(), "_scale", effective_scale(self, self.controller.ui_settings.scale))
         available = min(self.width(), self.parentWidget().width()) if self.parentWidget() is not None else self.width()
         width = max(1, available - 64 * scale)
-        self.heading_row.setDirection(QBoxLayout.Direction.TopToBottom if width < GEOMETRY["form_breakpoint"] * scale else QBoxLayout.Direction.LeftToRight)
+        stacked = width < GEOMETRY["form_breakpoint"] * scale
+        self.heading_row.setDirection(QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight)
+        update_width = width if stacked else width - self.heading_row.itemAt(1).sizeHint().width() - max(0, self.heading_row.spacing())
+        text = self._update_text
+        if self._source_text:
+            inline = f"{text} · {self._source_text}"
+            text = inline if self.updated.fontMetrics().horizontalAdvance(inline) <= update_width else f"{text}\n{self._source_text}"
+        self.updated.setText(text)
         columns = 4 if width >= 840 * scale else 2 if width >= 420 * scale else 1
         port_width = max(1, width - 32 * scale)
         cell_width = max(round(240 * scale), *(row.minimumSizeHint().width() for row, value in self.port_values.values()))

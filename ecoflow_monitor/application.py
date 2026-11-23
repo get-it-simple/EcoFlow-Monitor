@@ -390,8 +390,9 @@ class Application(QObject):
         self.sensor_demand.refresh()
         if self.controller.system_activity.paused:
             return
-        self.dashboard.raise_()
-        self.dashboard.activateWindow()
+        if self.app.activeModalWidget() is None:
+            self.dashboard.raise_()
+            self.dashboard.activateWindow()
         if self._startup_pending:
             self._startup_pending = False
             self._startup_consent()

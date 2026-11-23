@@ -1,14 +1,19 @@
 from dataclasses import replace
 import json
 
-from PySide6.QtWidgets import QDialog, QPushButton, QWidget
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
+from PySide6.QtGui import QTextCursor
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
 import pytest
 from qt_helpers import close_runtime
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
-from ecoflow_monitor.integrations import IntegrationRule, afterburner_example
+from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, IntegrationRule, Reaction, afterburner_example
+from ecoflow_monitor.telemetry_values import VALUE_UNITS
 from ecoflow_monitor.ui.integration_creation import IntegrationCreationDialog
+from ecoflow_monitor.ui.integration_tokens import ProfileTokenDialog
 from ecoflow_monitor.ui.integrations import IntegrationsEditor, ProfileDialog
 from ecoflow_monitor.ui.rules import RuleDialog, RulesEditor
 
@@ -206,6 +211,105 @@ def test_rule_dialog_exposes_only_declared_conditions(qapp, conditions):
         dialog.deleteLater()
 
 
+def select_profile_token(button, query=None, token=None, *, catalog=None):
+    errors = []
+
+    def interact():
+        picker = QApplication.activeModalWidget()
+        try:
+            assert isinstance(picker, ProfileTokenDialog) and picker.isVisible()
+            assert picker.focusWidget() is picker.search
+            if catalog is not None:
+                assert {picker.results.item(row).data(Qt.ItemDataRole.UserRole) for row in range(picker.results.count())} == catalog
+            if query is None:
+                picker.search.setText("no-such-token")
+                assert not picker.insert_button.isEnabled()
+                QTest.keyClick(picker, Qt.Key.Key_Escape)
+                return
+            picker.search.setText(query)
+            assert picker.preview.text() == token
+            QTest.keyClick(picker.search, Qt.Key.Key_Tab)
+            assert picker.focusWidget() is picker.results
+            QTest.keyClick(picker.results, Qt.Key.Key_Return)
+        except Exception as error:
+            errors.append(error)
+        finally:
+            if isinstance(picker, ProfileTokenDialog) and picker.isVisible():
+                picker.reject()
+
+    timer = QTimer(button)
+    timer.setSingleShot(True)
+    timer.timeout.connect(interact)
+    timer.start(0)
+    try:
+        button.click()
+        assert not timer.isActive(), "The token button did not open a dialog"
+        if errors:
+            raise errors[0]
+        QApplication.processEvents()
+    finally:
+        timer.stop()
+        timer.deleteLater()
+
+
+@pytest.mark.parametrize("creating", [False, True])
+def test_cli_profile_token_dialog_inserts_values_into_each_reaction(qapp, monkeypatch, creating):
+    calls = []
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: calls.append(args))
+    reaction = Reaction(True, ("{app} --record",))
+    profile = IntegrationProfile("example", "Example profile", reaction, reaction)
+    command = CliCommand("record", "Record readings", ("--record",))
+    module = IntegrationDefinition("example", "Example program", executable="example.exe", mapping=(command,), profiles=() if creating else (profile,))
+    dialog = ProfileDialog(module, None if creating else profile)
+    if creating:
+        dialog.label.setText(profile.label)
+        for toggle, editor in dialog.reactions.values():
+            toggle.setChecked(True)
+            editor.setPlainText(reaction.commands[0])
+    dialog.show()
+    dialog.activateWindow()
+    qapp.processEvents()
+
+    activation_button, deactivation_button = (
+        button for button in dialog.findChildren(QPushButton) if button.text() == i18n.t("integration_insert")
+    )
+    _, activation = dialog.reactions["activation"]
+    _, deactivation = dialog.reactions["deactivation"]
+    activation.setPlainText("{app} --reading=replace-me --record")
+    cursor = activation.textCursor()
+    cursor.setPosition(len("{app} --reading="))
+    cursor.movePosition(QTextCursor.MoveOperation.NextCharacter, QTextCursor.MoveMode.KeepAnchor, len("replace-me"))
+    activation.setTextCursor(cursor)
+    catalog = {"{app}", "{cli:record}", *(f"{{value:{key}}}" for key in VALUE_UNITS)}
+    select_profile_token(activation_button, i18n.t("battery_level"), "{value:battery_level}", catalog=catalog)
+    expected_activation = "{app} --reading={value:battery_level} --record"
+    assert activation.toPlainText() == expected_activation
+    assert dialog.focusWidget() is activation
+    assert deactivation.toPlainText() == reaction.commands[0]
+    assert "example.exe --reading={value:battery_level} --record" in {label.text() for label in dialog.findChildren(QLabel)}
+
+    deactivation.setPlainText("{app} --reading=")
+    deactivation.moveCursor(QTextCursor.MoveOperation.End)
+    select_profile_token(deactivation_button, "ANDERSON_64", "{value:anderson_64}")
+    expected_deactivation = "{app} --reading={value:anderson_64}"
+    assert deactivation.toPlainText() == expected_deactivation
+    assert dialog.focusWidget() is deactivation
+    assert activation.toPlainText() == expected_activation
+
+    select_profile_token(deactivation_button)
+    assert dialog.focusWidget() is deactivation_button
+    assert deactivation.toPlainText() == expected_deactivation
+    assert dialog.save_button.isEnabled()
+    dialog.save_button.click()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.profile is not None
+    updated = replace(module, profiles=(dialog.profile,))
+    saved, = IntegrationDefinition.from_dict(updated.to_dict()).profiles
+    assert saved.activation.commands == (expected_activation,)
+    assert saved.deactivation.commands == (expected_deactivation,)
+    assert not calls
+
+
 def test_profile_token_insertion_and_validation_never_execute(qapp, monkeypatch):
     calls = []
     monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: calls.append(args))
@@ -221,6 +325,14 @@ def test_profile_token_insertion_and_validation_never_execute(qapp, monkeypatch)
         chip = next(button for button in dialog.findChildren(QPushButton) if button.text() == "{app}")
         chip.click()
         assert field.toPlainText() == "{app}"
+        dialog.show()
+        qapp.processEvents()
+        button = next(button for button in dialog.findChildren(QPushButton) if button.text() == i18n.t("integration_insert"))
+        command = module.mapping[0]
+        token = "{cli:" + command.id + "}"
+        field.insertPlainText(" ")
+        select_profile_token(button, token, token, catalog={"{app}", *(f"{{cli:{item.id}}}" for item in module.mapping)})
+        assert field.toPlainText() == "{app} " + token
         field.setPlainText("{app} {cli:missing}")
         assert not dialog.save_button.isEnabled()
         assert dialog.error_label.text()
@@ -232,6 +344,42 @@ def test_profile_token_insertion_and_validation_never_execute(qapp, monkeypatch)
         assert not calls
     finally:
         dialog.deleteLater()
+
+
+def test_dashboard_and_profile_show_only_intended_windows(tmp_path, qapp):
+    class WindowShows(QObject):
+        def __init__(self):
+            super().__init__()
+            self.windows = []
+            self.profile_ready = False
+
+        def eventFilter(self, watched, event):
+            if isinstance(watched, QWidget) and watched.isWindow() and event.type() == QEvent.Type.Show:
+                self.windows.append(watched)
+                if isinstance(watched, ProfileDialog):
+                    self.profile_ready = watched.findChild(QWidget, "dialog_shell") is not None
+            return False
+
+    shows = WindowShows()
+    qapp.installEventFilter(shows)
+    runtime = Application(tmp_path / "settings.json", native=False)
+    module = afterburner_example()
+    dialog = ProfileDialog(module, module.profiles[0], runtime.dashboard)
+    try:
+        assert shows.windows == []
+        runtime.open_settings()
+        dialog.open()
+        assert shows.windows == [runtime.dashboard, dialog]
+        assert shows.profile_ready
+        assert qapp.activeModalWidget() is dialog
+        runtime.open_settings()
+        assert qapp.activeModalWidget() is dialog
+        assert shows.windows == [runtime.dashboard, dialog]
+    finally:
+        qapp.removeEventFilter(shows)
+        dialog.reject()
+        dialog.deleteLater()
+        close_runtime(runtime, qapp)
 
 
 @pytest.mark.design
@@ -255,7 +403,7 @@ def test_integration_pages_and_dialogs_fit_reference_and_minimum(runtime, qapp, 
             assert page.horizontalScrollBar().maximum() == 0
             assert window.footer.isVisible()
     module = runtime.controller.settings.integrations[0]
-    for dialog in (ProfileDialog(module, module.profiles[0], window), RuleDialog(module.profiles, module.conditions, False, IntegrationRule("new", module.profiles[0].id), window, creating=True), IntegrationCreationDialog((), window)):
+    for dialog in (ProfileDialog(module, module.profiles[0], window), ProfileTokenDialog(IntegrationDefinition("cli", "Example"), window), RuleDialog(module.profiles, module.conditions, False, IntegrationRule("new", module.profiles[0].id), window, creating=True), IntegrationCreationDialog((), window)):
         try:
             dialog.show()
             qapp.processEvents()
@@ -283,7 +431,7 @@ def test_dialog_footer_and_wide_fields_fit_a_small_work_area(qapp, monkeypatch, 
     scaled_font(parent, scale)
     module = afterburner_example()
     try:
-        for dialog in (ProfileDialog(module, module.profiles[0], parent), RuleDialog(module.profiles, module.conditions, False, IntegrationRule("example", module.profiles[0].id), parent, creating=True), IntegrationCreationDialog((), parent)):
+        for dialog in (ProfileDialog(module, module.profiles[0], parent), ProfileTokenDialog(IntegrationDefinition("cli", "Example"), parent), RuleDialog(module.profiles, module.conditions, False, IntegrationRule("example", module.profiles[0].id), parent, creating=True), IntegrationCreationDialog((), parent)):
             try:
                 dialog.show()
                 qapp.processEvents()

@@ -185,6 +185,7 @@ class AppSettings:
     ac_collapsed: bool = False
     other_collapsed: bool = False
     telemetry_transport: str = "mqtt_with_https_fallback"
+    pause_on_display_off: bool = True
 
     def validate(self) -> None:
         if not isinstance(self.telemetry_export, ExportPreferences):
@@ -192,6 +193,8 @@ class AppSettings:
         self.telemetry_export.validate()
         if any(type(value) is not bool for value in (self.start_with_windows, self.ac_collapsed, self.other_collapsed)):
             raise ValueError("Invalid startup or disclosure preference")
+        if type(self.pause_on_display_off) is not bool:
+            raise ValueError("Boolean preference expected")
         if type(self.custom_device_profiles) is not bool or not isinstance(self.device_profile_assignments, tuple):
             raise ValueError("device_profile_invalid")
         assigned = set()
@@ -281,7 +284,8 @@ class AppSettings:
             "language": self.language,
             "logging": {"mode": self.logging_mode},
             "telemetry_export": asdict(self.telemetry_export),
-            "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover},
+            "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover,
+                           "pause_on_display_off": self.pause_on_display_off},
             "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "hidden_metrics": list(self.mini_hidden_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
 
@@ -331,6 +335,7 @@ class AppSettings:
             bindings = [*bindings, *(asdict(binding) for binding in default_hotkeys() if binding.action in {"open_dashboard", "recover_widgets"} and binding.action not in existing_actions)]
         settings = cls(
             start_with_windows=boolean(startup, "enabled", False),
+            pause_on_display_off=boolean(appearance, "pause_on_display_off", defaults.pause_on_display_off),
             ac_collapsed=boolean(monitoring, "ac_collapsed", False),
             other_collapsed=boolean(monitoring, "other_collapsed", False),
             polling=PollingPreferences.from_dict(eco.get("polling", {})),

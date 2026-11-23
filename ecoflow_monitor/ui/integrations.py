@@ -6,16 +6,16 @@ import uuid
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon
-from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, Reaction, template_tokens
-from ecoflow_monitor.telemetry_values import VALUE_UNITS
-from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_tooltip
+from ecoflow_monitor.ui.common import ActionButton, action, clamp_window, hint, profile_tooltip
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.components import ActionLayout, ContentTabs, DataTable, DesignDialog, FormLayout as QFormLayout, NumberField, SelectField as QComboBox, SettingRow, Switch, TextArea
 from ecoflow_monitor.ui.integration_creation import IntegrationCreationDialog
+from ecoflow_monitor.ui.integration_tokens import ProfileTokenDialog
 from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.tokens import COLORS
 from ecoflow_monitor.ui.rules import RulesEditor
@@ -167,7 +167,8 @@ class ProfileDialog(DesignDialog):
                 chip.setProperty("token_chip", True)
                 row.addWidget(chip)
             row.addStretch()
-            insert = action(t("integration_insert"), lambda checked=False, field=editor: self.insert_token(field))
+            insert = ActionButton(t("integration_insert"))
+            insert.clicked.connect(lambda checked=False, field=editor, button=insert: self.insert_token(field, button))
             row.addWidget(insert)
             tools_layout.addLayout(row)
             preview = QLabel()
@@ -182,15 +183,13 @@ class ProfileDialog(DesignDialog):
             update_preview()
             tools_layout.addWidget(preview)
             editor.setEnabled(reaction.enabled)
-            tools.setVisible(reaction.enabled)
             toggle.toggled.connect(editor.setEnabled)
-            toggle.toggled.connect(tools.setVisible)
             layout.addWidget(SettingRow(toggle, editor))
             tools.setProperty("wide_field", "long")
             tools_row = SettingRow("", tools)
+            layout.addWidget(tools_row)
             tools_row.setVisible(reaction.enabled)
             toggle.toggled.connect(tools_row.setVisible)
-            layout.addWidget(tools_row)
             self.reactions[name] = (toggle, editor)
         layout.addWidget(hint(t("integration_reaction_hint")))
         buttons = ActionLayout()
@@ -215,24 +214,17 @@ class ProfileDialog(DesignDialog):
         self.validate_draft()
         install_scrollbars(self)
 
-    def insert_token(self, field):
-        menu = QMenu(self)
-        for label, token in ((t("integration_app_token"), "{app}"), *((command.label, "{cli:" + command.id + "}") for command in self.module.mapping)):
-            item = menu.addAction(label + "  " + token)
-            item.triggered.connect(lambda checked=False, value=token: field.insertPlainText(value))
-        if self.module.driver == "cli":
-            values = menu.addMenu(t("integration_app_values"))
-            anderson = values.addMenu(t("anderson"))
-            for key in VALUE_UNITS:
-                token = "{value:" + key + "}"
-                if key.startswith("anderson_"):
-                    item = anderson.addAction(t("anderson") + " " + key.removeprefix("anderson_"))
-                else:
-                    item = values.addAction(t("integration_capacity_wh") if key == "capacity_wh" else t(key))
-                item.setToolTip(token)
-                item.triggered.connect(lambda checked=False, value=token: field.insertPlainText(value))
-        menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
-        menu.deleteLater()
+    def insert_token(self, field: TextArea, button: ActionButton):
+        cursor = field.textCursor()
+        dialog = ProfileTokenDialog(self.module, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        token = dialog.token
+        dialog.deleteLater()
+        if not accepted or token is None:
+            button.setFocus()
+            return
+        cursor.insertText(token)
+        field.setTextCursor(cursor)
         field.setFocus()
 
     def showEvent(self, event):

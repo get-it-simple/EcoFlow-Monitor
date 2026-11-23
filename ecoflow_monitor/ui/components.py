@@ -559,42 +559,50 @@ class DesignDialog(QDialog):
     def set_footer(self, actions):
         self.footer = ActionFooter(actions, self, leading_action=False)
 
-    def showEvent(self, event):
-        if not self._framed:
-            from ecoflow_monitor.ui.focus import FocusBinding
-            from ecoflow_monitor.ui.theme import settings_style
-            body = QWidget()
-            body.setLayout(cast(QLayout, self.layout()))
-            outer = QVBoxLayout(self)
-            outer.setContentsMargins(0, 0, 0, 0)
-            frame = QFrame(self)
-            frame.setObjectName("dialog_shell")
-            outer.addWidget(frame)
-            content = QVBoxLayout(frame)
-            content.setContentsMargins(1, 1, 1, 1)
-            content.setSpacing(0)
-            self.titlebar = TitleBar(self)
-            self.titlebar.title.setText(self.windowTitle())
-            self.titlebar.title.setObjectName("page_title")
-            content.addWidget(self.titlebar)
-            scroll = QScrollArea(frame)
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(body)
-            self.content_scroll = scroll
-            content.addWidget(scroll, 1)
-            if self.footer is not None:
-                content.addWidget(self.footer)
-            parent = self.parentWidget()
-            scale = max(0.5, parent.font().pixelSize() / 14) if parent is not None else 1
-            self.setStyleSheet(settings_style(scale=scale) + f"QDialog#settings_dialog {{ background: transparent; }} QFrame#dialog_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 20px; }}")
-            self.resize((self.size() * scale).boundedTo(self.screen().availableGeometry().size()))
-            if self.footer is not None:
-                self.footer.configure(scale)
-            self._focus_binding = FocusBinding(self)
-            from ecoflow_monitor.ui.scrollbar import install_scrollbars
-            install_scrollbars(self)
-            self._framed = True
-        super().showEvent(event)
+    def setVisible(self, visible: bool) -> None:
+        if visible and not self._framed:
+            self._prepare_frame()
+        super().setVisible(visible)
+
+    def _prepare_frame(self) -> None:
+        from ecoflow_monitor.ui.focus import FocusBinding
+        from ecoflow_monitor.ui.scrollbar import install_scrollbars
+        from ecoflow_monitor.ui.theme import settings_style
+
+        focused = self.focusWidget()
+        body = QWidget(self)
+        body.setLayout(cast(QLayout, self.layout()))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = QFrame(self)
+        frame.setObjectName("dialog_shell")
+        outer.addWidget(frame)
+        content = QVBoxLayout(frame)
+        content.setContentsMargins(1, 1, 1, 1)
+        content.setSpacing(0)
+        self.titlebar = TitleBar(self)
+        self.titlebar.title.setText(self.windowTitle())
+        self.titlebar.title.setObjectName("page_title")
+        content.addWidget(self.titlebar)
+        scroll = QScrollArea(frame)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        self.content_scroll = scroll
+        content.addWidget(scroll, 1)
+        if self.footer is not None:
+            content.addWidget(self.footer)
+        parent = self.parentWidget()
+        scale = max(0.5, parent.font().pixelSize() / 14) if parent is not None else 1
+        self.setStyleSheet(settings_style(scale=scale) + f"QDialog#settings_dialog {{ background: transparent; }} QFrame#dialog_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 20px; }}")
+        screen = parent.screen() if parent is not None else self.screen()
+        self.resize((self.size() * scale).boundedTo(screen.availableGeometry().size()))
+        if self.footer is not None:
+            self.footer.configure(scale)
+        self._focus_binding = FocusBinding(self)
+        install_scrollbars(self)
+        if focused is not None:
+            focused.setFocus()
+        self._framed = True
 
 
 class DialogChrome(QObject):

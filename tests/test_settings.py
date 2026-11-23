@@ -30,6 +30,20 @@ def test_existing_settings_default_to_mqtt_with_fallback_without_losing_https_pr
     assert store.load() == https_only
 
 
+def test_display_pause_preference_preserves_schema_and_defaults(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    settings = replace(AppSettings(), pause_on_display_off=False)
+    store.save(settings)
+    assert store.load() == settings
+    payload = settings.to_dict()
+    assert payload["version"] == 4
+    del payload["appearance"]["pause_on_display_off"]
+    assert AppSettings.from_dict(payload).pause_on_display_off
+    payload["appearance"]["pause_on_display_off"] = "false"
+    with pytest.raises(ValueError):
+        AppSettings.from_dict(payload)
+
+
 def test_invalid_file_is_preserved_until_explicit_save_with_backup(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.path.write_bytes(b"broken original")

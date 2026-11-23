@@ -1,9 +1,17 @@
+from dataclasses import dataclass, field
 import threading
 from uuid import uuid4
 
-from ecoflow_monitor.adapters.ecoflow_mqtt import MqttCancellation
+from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttCancellation
 from ecoflow_monitor.device_profiles import CORE
 from ecoflow_monitor.polling import PushedReading, TelemetryPatch
+
+
+@dataclass(frozen=True)
+class MqttAccess:
+    credential_identity: bytes = field(repr=False)
+    broker: BrokerAccess = field(repr=False)
+    attempted: bool = False
 
 
 class MqttSession:
@@ -13,6 +21,7 @@ class MqttSession:
         self.cancelled = MqttCancellation()
         self.deadline = float("inf")
         self.active = False
+        self.reused_access = False
         self.readings: dict[str, PushedReading] = {}
         self.last_valid: dict[str, float] = {}
         self._lock = threading.Lock()
