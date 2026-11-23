@@ -1,4 +1,5 @@
 import threading
+from uuid import uuid4
 
 from ecoflow_monitor.adapters.ecoflow_mqtt import MqttCancellation
 from ecoflow_monitor.device_profiles import CORE
@@ -8,6 +9,7 @@ from ecoflow_monitor.polling import PushedReading, TelemetryPatch
 class MqttSession:
     def __init__(self, serial: str):
         self.serial = serial
+        self.operation = uuid4().hex[:12]
         self.cancelled = MqttCancellation()
         self.deadline = float("inf")
         self.active = False

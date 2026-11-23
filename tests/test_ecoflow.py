@@ -1,4 +1,6 @@
+import hmac
 import json
+import re
 import ssl
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ from paho.mqtt import client as mqtt
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError, flatten_parameters, normalize_telemetry, signed_headers
 from ecoflow_monitor.adapters.ecoflow_mqtt import BrokerAccess, MqttCancellation, MqttError, decode_report, stream_telemetry
+from ecoflow_monitor.diagnostics import DiagnosticLog
 from ecoflow_monitor.domain import ConnectionState
 
 
@@ -88,45 +91,75 @@ def test_mqtt_report_preserves_partial_values_and_decodes_nested_anderson_output
     assert not decode_report(b'[').requested
 
 
-def test_signed_mqtt_certification_never_logs_broker_credentials(tmp_path):
-    from ecoflow_monitor.diagnostics import DiagnosticLog
-
+def test_signed_mqtt_certification_never_logs_broker_credentials(tmp_path, capsys):
     account, password = "synthetic-broker-account", "synthetic-broker-password"
-    data = {"url": "mqtt.ecoflow.com", "port": "8883", "protocol": "mqtts",
+    data = {"url": "mqtt-e.ecoflow.com", "port": "8883", "protocol": "mqtts",
             "certificateAccount": account, "certificatePassword": password}
 
     def handle(request):
-        assert request.method == "GET" and request.url.path == "/iot-open/sign/certification"
-        assert len(request.headers["sign"]) == 64
-        return httpx.Response(200, json={"code": "0", "data": data, "echo": account})
+        assert request.method == "GET"
+        assert str(request.url) == "https://api.ecoflow.com/iot-open/sign/certification"
+        assert not request.content
+        assert request.headers["accessKey"] == "test-access"
+        nonce, timestamp = request.headers["nonce"], request.headers["timestamp"]
+        assert re.fullmatch(r"[1-9][0-9]{5}", nonce)
+        assert re.fullmatch(r"[0-9]{13}", timestamp)
+        message = f"accessKey=test-access&nonce={nonce}&timestamp={timestamp}".encode()
+        assert request.headers["sign"] == hmac.digest(b"test-secret", message, "sha256").hex()
+        assert all(b"test-secret" not in value for _, value in request.headers.raw)
+        return httpx.Response(200, json={
+            "code": "0", "message": "Success", "data": data, "eagleEyeTraceId": "", "tid": "",
+        })
 
     path = tmp_path / "connection.log"
     with DiagnosticLog(path) as log:
         log.configure("detailed")
         client = EcoFlowClient(Credentials("test-access", "test-secret"), httpx.MockTransport(handle))
         access = BrokerAccess.from_response(client.mqtt_certification())
-        assert access.port == 8883 and access.account == account
+        assert (access.host, access.port, access.account, access.password) == ("mqtt-e.ecoflow.com", 8883, account, password)
         assert account not in repr(access) and password not in repr(access)
     output = path.read_text(encoding="utf-8")
     assert "/iot-open/sign/certification" in output
     assert account not in output and password not in output
+    assert capsys.readouterr() == ("", "")
 
     for change in ({"protocol": "mqtt"}, {"url": "mqtt.ecoflow.com.invalid"}, {"certificateAccount": "+"}):
         with pytest.raises(MqttError):
             BrokerAccess.from_response(data | change)
 
 
-def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(monkeypatch):
-    topic = "/open/test-account/TEST/quota"
+def test_mqtt_certification_maps_non_json_http_denial_to_auth_error(capsys):
+    transport = httpx.MockTransport(lambda request: httpx.Response(403, text="Forbidden"))
+    with pytest.raises(EcoFlowError) as error:
+        EcoFlowClient(Credentials("test-access", "test-secret"), transport).mqtt_certification()
+    assert error.value.state == ConnectionState.AUTH_ERROR
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(("mode", "connack", "suback", "failure"), [
+    ("normal", 0, 0, None),
+    ("detailed", 0, 0, None),
+    ("off", 0, 0, None),
+    ("normal", 133, None, "connection_rejected"),
+    ("normal", 134, None, "broker_auth_rejected"),
+    ("normal", 135, None, "broker_auth_rejected"),
+    ("normal", 0, 128, "subscription_rejected"),
+])
+def test_mqtt_stream_uses_verified_tls_and_reports_connection_stages(monkeypatch, tmp_path, mode, connack, suback, failure):
+    serial = "SYNTHETIC-SERIAL"
+    topic = f"/open/test-account/{serial}/quota"
     cancelled = MqttCancellation()
     subscribed = []
     received = []
     disconnected = []
+    client_ids = []
 
     class Client(mqtt.Client):
-        def __init__(self, version, *, protocol, reconnect_on_failure):
+        def __init__(self, version, *, client_id, protocol, reconnect_on_failure):
             assert version is mqtt.CallbackAPIVersion.VERSION2 and protocol == mqtt.MQTTv311 and not reconnect_on_failure
-            super().__init__(version, protocol=protocol, reconnect_on_failure=reconnect_on_failure)
+            assert client_id == "EcoFlowMonitor-test-account"
+            client_ids.append(client_id)
+            super().__init__(version, client_id=client_id, protocol=protocol, reconnect_on_failure=reconnect_on_failure)
 
         def tls_set_context(self, context):
             assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
@@ -149,12 +182,14 @@ def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(
             return self
 
         def loop_read(self):
-            self.on_connect(self, None, None, mqtt.ReasonCode(mqtt.PacketTypes.CONNACK), None)
-            self.on_subscribe(self, None, 1, [mqtt.ReasonCode(mqtt.PacketTypes.SUBACK, identifier=0)], None)
+            self.on_connect(self, None, None, mqtt.ReasonCode(mqtt.PacketTypes.CONNACK, identifier=connack), None)
+            if suback is not None:
+                self.on_subscribe(self, None, 1, [mqtt.ReasonCode(mqtt.PacketTypes.SUBACK, identifier=suback)], None)
             for selected, retain in ((topic + "/other", False), (topic, True), (topic, False)):
                 report = SimpleNamespace(topic=selected, retain=retain, payload=b'{"cmsBattSoc":70}')
                 self.on_message(self, None, report)
-            cancelled.set()
+            if failure is None:
+                cancelled.set()
             return mqtt.MQTT_ERR_SUCCESS
 
         def loop_misc(self):
@@ -166,6 +201,38 @@ def test_mqtt_stream_subscribes_to_only_the_live_device_topic_with_verified_tls(
     monkeypatch.setattr(mqtt, "Client", Client)
     monkeypatch.setattr("ecoflow_monitor.adapters.ecoflow_mqtt.select", lambda read, write, errors, timeout: (read[:1], [], []))
     access = BrokerAccess("mqtt.ecoflow.com", 8883, "test-account", "test-password")
-    stream_telemetry(access, "TEST", cancelled, received.append)
-    assert subscribed == [topic] and disconnected == [True]
-    assert [dict(patch.values) for patch in received] == [{"battery_level": 70}]
+    path = tmp_path / "mqtt.log"
+    with DiagnosticLog(path) as log:
+        log.configure(mode)
+        if failure is None:
+            stream_telemetry(access, serial, cancelled, received.append)
+        else:
+            with pytest.raises(MqttError, match=f"^{failure}$"):
+                stream_telemetry(access, serial, cancelled, received.append)
+        log.flush()
+
+    assert disconnected == [True]
+    assert subscribed == ([topic] if connack == 0 else [])
+    assert [dict(patch.values) for patch in received] == ([{"battery_level": 70}] if failure is None else [])
+    if mode == "off":
+        assert not path.exists()
+        return
+
+    output = path.read_text(encoding="utf-8")
+    assert all(secret not in output for secret in (access.account, access.password, serial, topic, "cmsBattSoc", *client_ids))
+    records = [json.loads(line) for line in output.splitlines()]
+    started, connected, *subscription = [record for record in records if record["event"].startswith("mqtt_")]
+    operation = started["data"]["operation"]
+    assert operation and started["event"] == "mqtt_connect_started"
+    assert connected["event"] == "mqtt_connack_received"
+    assert connected["data"]["operation"] == operation
+    assert connected["data"]["reason_code"] == connack
+    assert connected["data"]["accepted"] == (connack == 0)
+    if suback is None:
+        assert not subscription
+    else:
+        (acknowledged,) = subscription
+        assert acknowledged["event"] == "mqtt_suback_received"
+        assert acknowledged["data"]["operation"] == operation
+        assert acknowledged["data"]["reason_code"] == suback
+        assert acknowledged["data"]["accepted"] == (suback == 0)

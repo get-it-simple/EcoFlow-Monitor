@@ -8,8 +8,10 @@ import socket
 import ssl
 from threading import Event, Lock
 from typing import Callable
+from uuid import uuid4
 
 from ecoflow_monitor.device_profiles import SENSORS, baseline_profile
+from ecoflow_monitor.diagnostics import event
 from ecoflow_monitor.polling import TelemetryPatch
 
 
@@ -102,27 +104,40 @@ def decode_report(payload: bytes, raw_receive=None) -> TelemetryPatch:
     return TelemetryPatch(tuple(key for key, _ in values) + invalid, values, invalid=invalid)
 
 
-def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellation, receive: Callable[[TelemetryPatch], None], *, raw_receive=None) -> None:
+def stream_telemetry(
+    access: BrokerAccess, serial: str, cancelled: MqttCancellation, receive: Callable[[TelemetryPatch], None], *,
+    raw_receive=None, operation: str | None = None,
+) -> None:
     from paho.mqtt import client as mqtt
 
     if not valid_topic_segment(serial):
         raise MqttError("invalid_device_topic")
     if cancelled.is_set():
         return
+    operation = operation or uuid4().hex[:12]
     topic = f"/open/{access.account}/{serial}/quota"
     failure = None
     subscribed = False
 
     def connected(client, userdata, flags, reason, properties):
         nonlocal failure
+        if cancelled.is_set():
+            return
+        event("mqtt_connack_received", operation=operation, reason_code=reason.value, reason_text=reason.getName(),
+              accepted=not reason.is_failure)
         if reason.is_failure:
-            failure = "connection_rejected"
-        elif not cancelled.is_set() and client.subscribe(topic, qos=0)[0] != mqtt.MQTT_ERR_SUCCESS:
+            failure = "broker_auth_rejected" if reason.value in (134, 135) else "connection_rejected"
+        elif client.subscribe(topic, qos=0)[0] != mqtt.MQTT_ERR_SUCCESS:
             failure = "subscription_failed"
 
     def acknowledged(client, userdata, mid, reasons, properties):
         nonlocal failure, subscribed
-        subscribed = len(reasons) == 1 and not reasons[0].is_failure
+        if cancelled.is_set():
+            return
+        reason = reasons[0] if len(reasons) == 1 else None
+        subscribed = reason is not None and not reason.is_failure
+        event("mqtt_suback_received", operation=operation, reason_code=reason.value if reason is not None else None,
+              reason_text=reason.getName() if reason is not None else None, accepted=subscribed)
         if not subscribed:
             failure = "subscription_rejected"
 
@@ -132,7 +147,8 @@ def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellat
             if patch.requested:
                 receive(patch)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv311, reconnect_on_failure=False)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"EcoFlowMonitor-{access.account}",
+                         protocol=mqtt.MQTTv311, reconnect_on_failure=False)
     client.connect_timeout = 5.0
     client.tls_set_context(ssl.create_default_context())
     client.username_pw_set(access.account, access.password)
@@ -140,6 +156,9 @@ def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellat
     client.on_subscribe = acknowledged
     client.on_message = message
     try:
+        if cancelled.is_set():
+            return
+        event("mqtt_connect_started", operation=operation)
         if client.connect(access.host, access.port, keepalive=30) != mqtt.MQTT_ERR_SUCCESS:
             raise MqttError("connection_failed")
         with cancelled.wakeup_socket() as wakeup:

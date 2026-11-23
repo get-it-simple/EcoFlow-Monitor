@@ -597,6 +597,7 @@ class Controller(QObject):
         settings, cancelled = self.settings, self._credential_cancelled
         session = self._mqtt_session = MqttSession(settings.serial)
         catalog, profiles = self.catalog, self.profile_catalog
+        event("mqtt_setup_started", operation=session.operation)
 
         def operation():
             credentials = self._read_credentials(settings, cancelled)
@@ -652,7 +653,7 @@ class Controller(QObject):
         if access is None:
             self._fallback_mqtt(failure, retry=failure is not None)
             return
-        session.deadline = self.clock() + 20
+        session.deadline = self.clock() + 120
 
         def receive(patch):
             if session.offer(patch, time.time(), self.clock()):
@@ -667,8 +668,10 @@ class Controller(QObject):
             )
 
         def operation():
-            options = {"raw_receive": raw_received} if self._mqtt_stream is stream_telemetry else {}
-            return self._mqtt_stream(access, session.serial, session.cancelled, receive, **options)
+            if self._mqtt_stream is stream_telemetry:
+                return stream_telemetry(access, session.serial, session.cancelled, receive,
+                                        raw_receive=raw_received, operation=session.operation)
+            return self._mqtt_stream(access, session.serial, session.cancelled, receive)
 
         worker = Task(kind, self._generation, operation, session.cancelled)
         worker.mqtt_session = session
@@ -699,7 +702,7 @@ class Controller(QObject):
             self.polling.start_push()
             self._resume_fields = set()
             self.metadata.sampler(self.settings.serial).previous = None
-            event("telemetry_source_changed", source="mqtt")
+            event("telemetry_source_changed", operation=session.operation, source="mqtt")
         self.polling.receive(pending)
         reports = {}
         for key, reading in pending.items():
@@ -734,6 +737,7 @@ class Controller(QObject):
         self._mqtt_fallback = False
 
     def _fallback_mqtt(self, error, *, retry=True):
+        session = self._mqtt_session
         was_using_https = self._mqtt_fallback
         self._stop_mqtt()
         self._mqtt_fallback = True
@@ -746,7 +750,8 @@ class Controller(QObject):
             self._next_api = 0
             self._api_pending = True
         reason = str(error) if isinstance(error, MqttError) else type(error).__name__ if error is not None else "profile_unavailable"
-        event("mqtt_fallback", reason=reason)
+        event("mqtt_fallback", operation=session.operation if session is not None else None, reason=reason,
+              retry_in_seconds=delay if retry else None)
         self.changed.emit()
 
     def _check_mqtt(self, now):

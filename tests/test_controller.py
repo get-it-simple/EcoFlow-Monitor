@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 import queue
 import threading
 import time
@@ -10,6 +11,7 @@ from qt_helpers import wait_until as wait_for_condition
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.adapters.ecoflow_mqtt import MqttError, decode_report
 from ecoflow_monitor.controller import Controller
+from ecoflow_monitor.diagnostics import DiagnosticLog
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.integrations import IntegrationRule
 from ecoflow_monitor.adapters.integrations import IntegrationObservation, TransitionResult
@@ -100,8 +102,8 @@ def mqtt_monitor(controller, request):
                 report = reports.get(timeout=0.02)
             except queue.Empty:
                 continue
-            if report is None:
-                raise MqttError("stream_disconnected")
+            if isinstance(report, MqttError):
+                raise report
             receive(decode_report(report))
 
     controller.client_factory = lambda credentials: EcoFlowClient(credentials, httpx.MockTransport(handle))
@@ -115,6 +117,7 @@ def test_mqtt_push_stops_polling_and_recovers_after_https_fallback(controller, m
     controller.refresh()
     wait_until(qapp, lambda: len(streams) == 1)
     assert controller.telemetry_source == "waiting_mqtt"
+    now[0] += 119
     reports, _, _ = streams[0]
     reports.put(b'{"cmsBattSoc":70,"powInSumW":0}')
     wait_until(qapp, lambda: "battery_level" in controller._mqtt_session.readings)
@@ -131,7 +134,7 @@ def test_mqtt_push_stops_polling_and_recovers_after_https_fallback(controller, m
     controller.tick()
     assert requests == ["list", "certification"]
 
-    reports.put(None)
+    reports.put(MqttError("stream_disconnected"))
     wait_until(qapp, lambda: controller.telemetry_source == "https_fallback" and controller.telemetry.soc_pct == 40)
     assert requests.count("quota") == 1
     now[0] += 30
@@ -149,11 +152,55 @@ def test_mqtt_push_stops_polling_and_recovers_after_https_fallback(controller, m
     assert requests.count("certification") == 2 and requests.count("quota") == 2
 
 
+@pytest.mark.parametrize("reason", ["broker_auth_rejected", "first_report_timeout"])
+def test_mqtt_fallback_logs_the_attempt_and_correlates_recovery(controller, mqtt_monitor, qapp, tmp_path, reason):
+    now, requests, streams, _, _ = mqtt_monitor
+    path = tmp_path / "mqtt.log"
+    with DiagnosticLog(path) as log:
+        log.configure("normal")
+        controller.refresh()
+        wait_until(qapp, lambda: len(streams) == 1)
+        if reason == "first_report_timeout":
+            now[0] += 120
+            controller.tick()
+        else:
+            streams[0][0].put(MqttError(reason))
+        wait_until(qapp, lambda: controller.telemetry_source == "https_fallback" and controller.fresh)
+        assert controller.telemetry.soc_pct == 40
+
+        now[0] += 30
+        controller.tick()
+        wait_until(qapp, lambda: len(streams) == 2)
+        streams[1][0].put(b'{"cmsBattSoc":75,"powInSumW":0,"powOutSumW":65}')
+        wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+        assert controller.fresh and controller.telemetry.soc_pct == 75
+        wait_until(qapp, lambda: "api" not in controller._active)
+        quota_requests = requests.count("quota")
+        now[0] += 31
+        controller.tick()
+        assert "api" not in controller._active and requests.count("quota") == quota_requests
+        log.flush()
+
+    names = {"mqtt_setup_started", "mqtt_fallback", "telemetry_source_changed"}
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    first, fallback, second, active = [record for record in records if record["event"] in names]
+    assert [record["event"] for record in (first, fallback, second, active)] == [
+        "mqtt_setup_started", "mqtt_fallback", "mqtt_setup_started", "telemetry_source_changed",
+    ]
+    first_operation, second_operation = first["data"]["operation"], second["data"]["operation"]
+    assert first_operation and second_operation and first_operation != second_operation
+    assert fallback["data"] == {"operation": first_operation, "reason": reason, "retry_in_seconds": 30}
+    assert active["data"] == {"operation": second_operation, "source": "mqtt"}
+
+
 def test_mqtt_timeout_staleness_and_pause_reject_old_session_reports(controller, mqtt_monitor, qapp):
     now, requests, streams, _, _ = mqtt_monitor
     controller.refresh()
     wait_until(qapp, lambda: len(streams) == 1)
-    now[0] += 20
+    now[0] += 119
+    controller.tick()
+    assert controller.telemetry_source == "waiting_mqtt" and not streams[0][1].is_set()
+    now[0] += 1
     controller.tick()
     wait_until(qapp, lambda: controller.telemetry is not None)
     assert controller.telemetry_source == "https_fallback" and streams[0][1].is_set()
