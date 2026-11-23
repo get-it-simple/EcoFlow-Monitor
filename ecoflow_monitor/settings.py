@@ -109,8 +109,38 @@ class WidgetPreferences:
 
 
 @dataclass(frozen=True)
+class ExportPreferences:
+    enabled: bool = False
+    port: int = 9469
+    mode: str = "updates"
+    interval_seconds: int = 30
+    raw: bool = False
+    commands: bool = False
+    show_serial: bool = False
+    show_private: bool = False
+
+    def validate(self) -> None:
+        switches = (self.enabled, self.raw, self.commands, self.show_serial, self.show_private)
+        if any(type(value) is not bool for value in switches):
+            raise ValueError("export_invalid")
+        if type(self.port) is not int or not 1 <= self.port <= 65535:
+            raise ValueError("export_invalid")
+        if self.mode not in ("updates", "interval") or type(self.interval_seconds) is not int or not 1 <= self.interval_seconds <= 3600:
+            raise ValueError("export_invalid")
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict) or set(data) - cls.__dataclass_fields__.keys():
+            raise ValueError("export_invalid")
+        settings = cls(**data)
+        settings.validate()
+        return settings
+
+
+@dataclass(frozen=True)
 class AppSettings:
     polling: PollingPreferences = field(default_factory=PollingPreferences)
+    telemetry_export: ExportPreferences = field(default_factory=ExportPreferences)
     serial: str = ""
     credential_ref: str = field(default_factory=lambda: "EcoFlowMonitor/" + uuid.uuid4().hex)
     credential_source: str = "windows"
@@ -157,6 +187,9 @@ class AppSettings:
     telemetry_transport: str = "mqtt_with_https_fallback"
 
     def validate(self) -> None:
+        if not isinstance(self.telemetry_export, ExportPreferences):
+            raise ValueError("export_invalid")
+        self.telemetry_export.validate()
         if any(type(value) is not bool for value in (self.start_with_windows, self.ac_collapsed, self.other_collapsed)):
             raise ValueError("Invalid startup or disclosure preference")
         if type(self.custom_device_profiles) is not bool or not isinstance(self.device_profile_assignments, tuple):
@@ -247,6 +280,7 @@ class AppSettings:
             "hotkeys": [asdict(binding) for binding in self.hotkeys],
             "language": self.language,
             "logging": {"mode": self.logging_mode},
+            "telemetry_export": asdict(self.telemetry_export),
             "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover},
             "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "hidden_metrics": list(self.mini_hidden_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
@@ -300,6 +334,7 @@ class AppSettings:
             ac_collapsed=boolean(monitoring, "ac_collapsed", False),
             other_collapsed=boolean(monitoring, "other_collapsed", False),
             polling=PollingPreferences.from_dict(eco.get("polling", {})),
+            telemetry_export=ExportPreferences.from_dict(data.get("telemetry_export", {})),
             telemetry_transport=string(eco, "telemetry_transport", defaults.telemetry_transport),
             widget=WidgetPreferences.from_dict(data.get("widget", {})),
             serial=string(eco, "serial"), credential_ref=string(eco, "credential_ref", defaults.credential_ref),

@@ -122,10 +122,11 @@ class EcoFlowClient:
         self._transport = transport
         self.catalog = None
         self.diagnostic_capture = None
+        self.raw_telemetry = None
         self.cancelled = None
         self.profile = baseline_profile()
 
-    def _request(self, method: str, path: str, parameters: dict) -> Any:
+    def _request(self, method: str, path: str, parameters: dict, *, telemetry=False) -> Any:
         if self.cancelled is not None and self.cancelled.is_set():
             raise ActivityCancelled()
         operation = uuid.uuid4().hex[:12]
@@ -156,6 +157,10 @@ class EcoFlowClient:
         except (ValueError, RecursionError):
             payload = None
         hidden = (*hidden, headers["sign"], headers["nonce"])
+        if (telemetry and self.raw_telemetry is not None and 200 <= response.status_code < 300
+                and isinstance(payload, dict) and str(payload.get("code")) == "0"
+                and len(response.content) <= 65536 and (self.cancelled is None or not self.cancelled.is_set())):
+            self.raw_telemetry(payload, (self._credentials.access_key, self._credentials.secret_key, headers["sign"], headers["nonce"]))
         if path != MQTT_CERTIFICATION:
             event("api_response", level=logging.DEBUG, sensitive=hidden, operation=operation,
                   http_status=response.status_code, elapsed_ms=round((time.monotonic() - started) * 1000, 2),
@@ -205,7 +210,7 @@ class EcoFlowClient:
             parameters["params"] = {"quotas": list(profile.quotas(sensors))}
         event("device_profile_read", profile_id=profile.id, profile_source=profile.source,
               profile_revision=profile.revision, endpoint=profile.endpoint, method=profile.method)
-        return self._request(profile.method, profile.endpoint, parameters)
+        return self._request(profile.method, profile.endpoint, parameters, telemetry=True)
 
     def diagnose(self, serial: str, capture) -> tuple[str, ...]:
         self.diagnostic_capture = capture

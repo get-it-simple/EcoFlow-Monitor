@@ -24,12 +24,14 @@ from ecoflow_monitor.credential_cache import SessionCredentialCache
 from ecoflow_monitor.device_metadata import DeviceMetadataStore
 from ecoflow_monitor.device_profiles import BASELINE, builtin_catalog, load_catalog
 from ecoflow_monitor.domain import AutomationGate, ConnectionState, charge_hours, resolve_limit, runtime_hours
-from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile, reaction_value_keys
 from ecoflow_monitor.integration_state import IntegrationStateStore, ProcessIdentity, command_fingerprint
 from ecoflow_monitor.mqtt_session import MqttSession
 from ecoflow_monitor.settings import AppSettings, SettingsError, SettingsStore
 from ecoflow_monitor.polling import CORE, DASHBOARD_SENSORS, SENSOR_FIELDS, PollingState, TelemetryPatch, dependencies
 from ecoflow_monitor.system_activity import ActivityCancelled, SystemActivity
+from ecoflow_monitor.telemetry_export import TelemetryExport
+from ecoflow_monitor.telemetry_values import app_readings, value_dependencies
 
 
 logger = logging.getLogger(__name__)
@@ -139,6 +141,9 @@ class Controller(QObject):
             self.settings = AppSettings()
             self.notice = str(error)
         self.diagnostics = diagnostics
+        self.telemetry_export = TelemetryExport(self.settings.telemetry_export, clock)
+        self._export_deadline = math.inf
+        self._last_export = None
         self.profile_catalog = None if self.settings.custom_device_profiles else builtin_catalog()
         if self.diagnostics is not None:
             self.diagnostics.configure(self.settings.logging_mode)
@@ -191,6 +196,7 @@ class Controller(QObject):
         self._activity_timer = QTimer(self)
         self._activity_timer.setSingleShot(True)
         self._activity_timer.timeout.connect(self._apply_system_activity)
+        self.changed.connect(self._update_export)
 
     def set_system_activity(self, activity: SystemActivity) -> None:
         if self._stopped or activity == self.system_activity:
@@ -199,6 +205,10 @@ class Controller(QObject):
         self.system_activity = activity
         if activity.paused and not was_paused:
             self._activity_epoch += 1
+            if self.telemetry_export.running:
+                self.telemetry_export.stop()
+                self._last_export = None
+                self._export_deadline = math.inf
             if self._mqtt_session is not None:
                 self._reset_mqtt()
             self._credential_cancelled.set()
@@ -225,6 +235,7 @@ class Controller(QObject):
         if not self.system_activity.paused:
             self._credential_cancelled = threading.Event()
             self._work_cancelled = threading.Event()
+            self._configure_export()
             self._update_demand()
             self.polling.resume(self.clock())
             if self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}:
@@ -285,6 +296,11 @@ class Controller(QObject):
         required = set(visible)
         for module in self.settings.integrations:
             required.update(self._automation_sensors(module))
+            if module.enabled:
+                required.update(sensor for key in module.app_value_keys() for sensor in value_dependencies(key))
+        if self.telemetry_export.running and self.settings.serial:
+            profile = self.device_profile
+            required.update(dict(profile.fields) if profile is not None else CORE)
         self.polling.supplemental = CORE | {"charging_state", "device_discharge_minutes", "device_charge_minutes"} if required else frozenset()
         if self.polling.set_demand(visible, required, self.clock()) and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE, ConnectionState.UNSUPPORTED}:
             self._next_api = self.polling.next_due(self.clock())
@@ -390,6 +406,7 @@ class Controller(QObject):
     def start(self, authorized=True) -> None:
         self._started = True
         self.access_allowed = authorized
+        self._configure_export()
         event("application_started", version=__version__)
         try:
             self.credential_cache.initialize()
@@ -399,6 +416,36 @@ class Controller(QObject):
             self._next_api = float("inf")
             self.changed.emit()
         self.tick()
+
+    def _configure_export(self, reset=False):
+        if self._started and (self.settings.telemetry_export.enabled or self.telemetry_export.running or self.telemetry_export.error):
+            self.telemetry_export.configure(
+                self.settings.telemetry_export, active=not self._stopped and not self.system_activity.paused,
+                serial=self.settings.serial, device_name=self.device_name if self.settings.serial and self.access_allowed else "",
+                reset=reset,
+            )
+        self._last_export = None
+        self._export_deadline = math.inf
+
+    def _update_export(self):
+        if not self.telemetry_export.running:
+            return
+        now = self.clock()
+        values, deadlines = app_readings(self)
+        state = self.connection.value
+        source = self.telemetry_source
+        device_name = self.device_name if self.settings.serial and self.access_allowed else ""
+        previous = self._last_export
+        publication = (self.telemetry, values, deadlines, state, source, device_name, self.access_allowed)
+        preferences = self.settings.telemetry_export
+        if previous is None or previous[-1] != self.access_allowed or (preferences.mode == "updates" and (
+            previous[0] is not self.telemetry or previous[1:] != publication[1:]
+        )) or now >= self._export_deadline:
+            self.telemetry_export.publish(state, source, values, deadlines, device_name, authorized=self.access_allowed)
+            self._last_export = publication
+            self._export_deadline = now + preferences.interval_seconds if preferences.mode == "interval" else math.inf
+        elif preferences.mode == "interval":
+            self.telemetry_export.invalidate(values, state)
 
     def wake(self):
         if self._started and not self._stopped and not self.system_activity.paused and self._timer.remainingTime() != 0:
@@ -481,6 +528,17 @@ class Controller(QObject):
         polling = self.polling
         catalog = self.catalog
         profile_catalog = self.profile_catalog
+        telemetry_epoch = self._telemetry_epoch
+        generation = self._generation
+
+        def raw_received(payload, secrets):
+            self.telemetry_export.emit(
+                "raw", {"source": "https", "payload": payload}, secrets=secrets,
+                current=lambda: not cancelled.is_set() and self.access_allowed
+                and generation == self._generation and self.settings.serial == serial
+                and telemetry_epoch == self._telemetry_epoch,
+            )
+
         def select_quotas():
             if cancelled.is_set():
                 return ()
@@ -495,6 +553,7 @@ class Controller(QObject):
             try:
                 client = self._client(credentials, cancelled, settings, profile_catalog)
                 if isinstance(client, EcoFlowClient):
+                    client.raw_telemetry = raw_received
                     self._resolve_client_device(client, settings, catalog)
                 if hasattr(client, "read_quotas"):
                     return ("telemetry", client.read_quotas(serial, select_quotas, verify_model=not polling.verified), getattr(client, "catalog", None), getattr(client, "profile_catalog", None))
@@ -545,18 +604,18 @@ class Controller(QObject):
                 raise CredentialError("credentials_required")
             client = self._client(credentials, cancelled, settings, profiles)
             if not isinstance(client, EcoFlowClient):
-                return None, None, None, None
+                return None, None, None, None, ()
             device = self._resolve_client_device(client, settings, catalog)
             if (device is None or client.profile is None or client.profile.reference != BASELINE
                     or not valid_topic_segment(settings.serial)):
-                return client.catalog, client.profile_catalog, None, None
+                return client.catalog, client.profile_catalog, None, None, ()
             if session.cancelled.is_set():
                 raise ActivityCancelled()
             try:
                 access = BrokerAccess.from_response(client.mqtt_certification())
             except (EcoFlowError, MqttError) as error:
-                return client.catalog, client.profile_catalog, None, error
-            return client.catalog, client.profile_catalog, access, None
+                return client.catalog, client.profile_catalog, None, error, ()
+            return client.catalog, client.profile_catalog, access, None, (credentials.access_key, credentials.secret_key)
 
         if self.telemetry is None:
             self.connection = ConnectionState.CONNECTING
@@ -588,7 +647,7 @@ class Controller(QObject):
         if error is not None:
             self._fallback_mqtt(error)
             return
-        catalog, profiles, access, failure = result
+        catalog, profiles, access, failure, secrets = result
         self._remember_catalog(catalog, profiles)
         if access is None:
             self._fallback_mqtt(failure, retry=failure is not None)
@@ -600,7 +659,18 @@ class Controller(QObject):
                 self.mqtt_readings_ready.emit(session)
 
         kind = f"mqtt:{id(session)}"
-        worker = Task(kind, self._generation, lambda: self._mqtt_stream(access, session.serial, session.cancelled, receive), session.cancelled)
+        def raw_received(payload):
+            self.telemetry_export.emit(
+                "raw", {"source": "mqtt", "payload": payload}, secrets=(*secrets, access.account, access.password),
+                current=lambda: not session.cancelled.is_set() and self.access_allowed and session is self._mqtt_session
+                and session.serial == self.settings.serial,
+            )
+
+        def operation():
+            options = {"raw_receive": raw_received} if self._mqtt_stream is stream_telemetry else {}
+            return self._mqtt_stream(access, session.serial, session.cancelled, receive, **options)
+
+        worker = Task(kind, self._generation, operation, session.cancelled)
         worker.mqtt_session = session
         worker.signals.finished.connect(self._completed, Qt.ConnectionType.QueuedConnection)
         self._active[kind] = worker
@@ -872,12 +942,16 @@ class Controller(QObject):
         if self.diagnostics is not None:
             self.diagnostics.configure(settings.logging_mode)
         event("settings_saved")
-        if not profile_changed and credentials is None and replace(previous, logging_mode=settings.logging_mode, polling=settings.polling) == settings:
+        if not profile_changed and credentials is None and replace(previous, logging_mode=settings.logging_mode,
+                polling=settings.polling, telemetry_export=settings.telemetry_export) == settings:
+            if previous.telemetry_export != settings.telemetry_export:
+                self._configure_export()
             self._update_demand()
             if previous.polling != settings.polling and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.API_ERROR, ConnectionState.NETWORK_UNAVAILABLE, ConnectionState.DEVICE_OFFLINE, ConnectionState.UNSUPPORTED}:
                 self._next_api = self.polling.next_due(self.clock())
             self.preferences_changed.emit()
             self.changed.emit()
+            self.wake()
             return
         credential_fields = ("serial", "credential_ref", "credential_source", "onepassword_access_ref", "onepassword_secret_ref")
         device_changed = profile_changed or any(getattr(previous, name) != getattr(settings, name) for name in credential_fields)
@@ -898,6 +972,9 @@ class Controller(QObject):
             self.telemetry = None
             self.polling = PollingState(settings.polling)
             self.connection = ConnectionState.CONNECTING if settings.serial else ConnectionState.UNCONFIGURED
+        if (device_changed or previous.telemetry_export != settings.telemetry_export
+                or previous.telemetry_transport != settings.telemetry_transport):
+            self._configure_export(reset=device_changed or previous.telemetry_transport != settings.telemetry_transport)
         if profile_changed:
             if settings.serial:
                 self.metadata.sampler(settings.serial).previous = None
@@ -1028,6 +1105,16 @@ class Controller(QObject):
             return
         previous_id = state.active_profile or state.transition_from
         previous = next((profile for profile in module.profiles if profile.id == previous_id), None)
+        keys = reaction_value_keys(target.activation, *((previous.deactivation,) if previous is not None else ()))
+        values = {}
+        if keys:
+            readings, _ = app_readings(self)
+            if not keys <= readings.keys():
+                if not automatic:
+                    self.notice = "integration_values_unavailable"
+                    self.changed.emit()
+                return
+            values = {key: readings[key] for key in keys}
         state.transition_from = previous_id
         generation = self._generation
         activity_epoch = self._activity_epoch
@@ -1038,6 +1125,19 @@ class Controller(QObject):
         def current():
             return (not self._stopped and not self.system_activity.paused and generation == self._generation
                     and activity_epoch == self._activity_epoch and self.module(integration_id).enabled)
+
+        def report(profile, phase, step, result):
+            self.telemetry_export.emit("commands", {
+                "dispatch_id": dispatch_id, "integration_id": module.id, "profile_id": profile,
+                "phase": phase, "step": step, "trigger": "auto" if automatic else "manual",
+                "event": "started" if result is None else "finished",
+                **({} if result is None else {"success": result.success, "error": result.error or None,
+                                             "exit_code": result.exit_code, "winerror": result.winerror}),
+            }, current=current)
+
+        log_commands = self.telemetry_export.running and self.settings.telemetry_export.commands
+        dispatch_id = uuid.uuid4().hex if log_commands else ""
+
         def operation(target_profile: IntegrationProfile = target):
             if not current():
                 return profile_id, automatic, TransitionResult(False, error="integration_cancelled")
@@ -1048,7 +1148,10 @@ class Controller(QObject):
                 return profile_id, automatic, TransitionResult(False, error="integration_command_failed")
             if revision is None or not current():
                 return profile_id, automatic, TransitionResult(False, error="integration_cancelled")
-            outcome = self.integration_adapter.transition(module, previous, target_profile, current)
+            options = {"values": values} if values else {}
+            if log_commands and isinstance(self.integration_adapter, IntegrationAdapter):
+                options["report"] = report
+            outcome = self.integration_adapter.transition(module, previous, target_profile, current, **options)
             if outcome.success:
                 self.integration_cache.finish(module, revision, profile_id, outcome.process)
             return profile_id, automatic, outcome
@@ -1130,7 +1233,8 @@ class Controller(QObject):
         stale_due = self.polling.next_stale(self.polling.required, now)
         if not self.polling.samples and self.telemetry is not None and self.fresh:
             stale_due = self.telemetry.received_monotonic + self.settings.polling.primary.stale_after_seconds
-        deadline = min(automation_due, mqtt_due, scan_due, cache_due, self._api_deadline(), stale_due)
+        self._update_export()
+        deadline = min(automation_due, mqtt_due, scan_due, cache_due, self._api_deadline(), stale_due, self._export_deadline)
         if deadline < math.inf:
             delay = min(2_147_483_647, max(0, deadline - self.clock()) * 1000)
             self._timer.start(math.ceil(delay))
@@ -1413,7 +1517,7 @@ class Controller(QObject):
             self.notice = "profile_failed"
             if not self.system_activity.paused and outcome.winerror in (5, 740):
                 self.elevation_needed.emit(integration_id)
-        elif self.notice in {"profile_failed", "profile_unavailable"}:
+        elif self.notice in {"profile_failed", "profile_unavailable", "integration_values_unavailable"}:
             self.notice = ""
         state.next_scan = 0
 
@@ -1439,6 +1543,8 @@ class Controller(QObject):
             return
         event("application_stopping")
         self._stopped = True
+        if self.telemetry_export.running:
+            self.telemetry_export.stop()
         if self._processes is not None:
             self._processes.stop()
         self._stop_mqtt()

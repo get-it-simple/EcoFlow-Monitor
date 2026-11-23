@@ -93,7 +93,8 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   loads, approximate runtime without input power, and estimated time to the charge
   limit while charging (based on input minus output power).
 - Optional CLI integrations with their own profiles, activation/deactivation
-  actions, ordered rules, and global hotkeys.
+  actions, ordered rules, global hotkeys, and Monitor readings as command arguments.
+- Optional [local telemetry export and Prometheus adapter](scripts/prometheus_bridge.md).
 - Automatic profile selection using running applications, input power, and
   battery charge, with independent Auto controls for each integration.
 - Independent interface and widget scale, adaptive metric visibility, and widget background opacity.

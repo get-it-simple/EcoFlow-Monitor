@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLab
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, Reaction, template_tokens
+from ecoflow_monitor.telemetry_values import VALUE_UNITS
 from ecoflow_monitor.ui.common import action, clamp_window, hint, profile_tooltip
 from ecoflow_monitor.ui.sections import CollapsibleSection
 from ecoflow_monitor.ui.components import ActionLayout, ContentTabs, DataTable, DesignDialog, FormLayout as QFormLayout, NumberField, SelectField as QComboBox, SettingRow, Switch, TextArea
@@ -174,7 +175,7 @@ class ProfileDialog(DesignDialog):
             preview.setTextFormat(Qt.TextFormat.PlainText)
             def update_preview(field=editor, output=preview):
                 try:
-                    output.setText("\n".join(subprocess.list2cmdline(module.expand(line, module.executable or t("integration_app_token"))) for line in field.toPlainText().splitlines() if line.strip()))
+                    output.setText("\n".join(subprocess.list2cmdline(module.expand(line, module.executable or t("integration_app_token"), preview=True)) for line in field.toPlainText().splitlines() if line.strip()))
                 except ValueError:
                     output.setText(t("invalid_template"))
             editor.textChanged.connect(update_preview)
@@ -219,6 +220,17 @@ class ProfileDialog(DesignDialog):
         for label, token in ((t("integration_app_token"), "{app}"), *((command.label, "{cli:" + command.id + "}") for command in self.module.mapping)):
             item = menu.addAction(label + "  " + token)
             item.triggered.connect(lambda checked=False, value=token: field.insertPlainText(value))
+        if self.module.driver == "cli":
+            values = menu.addMenu(t("integration_app_values"))
+            anderson = values.addMenu(t("anderson"))
+            for key in VALUE_UNITS:
+                token = "{value:" + key + "}"
+                if key.startswith("anderson_"):
+                    item = anderson.addAction(t("anderson") + " " + key.removeprefix("anderson_"))
+                else:
+                    item = values.addAction(t("integration_capacity_wh") if key == "capacity_wh" else t(key))
+                item.setToolTip(token)
+                item.triggered.connect(lambda checked=False, value=token: field.insertPlainText(value))
         menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
         menu.deleteLater()
         field.setFocus()

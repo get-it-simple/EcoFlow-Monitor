@@ -8,12 +8,13 @@ import psutil
 
 from ecoflow_monitor.adapters.executables import local_executable
 from ecoflow_monitor.domain import normalized_executable
-from ecoflow_monitor.integrations import IntegrationDefinition, IntegrationProfile
+from ecoflow_monitor.integrations import ApplicationValueUnavailable, IntegrationDefinition, IntegrationProfile, template_value_keys
 from ecoflow_monitor.integration_state import ProcessIdentity
 from ecoflow_monitor.system_activity import ActivityCancelled
 
 
 logger = logging.getLogger(__name__)
+WINDOWS_COMMAND_ERRORS = {5: "integration_permission_denied", 740: "integration_elevation_required"}
 
 
 @dataclass(frozen=True)
@@ -187,57 +188,78 @@ class IntegrationAdapter:
         return IntegrationObservation(state, running, path)
 
     def transition(self, module: IntegrationDefinition, previous: IntegrationProfile | None,
-                   target: IntegrationProfile, current: Callable[[], bool]) -> TransitionResult:
+                   target: IntegrationProfile, current: Callable[[], bool], *, values=None, report=None) -> TransitionResult:
+        commands = []
+        for phase, profile in (("deactivation", previous), ("activation", target)):
+            if profile is None or not (reaction := getattr(profile, phase)).enabled:
+                continue
+            for index, template in enumerate(reaction.commands, 1):
+                try:
+                    arguments = module.expand(template, "", values=values)[1:]
+                except ApplicationValueUnavailable:
+                    return TransitionResult(False, 0, phase, index, "integration_values_unavailable")
+                except ValueError:
+                    return TransitionResult(False, 0, phase, index, "integration_command_failed")
+                commands.append((phase, profile.id, index, template, arguments))
         completed = 0
         process = None
         last_process = None
         observed_target = False
-        for phase, reaction in (("deactivation", previous.deactivation if previous else None), ("activation", target.activation)):
-            if reaction is None or not reaction.enabled:
-                continue
-            for index, template in enumerate(reaction.commands, 1):
+        for phase, profile_id, index, template, arguments in commands:
+            if not current():
+                return TransitionResult(False, completed, phase, index, "integration_cancelled")
+            try:
+                observation = self.inspect(module)
+                if not observation.ready:
+                    return TransitionResult(False, completed, phase, index, observation.detail or observation.availability)
+                if observed_target and last_process is not None and last_process != observation.process:
+                    return TransitionResult(False, completed, phase, index, "integration_cancelled")
+                if not observed_target:
+                    process = observation.process
+                elif process != observation.process:
+                    process = None
+                last_process = observation.process
+                observed_target = True
                 if not current():
                     return TransitionResult(False, completed, phase, index, "integration_cancelled")
-                try:
-                    observation = self.inspect(module)
-                    if not observation.ready:
-                        return TransitionResult(False, completed, phase, index, observation.detail or observation.availability)
-                    if observed_target and last_process is not None and last_process != observation.process:
-                        return TransitionResult(False, completed, phase, index, "integration_cancelled")
-                    if not observed_target:
-                        process = observation.process
-                    elif process != observation.process:
-                        process = None
-                    last_process = observation.process
-                    observed_target = True
-                    args = module.expand(template, observation.executable)
-                    if not current():
-                        return TransitionResult(False, completed, phase, index, "integration_cancelled")
-                    session = self.sessions.get(module.id)
-                    if session is not None:
-                        if not session.matches(module):
-                            return TransitionResult(False, completed, phase, index, "integration_helper_failed")
-                        response = session.run(args)
-                        if response["error"]:
-                            return TransitionResult(False, completed, phase, index, response["error"],
-                                                    exit_code=response["exit_code"], winerror=response["winerror"])
-                        completed += 1
-                        continue
-                    result = subprocess.run(args, shell=False, timeout=5,
-                                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.NORMAL_PRIORITY_CLASS,
-                                            cwd=str(Path(observation.executable).parent), check=False,
-                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if result.returncode != 0:
-                        return TransitionResult(False, completed, phase, index, "integration_command_failed", exit_code=result.returncode)
-                except subprocess.TimeoutExpired:
-                    return TransitionResult(False, completed, phase, index, "integration_timeout")
-                except OSError as error:
-                    reason = {5: "integration_permission_denied", 740: "integration_elevation_required"}.get(getattr(error, "winerror", None), "integration_command_failed")
-                    return TransitionResult(False, completed, phase, index, reason, winerror=getattr(error, "winerror", None))
-                except ValueError:
-                    return TransitionResult(False, completed, phase, index, "integration_command_failed")
-                except Exception as error:
-                    logger.error("Integration %s step %s failed (%s)", phase, index, type(error).__name__)
-                    return TransitionResult(False, completed, phase, index, "integration_command_failed")
-                completed += 1
+                session = self.sessions.get(module.id)
+                if session is not None and not session.matches(module):
+                    return TransitionResult(False, completed, phase, index, "integration_helper_failed")
+                if report is not None:
+                    report(profile_id, phase, index, None)
+                result = self._run_command(session, (observation.executable, *arguments), template, values, phase, index, completed)
+                if report is not None:
+                    report(profile_id, phase, index, result)
+                if not result.success:
+                    return result
+            except OSError as error:
+                code = getattr(error, "winerror", None)
+                return TransitionResult(False, completed, phase, index, WINDOWS_COMMAND_ERRORS.get(code, "integration_command_failed"), winerror=code)
+            except Exception as error:
+                logger.error("Integration %s step %s failed (%s)", phase, index, type(error).__name__)
+                return TransitionResult(False, completed, phase, index, "integration_command_failed")
+            completed += 1
         return TransitionResult(True, completed, exit_code=0 if completed else None, process=process)
+
+    def _run_command(self, session, args, template, values, phase, index, completed):
+        try:
+            if session is not None:
+                keys = template_value_keys(template)
+                response = session.run(args, template=template, values={key: values[key] for key in keys}) if keys else session.run(args)
+                return TransitionResult(not response["error"], completed, phase, index, response["error"],
+                                        exit_code=response["exit_code"], winerror=response["winerror"])
+            result = subprocess.run(args, shell=False, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.NORMAL_PRIORITY_CLASS,
+                                    cwd=str(Path(args[0]).parent), check=False,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return TransitionResult(result.returncode == 0, completed, phase, index,
+                                    "" if result.returncode == 0 else "integration_command_failed", exit_code=result.returncode)
+        except subprocess.TimeoutExpired:
+            return TransitionResult(False, completed, phase, index, "integration_timeout")
+        except OSError as error:
+            code = getattr(error, "winerror", None)
+            reason = WINDOWS_COMMAND_ERRORS.get(code, "integration_command_failed")
+            return TransitionResult(False, completed, phase, index, reason, winerror=code)
+        except Exception as error:
+            logger.error("Integration %s step %s failed (%s)", phase, index, type(error).__name__)
+            return TransitionResult(False, completed, phase, index, "integration_command_failed")

@@ -5,10 +5,16 @@ import re
 from importlib.resources import files
 
 from ecoflow_monitor.domain import AutomationRule, Telemetry, select_rule
+from ecoflow_monitor.telemetry_values import VALUE_UNITS
 
 
 IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]+")
 CONDITIONS = frozenset({"application", "input", "soc"})
+VALUE_TOKEN = re.compile(r"(?P<option>--?[A-Za-z][A-Za-z0-9_-]*=)?\{value:(?P<key>[a-z0-9_]+)}")
+
+
+class ApplicationValueUnavailable(ValueError):
+    pass
 
 
 def identity(value: str) -> None:
@@ -56,7 +62,7 @@ class IntegrationRule:
         AutomationRule(self.id, 1, self.enabled, self.executable, self.input_condition, self.min_soc, self.max_soc).validate()
 
 
-def template_tokens(template: str) -> tuple[str, ...]:
+def template_tokens(template: str, *, app_values=False) -> tuple[str, ...]:
     if not isinstance(template, str) or not template.strip() or "\0" in template:
         raise ValueError("Invalid command template")
     tokens = []
@@ -103,9 +109,32 @@ def template_tokens(template: str) -> tuple[str, ...]:
         raise ValueError("Command must begin with {app}")
     for token in tokens[1:]:
         if "{" in token or "}" in token:
+            value = VALUE_TOKEN.fullmatch(token) if app_values else None
+            if value is not None and value["key"] in VALUE_UNITS:
+                continue
             if not re.fullmatch(r"\{cli:[a-zA-Z0-9_-]+}", token):
                 raise ValueError("Unknown command token")
     return tuple(tokens)
+
+
+def template_value_keys(template: str) -> frozenset[str]:
+    if "{value:" not in template:
+        return frozenset()
+    return frozenset(match["key"] for token in template_tokens(template, app_values=True)[1:]
+                     if (match := VALUE_TOKEN.fullmatch(token)) is not None)
+
+
+def reaction_value_keys(*reactions: Reaction) -> frozenset[str]:
+    return frozenset(key for reaction in reactions if reaction.enabled for template in reaction.commands
+                     for key in template_value_keys(template))
+
+
+def cli_value(value) -> str:
+    if type(value) in (bool, int):
+        return str(int(value))
+    if type(value) is float and math.isfinite(value):
+        return str(value)
+    raise ApplicationValueUnavailable("Unavailable application value")
 
 
 @dataclass(frozen=True)
@@ -161,7 +190,7 @@ class IntegrationDefinition:
                 if type(reaction.enabled) is not bool:
                     raise ValueError("Invalid reaction switch")
                 for template in reaction.commands:
-                    tokens = template_tokens(template)
+                    tokens = template_tokens(template, app_values=self.driver == "cli")
                     for token in tokens[1:]:
                         if token.startswith("{cli:") and token[5:-1] not in commands:
                             raise ValueError("Missing CLI mapping")
@@ -185,15 +214,22 @@ class IntegrationDefinition:
         if self.driver == "afterburner" and self.allow_launch:
             raise ValueError("Afterburner must already be running")
 
-    def expand(self, template: str, executable: str) -> tuple[str, ...]:
+    def app_value_keys(self) -> frozenset[str]:
+        return reaction_value_keys(*(reaction for profile in self.profiles for reaction in (profile.activation, profile.deactivation)))
+
+    def expand(self, template: str, executable: str, *, values=None, preview=False) -> tuple[str, ...]:
         mapping = {command.id: command.arguments for command in self.mapping}
         args = [executable]
-        for token in template_tokens(template)[1:]:
+        for token in template_tokens(template, app_values=self.driver == "cli")[1:]:
             if token.startswith("{cli:"):
                 try:
                     args.extend(mapping[token[5:-1]])
                 except KeyError:
                     raise ValueError("Missing CLI mapping") from None
+            elif (match := VALUE_TOKEN.fullmatch(token)) is not None and not preview:
+                if values is None or match["key"] not in values:
+                    raise ApplicationValueUnavailable("Unavailable application value")
+                args.append((match["option"] or "") + cli_value(values[match["key"]]))
             else:
                 args.append(token)
         return tuple(args)

@@ -15,7 +15,7 @@ from ecoflow_monitor.adapters.hotkeys import HotkeyError, validate_bindings
 from ecoflow_monitor.integrations import hotkey_actions, hotkey_label
 from ecoflow_monitor.ui.integrations import IntegrationsEditor
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.settings import AppSettings, HotkeyBinding, SettingsError
+from ecoflow_monitor.settings import AppSettings, ExportPreferences, HotkeyBinding, SettingsError
 from ecoflow_monitor.polling import PollingGroup, PollingPreferences
 from ecoflow_monitor.ui.common import action, effective_scale, hint, scaled_font
 from ecoflow_monitor.ui.rules import optional_percent
@@ -150,6 +150,8 @@ class SettingsWindow(QDialog):
         self.telemetry_source = hint("")
         layout.addWidget(self.telemetry_source)
         self.controller.changed.connect(self._refresh_telemetry_source)
+        self.export_section = self._export_section()
+        layout.addWidget(self.export_section)
         layout.addWidget(hint(t("connection_description")))
         self.credential_renewal = CredentialRenewalBanner(self.controller, self)
         layout.addWidget(self.credential_renewal)
@@ -269,6 +271,72 @@ class SettingsWindow(QDialog):
         self.log_status.setObjectName("form_error")
         layout.addWidget(self.log_status)
         layout.addStretch()
+
+    def _export_section(self):
+        section = CollapsibleSection(t("export_title"), self)
+        self.export_enabled = Switch()
+        self.export_enabled.setAccessibleName(t("export_enabled"))
+        section.content.addWidget(SettingRow(t("export_enabled"), self.export_enabled))
+        self.export_status = hint("")
+        section.content.addWidget(self.export_status)
+        self.controller.changed.connect(self._refresh_export_status)
+        self.export_controls = QWidget()
+        layout = QVBoxLayout(self.export_controls)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.export_mode = QComboBox()
+        self.export_mode.setAccessibleName(t("export_mode"))
+        self.export_mode.addItem(t("export_on_updates"), "updates")
+        self.export_mode.addItem(t("export_periodic"), "interval")
+        self.export_port, self.export_interval = NumberField(), NumberField()
+        for control, label, maximum in ((self.export_port, "export_port", 65535), (self.export_interval, "export_interval", 3600)):
+            control.setDecimals(0)
+            control.setRange(1, maximum)
+            control.setAccessibleName(t(label))
+        self.export_interval.setSuffix(" " + t("unit_seconds"))
+        layout.addWidget(SettingRow(t("export_port"), self.export_port))
+        layout.addWidget(SettingRow(t("export_mode"), self.export_mode))
+        layout.addWidget(SettingRow(t("export_interval"), self.export_interval))
+        self.export_switches = {}
+        for name in ("raw", "commands", "show_serial", "show_private"):
+            key = "export_" + name
+            control = Switch()
+            control.setAccessibleName(t(key))
+            layout.addWidget(SettingRow(t(key), control))
+            self.export_switches[name] = control
+        layout.addWidget(hint(t("export_privacy_hint")))
+        section.content.addWidget(self.export_controls)
+        self.export_enabled.toggled.connect(self.export_controls.setEnabled)
+        self.export_mode.currentIndexChanged.connect(lambda: self.export_interval.setEnabled(self.export_mode.currentData() == "interval"))
+        return section
+
+    def _refresh_export_status(self):
+        service = self.controller.telemetry_export
+        preferences = self.controller.settings.telemetry_export
+        if service.running:
+            status = t("export_running").format(port=preferences.port)
+        elif service.error:
+            status = t("export_port_error").format(port=preferences.port)
+        else:
+            status = t("export_paused" if preferences.enabled and self.controller.system_activity.paused else "export_off")
+        self.export_status.setText(status)
+
+    def _load_export_draft(self, settings):
+        self.export_enabled.setChecked(settings.enabled)
+        self.export_mode.setCurrentIndex(self.export_mode.findData(settings.mode))
+        self.export_controls.setEnabled(settings.enabled)
+        self.export_interval.setEnabled(settings.mode == "interval")
+        self.export_port.setValue(settings.port)
+        self.export_interval.setValue(settings.interval_seconds)
+        for name, control in self.export_switches.items():
+            control.setChecked(getattr(settings, name))
+        self._refresh_export_status()
+
+    def _export_preferences(self):
+        return ExportPreferences(
+            enabled=self.export_enabled.isChecked(), mode=self.export_mode.currentData(),
+            port=int(self.export_port.value()), interval_seconds=int(self.export_interval.value()),
+            **{name: control.isChecked() for name, control in self.export_switches.items()},
+        )
 
     def _selected_device_changed(self):
         serial = self.devices.currentData() if self.devices.currentIndex() >= 0 and self.devices.currentText() == self.devices.itemText(self.devices.currentIndex()) else self.devices.currentText().strip()
@@ -515,6 +583,7 @@ class SettingsWindow(QDialog):
         self.integrations_editor.load(settings.integrations)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
         self.logging_mode.setCurrentIndex(max(0, self.logging_mode.findData(settings.logging_mode)))
+        self._load_export_draft(settings.telemetry_export)
         self.telemetry_transport.setCurrentIndex(self.telemetry_transport.findData(settings.telemetry_transport))
         self._refresh_telemetry_source()
         for name, (interval, stale) in self.polling_fields.items():
@@ -709,6 +778,7 @@ class SettingsWindow(QDialog):
             integrations=tuple(merged),
             hotkeys=hotkeys, language=self.language.currentData(), scale=self.scale.value() / 100,
             logging_mode=self.logging_mode.currentData(),
+            telemetry_export=self._export_preferences(),
             telemetry_transport=self.telemetry_transport.currentData(),
             polling=PollingPreferences(**{name: PollingGroup(int(interval.value()), int(stale.value())) for name, (interval, stale) in self.polling_fields.items()}),
             animations=self.animations.isChecked(),

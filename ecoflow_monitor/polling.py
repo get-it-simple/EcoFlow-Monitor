@@ -243,6 +243,13 @@ class PollingState:
                          and sample.received_monotonic is not None)
             return min((deadline for deadline in deadlines if deadline > now), default=math.inf)
 
+    def fresh_until(self, keys) -> float:
+        with self._lock:
+            return min((sample.received_monotonic + getattr(self.preferences, sensor_group(key)).stale_after_seconds
+                        if (sample := self.samples.get(key)) is not None and sample.status == "valid"
+                        and sample.received_monotonic is not None else -math.inf
+                        for key in keys), default=math.inf)
+
     def presentation(self, keys, now: float) -> str:
         with self._lock:
             keys = frozenset(keys)

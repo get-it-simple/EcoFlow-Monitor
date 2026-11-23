@@ -87,7 +87,7 @@ def mqtt_profile():
     return replace(profile, fields=fields)
 
 
-def decode_report(payload: bytes) -> TelemetryPatch:
+def decode_report(payload: bytes, raw_receive=None) -> TelemetryPatch:
     if len(payload) > MAX_REPORT_BYTES:
         return TelemetryPatch((), ())
     try:
@@ -96,11 +96,13 @@ def decode_report(payload: bytes) -> TelemetryPatch:
         return TelemetryPatch((), ())
     if not isinstance(data, dict):
         return TelemetryPatch((), ())
+    if raw_receive is not None:
+        raw_receive(data)
     values, _, invalid = mqtt_profile().decode(data, SENSORS)
     return TelemetryPatch(tuple(key for key, _ in values) + invalid, values, invalid=invalid)
 
 
-def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellation, receive: Callable[[TelemetryPatch], None]) -> None:
+def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellation, receive: Callable[[TelemetryPatch], None], *, raw_receive=None) -> None:
     from paho.mqtt import client as mqtt
 
     if not valid_topic_segment(serial):
@@ -126,7 +128,7 @@ def stream_telemetry(access: BrokerAccess, serial: str, cancelled: MqttCancellat
 
     def message(client, userdata, report):
         if subscribed and not cancelled.is_set() and report.topic == topic and not report.retain:
-            patch = decode_report(report.payload)
+            patch = decode_report(report.payload, raw_receive)
             if patch.requested:
                 receive(patch)
 
