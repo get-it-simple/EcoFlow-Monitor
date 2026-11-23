@@ -13,6 +13,7 @@ from ecoflow_monitor.system_activity import SystemActivity
 
 
 WM_POWERBROADCAST = 0x218
+WM_TIMECHANGE = 0x001E
 WM_WTSSESSION_CHANGE = 0x2B1
 SESSION_DISPLAY = UUID("2b84c20e-ad23-4ddf-93db-05ffbd7efca5").bytes_le
 
@@ -87,6 +88,7 @@ class WindowsActivity:
 
 class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
     changed = Signal(object)
+    clock_changed = Signal()
 
     def __init__(self, parent=None, native=True, backend=None):
         QObject.__init__(self, parent)
@@ -150,7 +152,9 @@ class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
         msg = wintypes.MSG.from_address(int(message))
         if msg.hWnd != self._hwnd:
             return False, 0
-        if msg.message == WM_WTSSESSION_CHANGE:
+        if msg.message == WM_TIMECHANGE:
+            self.clock_changed.emit()
+        elif msg.message == WM_WTSSESSION_CHANGE:
             if msg.wParam in {2, 4, 7}:
                 self.transition("lock")
             elif msg.wParam == 8:

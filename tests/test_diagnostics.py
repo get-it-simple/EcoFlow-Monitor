@@ -8,7 +8,7 @@ from typing import cast
 
 import httpx
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, EcoFlowClient, EcoFlowError
 from ecoflow_monitor.controller import Controller
@@ -318,7 +318,6 @@ def test_settings_controls_save_reset_cancel_and_reveal(tmp_path, qapp, monkeypa
             window._refresh_log_status()
             assert window.log_status.text()
         finally:
-            window._log_status_timer.stop()
             window._draft_timer.stop()
             window.close()
             controller.stop()
@@ -333,7 +332,10 @@ def test_missing_file_does_not_open_explorer_and_spaces_are_preserved(tmp_path, 
     path.parent.mkdir()
     path.write_text("", encoding="utf-8")
     assert reveal_log(path)
-    assert calls == [((["explorer.exe", "/select," + str(path.resolve())],), {"shell": False})]
+    import subprocess
+    import sys
+    priority = subprocess.NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0
+    assert calls == [((["explorer.exe", "/select," + str(path.resolve())],), {"shell": False, "creationflags": priority})]
 
 
 def test_failed_settings_save_keeps_mode_and_user_input(tmp_path, qapp, monkeypatch):
@@ -354,7 +356,6 @@ def test_failed_settings_save_keeps_mode_and_user_input(tmp_path, qapp, monkeypa
             assert window.logging_mode.currentData() == "detailed"
             assert warnings
         finally:
-            window._log_status_timer.stop()
             window._draft_timer.stop()
             window.close()
             controller.stop()
@@ -373,8 +374,26 @@ def test_disabled_smoke_writer_and_missing_file_status(tmp_path, qapp):
             assert window.log_link.toolTip()
             assert not path.parent.exists()
         finally:
-            window._log_status_timer.stop()
             window._draft_timer.stop()
+            window.close()
+            controller.stop()
+
+
+def test_visible_diagnostics_refreshes_when_the_writer_creates_the_log(tmp_path, qapp):
+    path = tmp_path / "logs" / "ecoflow-monitor.log"
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save(replace(AppSettings(), logging_mode="off"))
+    with DiagnosticLog(path) as diagnostics:
+        controller = Controller(store, diagnostics=diagnostics)
+        window = SettingsWindow(controller)
+        try:
+            window.show()
+            window.connection_tabs.setCurrentIndex(2)
+            assert window.log_link.isVisible() and not window.log_link.isEnabled()
+            diagnostics.capture("synthetic_diagnostic")
+            wait_until(qapp, window.log_link.isEnabled)
+            assert records(path)[0]["event"] == "synthetic_diagnostic"
+        finally:
             window.close()
             controller.stop()
 
@@ -427,7 +446,6 @@ def test_inaccessible_log_path_does_not_break_settings(tmp_path, qapp, monkeypat
         assert "private path" not in window.log_status.text()
         assert not reveal_log(tmp_path / "logs" / "ecoflow-monitor.log")
     finally:
-        window._log_status_timer.stop()
         window._draft_timer.stop()
         window.close()
         controller.stop()
@@ -446,7 +464,6 @@ def test_explorer_failure_message_survives_status_refresh(tmp_path, qapp, monkey
         window._reveal_log()
         assert not window.log_status.text()
     finally:
-        window._log_status_timer.stop()
         window._draft_timer.stop()
         window.close()
         controller.stop()

@@ -177,6 +177,36 @@ def test_controller_requests_visible_sensors_and_calculation_dependencies(sensor
     assert len(calls) == count
 
 
+def test_started_controller_schedules_https_and_stale_deadlines_without_a_heartbeat(sensor_controller, qapp):
+    controller, now, calls, values, failures = sensor_controller
+    controller.set_sensor_demand("widget", {"battery_level"})
+    controller.start()
+    wait(qapp, lambda: len(calls) == 1 and controller._timer.remainingTime() > 0)
+    assert 29_000 <= controller._timer.remainingTime() <= 30_000
+
+    now[0] += 30
+    controller.wake()
+    wait(qapp, lambda: len(calls) == 2 and controller._timer.remainingTime() > 0)
+    assert controller.connection == ConnectionState.LIVE
+
+    controller.access_allowed = False
+    controller.wake()
+    wait(qapp, lambda: controller._timer.remainingTime() >= 89_000)
+    now[0] += 90
+    controller.wake()
+    wait(qapp, lambda: controller.connection == ConnectionState.STALE and not controller._timer.isActive())
+    assert len(calls) == 2
+
+
+def test_large_https_retry_wait_is_clamped_to_the_qt_timer_range(sensor_controller, qapp):
+    controller, now, calls, values, failures = sensor_controller
+    controller.set_sensor_demand("widget", {"battery_level"})
+    controller._next_api = 1e308
+    controller.start()
+    assert controller._timer.isActive() and controller._timer.interval() == 2_147_483_647
+    assert not calls
+
+
 def test_hidden_auto_requirements_are_minimal(sensor_controller, qapp):
     controller, now, calls, values, failures = sensor_controller
     module = replace(controller.settings.integrations[0], enabled=True, auto_enabled=True,

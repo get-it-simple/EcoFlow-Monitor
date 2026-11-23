@@ -10,10 +10,12 @@ from PySide6.QtWidgets import QDialog
 import pytest
 from qt_helpers import wait_until as wait_for
 
+from ecoflow_monitor.adapters.elevation import approved_commands, resolve_approved_command
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, ProcessSnapshot
 from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.integrations import CliCommand, IntegrationDefinition, IntegrationProfile, IntegrationRule, Reaction, afterburner_example, template_tokens
+from ecoflow_monitor.polling import TelemetryPatch
 from ecoflow_monitor.settings import AppSettings, SettingsStore
 from ecoflow_monitor.ui.integrations import IntegrationsEditor, ProfileDialog
 from ecoflow_monitor.ui.integration_creation import IntegrationCreationDialog
@@ -150,6 +152,86 @@ def test_transition_orders_reactions_and_stops_on_failure(monkeypatch):
     assert not result.success and result.completed == 1 and result.phase == "activation" and result.step == 1
 
 
+def test_dynamic_transition_validates_before_deactivation(monkeypatch):
+    module = module_example()
+    command = "{app} {cli:on} --battery={value:battery_level} --output {value:output_power}"
+    previous, original = module.profiles
+    target = replace(original, activation=Reaction(True, (command,)))
+    module = replace(module, profiles=(previous, target))
+    assert IntegrationDefinition.from_dict(module.to_dict()) == module
+    adapter = IntegrationAdapter()
+    monkeypatch.setattr(adapter, "inspect", lambda selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    calls, reports = [], []
+
+    def run(args, **kwargs):
+        assert kwargs["shell"] is False
+        calls.append(args[1:])
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", run)
+    result = adapter.transition(module, previous, target, lambda: True, values={"battery_level": 0})
+    assert not result.success and result.error == "integration_values_unavailable" and calls == []
+    result = adapter.transition(module, previous, target, lambda: True, values={"battery_level": 0, "output_power": 2.5},
+                                report=lambda *args: reports.append(args))
+    assert result.success and calls == [("--off",), ("--on", "--battery=0", "--output", "2.5")]
+    assert [report[:3] for report in reports] == [("a", "deactivation", 1)] * 2 + [("b", "activation", 1)] * 2
+    with pytest.raises(ValueError):
+        replace(afterburner_example(), profiles=(replace(afterburner_example().profiles[0], activation=Reaction(True, (command,))),)).validate()
+
+
+def test_elevated_dynamic_templates_accept_only_approved_numeric_substitutions():
+    command = "{app} --output={value:output_power}"
+    previous, original = module_example().profiles
+    module = module_example(profiles=(previous, replace(original, activation=Reaction(True, (command,)))))
+    allowed = approved_commands(module, "example.exe")
+    templates = {command: {"output_power"}}
+    request = {"template": command, "values": {"output_power": 0}}
+    assert resolve_approved_command(request, module, "example.exe", allowed, templates) == ("example.exe", "--output=0")
+    for unapproved in ({"args": ["example.exe", "--output=0"]},
+                       {"template": command + " --other", "values": request["values"]},
+                       {"template": command, "values": {"output_power": "--other"}},
+                       {"template": command, "values": {"output_power": float("inf")}}):
+        with pytest.raises(ValueError):
+            resolve_approved_command(unapproved, module, "example.exe", allowed, templates)
+
+
+def test_auto_waits_for_dynamic_value_then_uses_one_snapshot(controller, qapp, monkeypatch):
+    clock = [100.0]
+    controller.clock = lambda: clock[0]
+    command = "{app} --output={value:output_power}"
+    previous, original = module_example().profiles
+    target = replace(original, activation=Reaction(True, (command,)))
+    module = module_example(profiles=(previous, target), auto_enabled=True, system_rules=(IntegrationRule("rule", target.id),))
+    controller.apply_settings(replace(controller.settings, integrations=(module,)))
+    controller.set_sensor_demand("dashboard", ())
+    assert "output_power" in controller.polling.required
+    adapter = controller.integration_adapter
+    monkeypatch.setattr(adapter, IntegrationAdapter.inspect.__name__,
+                        lambda *args: IntegrationObservation("integration_ready", executable=sys.executable))
+    state = controller.integration_states[module.id]
+    runs = []
+
+    def run(args, **kwargs):
+        runs.append(args[1:])
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", run)
+    patch = TelemetryPatch(("battery_level",), (("battery_level", 66),))
+    controller._completed("api", controller._generation, ("telemetry", patch), None)
+    wait_for(qapp, lambda: state.observation.ready or (controller.tick() and False))
+    controller.tick()
+    clock[0] = 106
+    controller.tick()
+    assert state.active_profile is None and runs == []
+    patch = TelemetryPatch(("output_power",), (("output_power", 0),))
+    controller._completed("api", controller._generation, ("telemetry", patch), None)
+    controller.tick()
+    wait_for(qapp, lambda: state.active_profile == target.id)
+    clock[0] = 120
+    controller.tick()
+    assert runs == [("--output=0",)]
+
+
 def test_reaction_switches_and_cancellation(monkeypatch):
     module = module_example()
     adapter = IntegrationAdapter()
@@ -205,7 +287,7 @@ def test_controller_independent_auto_manual_and_no_repeat(controller: Controller
     second = replace(first, id="second", label="Second")
     controller.apply_settings(replace(controller.settings, integrations=(first, second)))
     calls = []
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, module: IntegrationObservation("integration_ready"))
+    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, module, snapshot=None: IntegrationObservation("integration_ready"))
     from ecoflow_monitor.adapters.integrations import TransitionResult
     monkeypatch.setattr(IntegrationAdapter, "transition", lambda self, module, previous, target, current: calls.append((module.id, target.id)) or TransitionResult(True))
     for state in controller.integration_states.values():
@@ -239,7 +321,8 @@ def test_settings_change_cancels_later_commands(controller: Controller, qapp, mo
     started = threading.Event()
     release = threading.Event()
     calls = []
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     def run(args, **kwargs):
         calls.append(args)
         started.set()
@@ -482,7 +565,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     state = controller.integration_states[module.id]
     state.observation = IntegrationObservation("integration_ready", executable=sys.executable)
     state.active_profile = "a"
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     calls = []
     def run(args, **kwargs):
         calls.append(args[1])
@@ -493,6 +577,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     controller.telemetry = Telemetry(0, 100, 50, 0, now[0])
     controller.connection = ConnectionState.LIVE
     controller.tick()
+    wait_for(qapp, lambda: not controller._active)
+    assert state.observation.ready
     now[0] = 105
     controller.tick()
     wait_for(qapp, lambda: not state.busy)
@@ -500,6 +586,8 @@ def test_failed_transition_requires_explicit_retry_from_beginning(controller: Co
     assert state.result.completed == 1 and not state.result.success
     now[0] = 125
     controller.tick()
+    wait_for(qapp, lambda: not controller._active)
+    assert state.observation.ready
     assert calls == ["--off", "--on"]
     controller.request_profile(module.id, "b")
     wait_for(qapp, lambda: not state.busy)
@@ -515,7 +603,8 @@ def test_no_rule_stale_disable_and_shutdown_do_not_deactivate(controller: Contro
     state.active_profile = "a"
     calls = []
     monkeypatch.setattr("ecoflow_monitor.adapters.integrations.subprocess.run", lambda *args, **kwargs: calls.append(args))
-    monkeypatch.setattr(IntegrationAdapter, "inspect", lambda self, selected: IntegrationObservation("integration_ready", executable=sys.executable))
+    monkeypatch.setattr(IntegrationAdapter, "inspect",
+                        lambda self, module, snapshot=None: IntegrationObservation("integration_ready", executable=sys.executable))
     controller.telemetry = Telemetry(0, 100, 50, 0, controller.clock())
     controller.connection = ConnectionState.LIVE
     controller.tick()

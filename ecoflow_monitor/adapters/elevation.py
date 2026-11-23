@@ -9,6 +9,7 @@ import threading
 import uuid
 
 from ecoflow_monitor.adapters.elevation_windows import close_handle, connect_pipe, is_helper_process, launch_helper, pipe_peer, process_running
+from ecoflow_monitor.integrations import template_value_keys
 
 
 MAX_MESSAGE = 1048576
@@ -36,7 +37,19 @@ def approved_commands(module, executable):
     return frozenset(module.expand(command, executable)
                      for profile in module.profiles
                      for reaction in (profile.activation, profile.deactivation) if reaction.enabled
-                     for command in reaction.commands)
+                     for command in reaction.commands if not template_value_keys(command))
+
+
+def resolve_approved_command(request, module, executable, allowed, templates):
+    if isinstance(request, dict) and request.keys() == {"args"}:
+        args = request["args"]
+        if isinstance(args, list) and all(isinstance(arg, str) for arg in args) and tuple(args) in allowed:
+            return args
+    if isinstance(request, dict) and request.keys() == {"template", "values"}:
+        template, values = request["template"], request["values"]
+        if isinstance(template, str) and template in templates and isinstance(values, dict) and values.keys() == templates[template]:
+            return module.expand(template, executable, values=values)
+    raise ValueError("Command is outside the approved integration")
 
 
 class ElevatedSession:
@@ -102,12 +115,13 @@ class ElevatedSession:
                 self.close()
                 raise
 
-    def run(self, args):
+    def run(self, args, *, template=None, values=None):
         with self._lock:
             if self._closed.is_set() or self.connection is None:
                 raise OSError("Elevated helper is disconnected")
             try:
-                send(self.connection, {"args": list(args)})
+                request = {"args": list(args)} if template is None else {"template": template, "values": values}
+                send(self.connection, request)
                 response = receive(self.connection)
                 if not isinstance(response, dict) or set(response) != {"exit_code", "winerror", "error"}:
                     raise ValueError("Invalid helper response")
@@ -134,13 +148,13 @@ def serve(connection):
     executable = bootstrap["executable"]
     module = replace(module, executable=executable, enabled=True)
     allowed = approved_commands(module, executable)
+    templates = {command: keys for profile in module.profiles for reaction in (profile.activation, profile.deactivation)
+                 if reaction.enabled for command in reaction.commands if (keys := template_value_keys(command))}
     adapter = IntegrationAdapter()
     send(connection, {"ready": True})
     while True:
         request = receive(connection, timeout=None)
-        args = request.get("args") if isinstance(request, dict) else None
-        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args) or tuple(args) not in allowed:
-            raise ValueError("Command is outside the approved integration")
+        args = resolve_approved_command(request, module, executable, allowed, templates)
         observation = adapter.inspect(module)
         if not observation.ready or observation.executable != executable:
             send(connection, {"exit_code": None, "winerror": None, "error": observation.availability})

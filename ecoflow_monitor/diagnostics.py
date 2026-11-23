@@ -8,8 +8,11 @@ from pathlib import Path
 import queue
 import re
 import subprocess
+import sys
 import threading
 from typing import Any
+
+from PySide6.QtCore import QObject, Signal
 
 
 REDACTED = "[REDACTED]"
@@ -23,16 +26,18 @@ SENSITIVE_FIELDS = frozenset({
     "longitude", "location", "credentialref", "accessref", "secretref", "vault",
     "vaultid", "itemid", "path", "executable", "command", "arguments", "name",
 })
-TEXT_PATTERNS = (
+SECRET_TEXT_PATTERNS = (
     re.compile(r"op://[^\s\"'<>]+", re.IGNORECASE),
+    re.compile(r"Bearer\s+[^\s\"']+", re.IGNORECASE),
+)
+PRIVATE_TEXT_PATTERNS = (
     re.compile(r"(?<![\w.+-])[\w.+-]{1,254}@[\w.-]+\.[A-Za-z]{2,}"),
     re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     re.compile(r"\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", re.IGNORECASE),
     re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)[^\r\n\"<>]*"),
-    re.compile(r"Bearer\s+[^\s\"']+", re.IGNORECASE),
 )
 ASSIGNMENT = re.compile(
-    r"\b(access[_-]?key|secret[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|sign|signature|sn|serial)"
+    r"\b(access[_-]?key|secret[_-]?key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|sign|signature|sn|serial(?:[_-]?number)?)"
     r"[\"']?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;&}]+)", re.IGNORECASE,
 )
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}(?:%[\w.-]+)?(?![\w:])", re.IGNORECASE)
@@ -42,18 +47,23 @@ MAX_DEPTH = 16
 LOGGER_NAME = "ecoflow_monitor"
 
 
+def normalized_field(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.casefold())
+
+
 def sensitive_field(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", key.casefold())
+    normalized = normalized_field(key)
     return normalized in SENSITIVE_FIELDS or any(
         normalized.endswith(suffix) for suffix in ("accesskey", "secretkey", "password", "token", "serialnumber", "credentialref", "email", "ipaddress", "macaddress")
     )
 
 
-def scrub_text(value: str, sensitive: tuple[str, ...] = ()) -> str:
+def scrub_text(value: str, sensitive: tuple[str, ...] = (), *, show_private=False, show_serial=False) -> str:
     for secret in sorted(set(sensitive), key=len, reverse=True):
         if secret and (len(secret) >= 4 or value == secret):
             value = value.replace(secret, REDACTED)
-    for pattern in TEXT_PATTERNS:
+    patterns = SECRET_TEXT_PATTERNS if show_private else (*SECRET_TEXT_PATTERNS, *PRIVATE_TEXT_PATTERNS)
+    for pattern in patterns:
         value = pattern.sub(lambda match: REDACTED, value)
     def hide_ipv6(match):
         try:
@@ -61,11 +71,14 @@ def scrub_text(value: str, sensitive: tuple[str, ...] = ()) -> str:
             return REDACTED
         except ValueError:
             return match.group()
-    value = IPV6.sub(hide_ipv6, value)
-    return ASSIGNMENT.sub(lambda match: match.group(1) + "=" + REDACTED, value)
+    if not show_private:
+        value = IPV6.sub(hide_ipv6, value)
+    return ASSIGNMENT.sub(lambda match: match.group() if show_serial and normalized_field(match.group(1))
+                          in {"sn", "serial", "serialnumber"} else match.group(1) + "=" + REDACTED, value)
 
 
-def sanitize(value: Any, sensitive: tuple[str, ...] = ()) -> Any:
+def sanitize(value: Any, sensitive: tuple[str, ...] = (), *, protect=sensitive_field,
+             show_private=False, show_serial=False, scrub_numeric=False) -> Any:
     secrets = list(sensitive)
     budget = MAX_NODES
 
@@ -76,7 +89,7 @@ def sanitize(value: Any, sensitive: tuple[str, ...] = ()) -> Any:
             return False
         if isinstance(item, Mapping):
             for key, child in item.items():
-                if not collect(child, depth + 1, protected or (isinstance(key, str) and sensitive_field(key))):
+                if not collect(child, depth + 1, protected or (isinstance(key, str) and protect(key))):
                     return False
         elif isinstance(item, (list, tuple)):
             for child in item:
@@ -99,8 +112,8 @@ def sanitize(value: Any, sensitive: tuple[str, ...] = ()) -> Any:
         if isinstance(item, Mapping):
             result = {}
             for key, child in item.items():
-                name = scrub_text(str(key)[:2048], hidden)
-                result[name] = REDACTED if sensitive_field(str(key)) else clean(child, depth + 1)
+                name = scrub_text(str(key)[:2048], hidden, show_private=show_private, show_serial=show_serial)
+                result[name] = REDACTED if protect(str(key)) else clean(child, depth + 1)
                 if budget < 0:
                     result["_truncated"] = True
                     break
@@ -113,9 +126,11 @@ def sanitize(value: Any, sensitive: tuple[str, ...] = ()) -> Any:
                     break
             return result
         if isinstance(item, str):
-            text = scrub_text(item, hidden)
+            text = scrub_text(item, hidden, show_private=show_private, show_serial=show_serial)
             return text[:8192] + ("[TRUNCATED]" if len(text) > 8192 else "")
         if item is None or isinstance(item, (int, float, bool)):
+            if scrub_numeric and type(item) in (int, float) and str(item) in hidden:
+                return REDACTED
             return item
         return "[UNSUPPORTED TYPE]"
 
@@ -132,7 +147,8 @@ def reveal_log(path: Path) -> bool:
     try:
         if not path.is_file():
             return False
-        subprocess.Popen(["explorer.exe", "/select," + str(path.resolve())], shell=False)
+        subprocess.Popen(["explorer.exe", "/select," + str(path.resolve())], shell=False,
+                         creationflags=subprocess.NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 0)
         return True
     except OSError:
         return False
@@ -186,6 +202,10 @@ class DailySizeFileHandler(BaseRotatingHandler):
                 remaining -= 1
 
 
+class DiagnosticStatus(QObject):
+    changed = Signal()
+
+
 class DiagnosticLog(logging.Handler):
     def __init__(self, path: Path, *, disabled: bool = False, max_bytes: int = 3 * 1024 * 1024,
                  backup_count: int | None = None, queue_size: int = 1024) -> None:
@@ -194,6 +214,7 @@ class DiagnosticLog(logging.Handler):
         self.disabled = disabled
         self.mode = "off"
         self.failed = False
+        self.status = DiagnosticStatus()
         self._max_bytes = max_bytes
         self._backup_count = backup_count
         self._queue = queue.Queue(queue_size)
@@ -223,6 +244,7 @@ class DiagnosticLog(logging.Handler):
                 self._thread = threading.Thread(target=self._write, name="ecoflow-diagnostics", daemon=True)
                 self._thread.start()
         event("logging_mode_changed", mode=mode)
+        self.status.changed.emit()
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._state_lock:
@@ -267,6 +289,7 @@ class DiagnosticLog(logging.Handler):
     def _write(self) -> None:
         while True:
             item = self._queue.get()
+            status_changed = False
             try:
                 if item is None:
                     return
@@ -278,6 +301,7 @@ class DiagnosticLog(logging.Handler):
                         if self._sink is None:
                             self.path.parent.mkdir(parents=True, exist_ok=True)
                             self._sink = DailySizeFileHandler(self.path, self._max_bytes, self._backup_count)
+                            status_changed = True
                             self._sink.setFormatter(logging.Formatter("%(message)s"))
                             self._sink.prune()
                         if self._dropped:
@@ -286,8 +310,11 @@ class DiagnosticLog(logging.Handler):
                         self._write_line(line)
                     except (OSError, ValueError):
                         self.failed = True
+                        status_changed = True
             finally:
                 self._queue.task_done()
+                if status_changed:
+                    self.status.changed.emit()
 
     def _write_line(self, line: str) -> None:
         record = logging.LogRecord(LOGGER_NAME, logging.INFO, "", 0, line, (), None)
