@@ -50,10 +50,17 @@ function Assert-RunningPreferences([string]$Stage) {
     if ($LASTEXITCODE -ne 0) { throw "${Stage}: application preferences verification failed" }
 }
 
-function Invoke-Setup([string]$Path, [string[]]$Arguments) {
-    $process = Start-Process -FilePath $Path -ArgumentList $Arguments -WindowStyle Hidden -PassThru
-    if (-not $process.WaitForExit(120000)) { throw "Installer timed out: $Path" }
-    if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+function Invoke-Setup([string]$Stage, [string]$Path, [string]$Switch, [int]$ExpectedExitCode = 0) {
+    Write-Host "$Stage ($Switch)"
+    $process = Start-Process -FilePath $Path -ArgumentList $Switch -WindowStyle Hidden -PassThru
+    try {
+        if (-not $process.WaitForExit(120000)) { throw "$Stage ($Switch) timed out: $Path" }
+        if ($process.ExitCode -ne $ExpectedExitCode) {
+            throw "$Stage ($Switch) returned exit code $($process.ExitCode), expected $ExpectedExitCode."
+        }
+    } finally {
+        $process.Dispose()
+    }
 }
 
 function Start-InstalledApplication([string]$Path) {
@@ -84,7 +91,7 @@ function Assert-Installed {
     }
 }
 
-Invoke-Setup $installer @("/S")
+Invoke-Setup "Initial installation" $installer "/S"
 Assert-Installed
 Assert-FilePreserved $legacySettings $settingsHash "Initial installation"
 $executable = Join-Path $target "EcoFlowMonitor.exe"
@@ -92,6 +99,14 @@ $sourceHash = (Get-FileHash -LiteralPath (Join-Path $root "dist\$Version\EcoFlow
 if ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash -ne $sourceHash) { throw "Installed payload mismatch" }
 & python -m scripts.smoke_executable $executable
 if ($LASTEXITCODE -ne 0) { throw "Installed EXE smoke failed" }
+
+try {
+    Set-ItemProperty -LiteralPath $registry -Name InstallLocation -Value (Join-Path $synthetic "invalid-install-location")
+    Invoke-Setup "Invalid installation metadata" $installer "/SILENTWITHPROGRESS" 3
+} finally {
+    Set-ItemProperty -LiteralPath $registry -Name InstallLocation -Value $target
+}
+
 $startupCommand = '"{0}" --autostart' -f $executable
 New-Item -Path $startupRegistry -Force | Out-Null
 New-ItemProperty -LiteralPath $startupRegistry -Name EcoFlowMonitor -Value $startupCommand -PropertyType String -Force | Out-Null
@@ -103,7 +118,7 @@ do {
     $ready = Test-Path -LiteralPath $runningLog -PathType Leaf
 } until ($ready -or [DateTime]::UtcNow -gt $deadline)
 if (-not $ready -or $running.HasExited) { throw "Synthetic installed application did not start" }
-Invoke-Setup $installer @("/SILENTWITHPROGRESS")
+Invoke-Setup "Running upgrade" $installer "/SILENTWITHPROGRESS"
 if (-not $running.WaitForExit(30000)) { throw "Upgrade did not shut down the running application" }
 Assert-Installed
 Assert-FilePreserved $legacySettings $settingsHash "Running upgrade"
@@ -112,11 +127,11 @@ Assert-RunningPreferences "Running upgrade"
 $runningSettingsHash = (Get-FileHash -LiteralPath $runningSettings -Algorithm SHA256).Hash
 
 Set-ItemProperty -LiteralPath $registry -Name DisplayVersion -Value "0.7.3"
-Invoke-Setup $installer @("/S")
+Invoke-Setup "Previous-version metadata upgrade" $installer "/S"
 Assert-Installed
 Assert-FilePreserved $legacySettings $settingsHash "Previous-version metadata upgrade"
 Assert-FilePreserved $runningSettings $runningSettingsHash "Previous-version metadata upgrade"
-Invoke-Setup (Join-Path $target "Uninstall.exe") @("/S")
+Invoke-Setup "Uninstall" (Join-Path $target "Uninstall.exe") "/S"
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 while (((Test-Path -LiteralPath $registry) -or (Test-Path -LiteralPath $executable)) -and [DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 100

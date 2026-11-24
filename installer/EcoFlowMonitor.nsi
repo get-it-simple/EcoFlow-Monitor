@@ -88,6 +88,11 @@ Var ProcessStatus
 Var ProcessTarget
 Var ExistingDir
 
+!macro ShowSetupError MESSAGE
+  StrCmp $SilentProgress 1 +2
+  MessageBox MB_OK|MB_ICONSTOP "${MESSAGE}" /SD IDOK
+!macroend
+
 Function SkipProgressPages
   StrCmp $SilentProgress 1 0 done
   Abort
@@ -162,7 +167,7 @@ wait_exit:
   IntOp $9 $9 - 1
   IntCmp $9 0 failed wait_exit wait_exit
 failed:
-  MessageBox MB_OK|MB_ICONSTOP "$(StopFailed)" /SD IDOK
+  !insertmacro ShowSetupError "$(StopFailed)"
   SetErrorLevel 2
   Quit
 done:
@@ -188,7 +193,7 @@ check_marker:
   IntOp $0 $0 & 0x400
   StrCmp $0 0 done invalid
 invalid:
-  MessageBox MB_OK|MB_ICONSTOP "$(InvalidExisting)" /SD IDOK
+  !insertmacro ShowSetupError "$(InvalidExisting)"
   SetErrorLevel 3
   Quit
 done:
@@ -201,8 +206,10 @@ Section "Install"
   StrCpy $ElevateArguments "/S /ELEVATED"
   Call ElevateAndWait
   StrCmp $ElevationExitCode 0 done
-  MessageBox MB_OK|MB_ICONSTOP "$(InstallFailed)" /SD IDOK
+  !insertmacro ShowSetupError "$(InstallFailed)"
   SetErrorLevel $ElevationExitCode
+  StrCmp $SilentProgress 1 0 +2
+  Quit
   Abort
 files:
   Call InspectForWrite
