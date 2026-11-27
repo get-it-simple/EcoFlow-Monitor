@@ -338,7 +338,6 @@
   "usb_a1": "USB-A 1",
   "usb_a2": "USB-A 2",
   "anderson": "Anderson",
-  "duration_hours": "{hours} h {minutes} min",
   "no_profile_policy": "Auto is enabled; no matching rule.",
   "operation_failed": "The operation could not be completed.",
   "application_files": "Applications",

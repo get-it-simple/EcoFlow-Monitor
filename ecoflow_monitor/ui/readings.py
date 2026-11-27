@@ -31,7 +31,6 @@ class MetricReading(MotionSurface):
         self.label = ValueLabel(self)
         self.label.setWordWrap(True)
         self.value = ValueLabel(self)
-        self.value.setWordWrap(key == "estimated_runtime")
         from ecoflow_monitor.ui.polling import LoadingIndicator
         self.loader = LoadingIndicator(controller, self.value)
         self.infinity = None
@@ -73,6 +72,8 @@ class MetricReading(MotionSurface):
             font = QFont(self.font())
             font.setPixelSize(max(1, round(pixels * scale)))
             font.setWeight(QFont.Weight(weight))
+            if label is self.value and self.key == "estimated_runtime":
+                font.setFeature(QFont.Tag("tnum"), 1)
             label.setFont(font)
             label.setStyleSheet(f"color: {COLORS[role]}; background: transparent; font-size: {max(1, round(pixels * scale))}px; font-weight: {weight};")
             label.outlined = clear
@@ -209,9 +210,9 @@ class MetricReading(MotionSurface):
         if text == "—":
             tooltip += "\n" + t("missing_data")
         self.setToolTip(tooltip)
-        spoken = t("sensor_loading") if state == "loading" else text
+        spoken = t("sensor_loading") if state == "loading" else text.lstrip()
         if state == "refreshing":
-            spoken = f"{t('sensor_refreshing')} · {text}"
+            spoken = f"{t('sensor_refreshing')} · {spoken}"
         self.setAccessibleName(label + ": " + spoken)
         self.value.setAccessibleName(self.accessibleName())
         if self.fit_values or self.fixed_slot:
