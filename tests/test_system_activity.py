@@ -8,13 +8,15 @@ import threading
 
 import httpx
 import pytest
+from PySide6.QtCore import QEvent, QObject
+from PySide6.QtGui import QPlatformSurfaceEvent
 from PySide6.QtWidgets import QMessageBox, QWidget
 from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters.ecoflow import Credentials, Device, EcoFlowClient
 from ecoflow_monitor.adapters.integrations import IntegrationAdapter, IntegrationObservation, TransitionResult
 from ecoflow_monitor.adapters.onepassword import RequestCancelled
-from ecoflow_monitor.adapters.system_activity import PowerSetting, SESSION_DISPLAY, SystemActivityWatcher
+from ecoflow_monitor.adapters.system_activity import PowerSetting, SESSION_DISPLAY, SESSION_PRESENCE, SystemActivityWatcher
 from ecoflow_monitor.adapters.system_activity import SessionInfo, WindowsActivity
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.controller import Controller, Task
@@ -102,6 +104,7 @@ class ActivityBackend:
         self.is_locked = locked
         self.failure = failure
         self.calls = []
+        self.display_callbacks = []
 
     def _call(self, name, value=None):
         self.calls.append((name, value))
@@ -115,9 +118,24 @@ class ActivityBackend:
     def register_session(self, hwnd):
         self._call("register_session", hwnd)
 
-    def register_power(self, hwnd):
-        self._call("register_power", hwnd)
-        return 0x1234567887654321
+    def register_power(self, hwnd, setting=SESSION_DISPLAY):
+        self._call("register_power", (hwnd, setting))
+        return 0x1234567887654321 if setting == SESSION_DISPLAY else 2
+
+    def register_suspend(self, hwnd):
+        self._call("register_suspend", hwnd)
+        return 3
+
+    def unregister_suspend(self, handle):
+        self._call("unregister_suspend", handle)
+
+    def read_display(self, callback):
+        self._call("read_display")
+        self.display_callbacks.append(callback)
+        return 4
+
+    def stop_read_display(self, handle):
+        self._call("stop_read_display", handle)
 
     def unregister_session(self, hwnd):
         self._call("unregister_session", hwnd)
@@ -171,6 +189,8 @@ def test_native_messages_current_session_and_hidden_window_lifecycle(watcher):
     instance.stop()
     instance.stop()
     assert backend.calls.count(("unregister_power", 0x1234567887654321)) == 1
+    assert backend.calls.count(("unregister_power", 2)) == 1
+    assert backend.calls.count(("unregister_suspend", 3)) == 1
     assert backend.calls.count(("unregister_session", original)) == 1
     assert instance.window is None
 
@@ -213,6 +233,41 @@ def test_wake_rechecks_lock_without_treating_query_as_user_presence(watcher):
     assert not instance.state.paused
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows message layout")
+def test_wake_recovers_missing_display_and_interactive_notifications(watcher, qapp):
+    instance, backend = watcher
+    display = PowerSetting()
+    display.guid[:], display.length, display.value = SESSION_DISPLAY, 4, 0
+    presence = PowerSetting()
+    presence.guid[:], presence.length, presence.value = SESSION_PRESENCE, 4, 0
+    backend.is_locked = False
+    deliver(instance, 0x2B1, 8)
+    deliver(instance, 0x218, 0x8013, ctypes.addressof(display))
+    deliver(instance, 0x218, 4)
+    deliver(instance, 0x218, 18)
+    deliver(instance, 0x218, 18)
+    wait_until(qapp, lambda: len(backend.display_callbacks) == 1)
+    backend.display_callbacks[0](1)
+    wait_until(qapp, lambda: not instance.state.display_off)
+    assert instance.state.awaiting_user and instance.state.paused
+
+    backend.is_locked = True
+    active = []
+    instance.changed.connect(lambda state: active.append(state) if not state.paused else None)
+    deliver(instance, 0x218, 0x8013, ctypes.addressof(presence))
+    assert instance.state.locked and not active
+    backend.is_locked = False
+    deliver(instance, 0x2B1, 8)
+    deliver(instance, 0x218, 7)
+    deliver(instance, 0x218, 0x8013, ctypes.addressof(presence))
+    assert len(active) == 1
+
+    deliver(instance, 0x218, 0x8013, ctypes.addressof(display))
+    backend.display_callbacks[0](1)
+    qapp.processEvents()
+    assert instance.state.display_off and instance.state.paused
+
+
 class NativeCall:
     def __init__(self, operation):
         self.operation = operation
@@ -229,9 +284,13 @@ def test_windows_query_parses_aligned_header_and_frees_buffer(monkeypatch, state
     freed = []
     class Library:
         pass
-    user, wts = Library(), Library()
+    user, wts, power = Library(), Library(), Library()
     user.RegisterPowerSettingNotification = NativeCall(lambda *args: 0x1234567887654321)
     user.UnregisterPowerSettingNotification = NativeCall(lambda *args: True)
+    user.RegisterSuspendResumeNotification = NativeCall(lambda *args: 3)
+    user.UnregisterSuspendResumeNotification = NativeCall(lambda *args: True)
+    power.PowerSettingRegisterNotification = NativeCall(lambda *args: 0)
+    power.PowerSettingUnregisterNotification = NativeCall(lambda *args: 0)
     wts.WTSRegisterSessionNotification = NativeCall(lambda *args: True)
     wts.WTSUnRegisterSessionNotification = NativeCall(lambda *args: True)
     def query(handle, session, kind, output, size):
@@ -241,7 +300,8 @@ def test_windows_query_parses_aligned_header_and_frees_buffer(monkeypatch, state
         return True
     wts.WTSQuerySessionInformationW = NativeCall(query)
     wts.WTSFreeMemory = NativeCall(lambda address: freed.append(address.value))
-    monkeypatch.setattr(ctypes, "WinDLL", lambda name, **kwargs: user if name == "user32" else wts)
+    libraries = {"user32": user, "wtsapi32": wts, "powrprof": power}
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, **kwargs: libraries[name])
     backend = WindowsActivity()
     assert SessionInfo.data.offset == 8
     assert backend.locked() == locked
@@ -254,7 +314,8 @@ def test_windows_query_parses_aligned_header_and_frees_buffer(monkeypatch, state
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows window adapter")
-@pytest.mark.parametrize("failure", ["register_session", "register_power", "locked", "unregister_power", "unregister_session"])
+@pytest.mark.parametrize("failure", ["register_session", "register_power", "register_suspend", "locked",
+                                    "unregister_power", "unregister_suspend", "unregister_session"])
 def test_registration_failures_preserve_available_notifications_and_cleanup(qapp, failure):
     backend = ActivityBackend(failure=failure)
     instance = SystemActivityWatcher(backend=backend)
@@ -665,6 +726,63 @@ def test_runtime_pause_stops_motion_preserves_draft_and_does_not_activate_window
         assert not activated and not runtime.confirmations._paused
         assert not runtime.dashboard.onepassword._paused
     finally:
+        close_runtime(runtime, qapp)
+
+
+def test_sleep_recreates_widget_surface_and_honors_current_visibility(activity_controller, qapp):
+    controller, _, _ = activity_controller
+    runtime = Application(controller.store.path, native=False, controller=controller)
+    widget = runtime.widget
+
+    class SurfaceEvents(QObject):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.PlatformSurface:
+                self.events.append(event.surfaceEventType())
+            return False
+
+    core_surfaces, details_surfaces = SurfaceEvents(), SurfaceEvents()
+    widget.installEventFilter(core_surfaces)
+    widget.details.installEventFilter(details_surfaces)
+    try:
+        runtime.main_action.trigger()
+        assert widget.isVisible()
+        widget.reveal_button.setChecked(True)
+        assert widget.details.isVisible()
+        qapp.processEvents()
+        core_surfaces.events.clear()
+        details_surfaces.events.clear()
+        geometry = widget.geometry()
+        created = QPlatformSurfaceEvent.SurfaceEventType.SurfaceCreated
+        destroyed = QPlatformSurfaceEvent.SurfaceEventType.SurfaceAboutToBeDestroyed
+
+        controller.set_system_activity(SystemActivity(locked=True))
+        sleeping = SystemActivity(locked=True).transition("suspend")
+        controller.set_system_activity(sleeping)
+        wait_until(qapp, lambda: not widget.isVisible())
+        assert not widget.details.isVisible() and runtime.main_action.isChecked()
+        controller.set_system_activity(sleeping.transition("resume_user"))
+        qapp.processEvents()
+        assert not widget.isVisible()
+        controller.set_system_activity(SystemActivity())
+        wait_until(qapp, lambda: widget.isVisible() and widget.details.isVisible())
+        assert core_surfaces.events == details_surfaces.events == [destroyed, created]
+        assert widget.geometry() == geometry
+
+        controller.set_system_activity(sleeping)
+        wait_until(qapp, lambda: not widget.isVisible())
+        runtime.main_action.trigger()
+        controller.set_system_activity(SystemActivity())
+        wait_until(qapp, lambda: core_surfaces.events == [destroyed, created, destroyed])
+        assert not widget.isVisible() and not widget.details.isVisible()
+        runtime.hotkey("toggle_main")
+        assert widget.isVisible() and core_surfaces.events[-1] == created
+    finally:
+        widget.removeEventFilter(core_surfaces)
+        widget.details.removeEventFilter(details_surfaces)
         close_runtime(runtime, qapp)
 
 

@@ -213,6 +213,44 @@ def test_resume_restarts_mqtt_during_backoff_and_refreshes_https(controller, mqt
     assert controller.telemetry.soc_pct == 80
 
 
+def test_post_resume_mqtt_waits_for_the_stream_worker_before_starting_first_report_timeout(controller, mqtt_monitor, qapp):
+    now, requests, streams, _, _ = mqtt_monitor
+    finished_stream = threading.Event()
+    release_worker = threading.Event()
+    stream = controller._mqtt_stream
+
+    def slow_close(*args):
+        first = not streams
+        stream(*args)
+        if first:
+            finished_stream.set()
+            assert release_worker.wait(4)
+
+    controller._mqtt_stream = slow_close
+    report = b'{"cmsBattSoc":80,"powInSumW":0,"powOutSumW":65}'
+    try:
+        controller.refresh()
+        wait_until(qapp, lambda: len(streams) == 1)
+        streams[0][0].put(report)
+        wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+        sleeping = SystemActivity().transition("suspend")
+        controller.set_system_activity(sleeping)
+        wait_until(qapp, finished_stream.is_set)
+        now[0] += 60 * 60
+        controller.set_system_activity(sleeping.transition("resume_user"))
+        wait_until(qapp, lambda: controller.fresh and controller.telemetry_source == "https_fallback")
+
+        now[0] += 121
+        controller.tick()
+        release_worker.set()
+        wait_until(qapp, lambda: len(streams) == 2)
+        streams[1][0].put(report)
+        wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+        assert requests.count("certification") == 1 and controller.telemetry.soc_pct == 80
+    finally:
+        release_worker.set()
+
+
 @pytest.mark.parametrize("reason", ["stream_disconnected", "first_report_timeout"])
 def test_mqtt_fallback_logs_the_attempt_and_correlates_recovery(controller, mqtt_monitor, qapp, tmp_path, reason):
     now, requests, streams, _, _ = mqtt_monitor
@@ -412,6 +450,52 @@ def test_manual_mqtt_renewal_reconnects_with_replacement_and_preserves_draft(
         assert controller.mqtt_access_status == "mqtt_access_renewed" and requests.count("certification") == 2
     finally:
         release.set()
+        window.close()
+
+
+@pytest.mark.parametrize("pause_again", [False, True])
+def test_manual_mqtt_renewal_queues_behind_post_resume_https(
+    controller, mqtt_monitor, mqtt_certification_responses, qapp, pause_again,
+):
+    from ecoflow_monitor.ui.settings_window import SettingsWindow
+
+    now, requests, streams, waiting_https, release_https = mqtt_monitor
+    controller.refresh()
+    wait_until(qapp, lambda: len(streams) == 1)
+    report = b'{"cmsBattSoc":80,"powInSumW":0,"powOutSumW":65}'
+    streams[0][0].put(report)
+    wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    window = SettingsWindow(controller)
+    try:
+        sleeping = SystemActivity().transition("suspend")
+        controller.set_system_activity(sleeping)
+        release_https.clear()
+        now[0] += 3600
+        controller.set_system_activity(sleeping.transition("resume_user"))
+        wait_until(qapp, lambda: len(streams) == 2 and waiting_https.is_set())
+        assert window.mqtt_renew_button.isEnabled()
+        mqtt_certification_responses.put(mqtt_certification(password="replacement-password"))
+        window.mqtt_renew_button.click()
+        assert controller.mqtt_access_status == "mqtt_access_renew_waiting"
+        assert not window.mqtt_renew_button.isEnabled()
+        controller.renew_mqtt_access()
+        assert requests.count("certification") == 1
+        if pause_again:
+            controller.set_system_activity(sleeping)
+            assert controller.mqtt_access_status == ""
+        release_https.set()
+        if pause_again:
+            controller.set_system_activity(sleeping.transition("resume_user"))
+            wait_until(qapp, lambda: controller.fresh and "api" not in controller._active)
+            assert requests.count("certification") == 1
+        else:
+            wait_until(qapp, lambda: len(streams) >= 3)
+            assert streams[-1][3].password == "replacement-password" and requests.count("certification") == 2
+            assert controller.telemetry_source == "https_fallback"
+            streams[-1][0].put(report)
+            wait_until(qapp, lambda: controller.telemetry_source == "mqtt")
+    finally:
+        release_https.set()
         window.close()
 
 

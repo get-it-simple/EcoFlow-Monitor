@@ -29,7 +29,7 @@ def test_remaining_time_switches_between_charge_limit_and_runtime(runtime, qapp)
     controller = runtime.controller
     controller.settings = replace(controller.settings, capacity_wh=2000, language="en")
     i18n.setup("en")
-    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80)
+    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
     controller.connection = ConnectionState.LIVE
     controller.changed.emit()
     readings = (runtime.window.monitoring.readings["estimated_runtime"],
@@ -39,8 +39,10 @@ def test_remaining_time_switches_between_charge_limit_and_runtime(runtime, qapp)
         assert reading.label.toolTip() == "Time to charge limit"
         assert reading.value.text() == "≈ 1 h 12 min"
         assert "input minus output" in reading.toolTip()
+        assert "USB loads" in reading.toolTip()
         assert "Time to charge limit" in reading.accessibleName()
-    controller.telemetry = replace(controller.telemetry, input_w=0)
+        assert reading.infinity.isHidden()
+    controller.telemetry = replace(controller.telemetry, input_w=0, ports=(("ac_input", 0),))
     for reading in readings:
         reading.refresh()
         assert reading.label.toolTip() == i18n.t("estimated_runtime")

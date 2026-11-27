@@ -81,6 +81,7 @@ class AdaptiveWidget(QFrame):
         self._signature = None
         self._hovered = False
         self._keyboard_focus = False
+        self._sleep_geometry = None
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -141,9 +142,37 @@ class AdaptiveWidget(QFrame):
         self._reflow_timer.setSingleShot(True)
         self._reflow_timer.setInterval(REFLOW_INTERVAL_MS)
         self._reflow_timer.timeout.connect(self._resize_layout)
+        self._surface_timer = QTimer(self, singleShot=True)
+        self._surface_timer.timeout.connect(self._sync_sleep_surface)
         QApplication.instance().installEventFilter(self)
         QApplication.instance().focusChanged.connect(self._toolbar_visibility)
         controller.changed.connect(self.refresh)
+        controller.system_activity_changed.connect(self._system_activity_changed)
+
+    def _system_activity_changed(self, activity):
+        if self._stopping:
+            return
+        if activity.sleeping and self._sleep_geometry is None:
+            self._sleep_geometry = self.geometry()
+        if self._sleep_geometry is not None:
+            self._surface_timer.start(0)
+
+    def _sync_sleep_surface(self):
+        if self._stopping or self._sleep_geometry is None:
+            return
+        self._geometry_timer.stop()
+        self._reflow_timer.stop()
+        self.overlay.menu.hide()
+        self.hide()
+        self.details.hide()
+        if self.controller.system_activity.paused:
+            return
+        self.details.destroy()
+        self.destroy()
+        geometry, self._sleep_geometry = self._sleep_geometry, None
+        if not self._initial:
+            self.setGeometry(geometry)
+        self.refresh()
 
     def _area(self):
         screen = self.screen() or QApplication.primaryScreen()
@@ -153,6 +182,10 @@ class AdaptiveWidget(QFrame):
         if self._laying_out or self._stopping:
             return
         preferences = self.controller.ui_settings.widget
+        if self._sleep_geometry is not None:
+            if not preferences.enabled:
+                self.reveal_button.setChecked(False)
+            return
         self.overlay.apply()
         area = self._area()
         minimal_allowed = bool(set(preferences.small_metrics) & set(METRICS[:3]))
@@ -367,7 +400,6 @@ class AdaptiveWidget(QFrame):
     def _menu_opened(self):
         self.overlay.menu.addSeparator()
         self.overlay.menu.addAction(t("open_dashboard"), self.open_dashboard)
-        self.overlay.menu.addAction(t("restore_overlay"), lambda: self.controller.update_widget(opacity=0.82))
         self.toolbar.show()
 
     def _toolbar_visibility(self, *args):
@@ -409,7 +441,7 @@ class AdaptiveWidget(QFrame):
             super().keyPressEvent(event)
 
     def _save_geometry(self):
-        if self.controller.preview is not None or self._initial or not self._has_been_shown or self.isMinimized() or self.isMaximized():
+        if self._sleep_geometry is not None or self.controller.preview is not None or self._initial or not self._has_been_shown or self.isMinimized() or self.isMaximized():
             return
         preferences = self.controller.settings.widget
         screen = self.screen()
@@ -420,13 +452,13 @@ class AdaptiveWidget(QFrame):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if hasattr(self, "_geometry_timer") and not self._initial:
+        if hasattr(self, "_geometry_timer") and not self._initial and self._sleep_geometry is None:
             self._place_details()
             self._geometry_timer.start()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "_geometry_timer") and not self._initial:
+        if hasattr(self, "_geometry_timer") and not self._initial and self._sleep_geometry is None:
             if not self._reflow_timer.isActive():
                 self._reflow_timer.start()
             self._geometry_timer.start()
@@ -444,7 +476,7 @@ class AdaptiveWidget(QFrame):
         super().hideEvent(event)
         self._hovered = False
         if hasattr(self, "details"):
-            if not self.property("applying_overlay"):
+            if self._sleep_geometry is None and not self.property("applying_overlay"):
                 self.reveal_button.setChecked(False)
             self.details.hide()
             self.toolbar.hide()
@@ -464,6 +496,7 @@ class AdaptiveWidget(QFrame):
 
     def stop(self):
         self._stopping = True
+        self._surface_timer.stop()
         self._reflow_timer.stop()
         self._geometry_timer.stop()
         self._save_geometry()

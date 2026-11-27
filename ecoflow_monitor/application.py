@@ -215,7 +215,7 @@ class Application(QObject):
         if self._stopped or not hasattr(self, "monitor_action"):
             return
         self.monitor_action.setChecked(self.window.isVisible())
-        self.main_action.setChecked(self.widget.isVisible())
+        self.main_action.setChecked(self.controller.ui_settings.widget.enabled)
         if self._activity_paused:
             return
         handles = set()

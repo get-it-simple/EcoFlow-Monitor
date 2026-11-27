@@ -68,9 +68,11 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   Only one instance runs per user in a Windows session, even from another folder.
 - Collapse AC outlets and Other outputs with the centered arrow shown on hover
   or keyboard focus. Compact AC can share a row with Other outputs when space permits.
-- Time remaining shows an infinity symbol on fresh AC input; its green contour
-  reflects battery charge. A spinner marks an unavailable estimate. Notifications
-  open a current-status list with shortcuts to the related settings.
+- Time remaining shows an estimate to the upper charge limit when the battery is
+  below that limit and fresh input power exceeds total output, including USB loads.
+  Otherwise, fresh AC input shows an infinity symbol whose green contour reflects
+  battery charge. A spinner marks an unavailable estimate. Notifications open a
+  current-status list with shortcuts to the related settings.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
@@ -165,7 +167,8 @@ Change this in **Settings → Appearance → General → Pause when the display 
 Work resumes automatically once all applicable pause conditions clear. Auto first waits
 for new readings and a new target check, then applies its normal stability delay.
 Display dimming alone does not pause work. Saved Auto choices, settings drafts and
-window visibility are retained; resuming does not bring windows to the foreground.
+window visibility are retained. The widget restores its transparent window after
+wake without taking focus.
 
 EcoFlow Monitor requests Windows Efficiency mode for its own process where
 supported. Windows can still sleep and turn off its display normally. A CLI command
@@ -224,6 +227,8 @@ uses MQTT for DELTA 3 MAX, switches to HTTPS polling if the stream is unavailabl
 and returns to MQTT when fresh readings resume. **HTTPS only** uses the configured
 polling intervals throughout. While MQTT is active, readings update as they arrive.
 Monitoring shows the current transport next to the last update when space permits.
+**Renew MQTT access** queues behind an in-progress HTTPS request and reconnects
+with the replacement access once EcoFlow issues it.
 
 **Collect device diagnostics** requests separate permission to record sanitized
 official API responses locally, including when ordinary logging is Off. Nothing is

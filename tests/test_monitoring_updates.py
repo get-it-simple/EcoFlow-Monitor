@@ -32,14 +32,13 @@ def test_mains_presentation_uses_charge_fraction_without_numeric_infinity(soc, f
 
 @pytest.mark.parametrize("ac_fresh,soc,soc_fresh", [(False, 50, True), (True, None, True), (True, float("nan"), True), (True, 50, False)])
 def test_mains_without_fresh_charge_data_waits(ac_fresh, soc, soc_fresh):
-    assert present_remaining_time(2, True, 500, ac_fresh, soc, soc_fresh).mode == "waiting"
+    assert present_remaining_time(None, True, 500, ac_fresh, soc, soc_fresh).mode == "waiting"
 
 
 def test_mains_indicator_is_shared_and_stale_data_reverts_to_loader(runtime, qapp):
     controller = runtime.controller
     controller.connection = ConnectionState.LIVE
-    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
-    numeric = controller.remaining_time
+    controller.telemetry = Telemetry(700, 200, 80, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
     controller.changed.emit()
     readings = (runtime.dashboard.monitoring.readings["estimated_runtime"], runtime.widget.readings["estimated_runtime"], runtime.widget.details.readings["estimated_runtime"])
     for reading in readings:
@@ -48,7 +47,7 @@ def test_mains_indicator_is_shared_and_stale_data_reverts_to_loader(runtime, qap
         assert reading.loader.isHidden()
         assert "∞" in reading.accessibleName()
     assert metric_text(controller, "estimated_runtime") == "∞"
-    assert controller.remaining_time == numeric and numeric is not None
+    assert controller.remaining_time is None
     assert "ac_input" in dependencies("estimated_runtime")
     controller.connection = ConnectionState.STALE
     for reading in readings:
@@ -283,10 +282,11 @@ def test_compact_ports_and_notification_geometry(runtime, qapp, language, scale)
         assert button.width() > 0 and button.height() > 0
     assert dialog.grab().save(str(previews / f"notifications-{language}-{scale}.png"))
     controller.connection = ConnectionState.LIVE
-    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
+    controller.telemetry = Telemetry(700, 200, 80, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
     page.refresh()
     qapp.processEvents()
     reading = page.readings["estimated_runtime"]
+    assert not reading.infinity.isHidden()
     assert reading.infinity.geometry().size() == reading.value.size()
     assert reading.grab().save(str(previews / f"infinity-{language}-{scale}.png"))
     dialog.close()

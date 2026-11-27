@@ -179,22 +179,30 @@ def test_controller_requests_visible_sensors_and_calculation_dependencies(sensor
 
 def test_started_controller_schedules_https_and_stale_deadlines_without_a_heartbeat(sensor_controller, qapp):
     controller, now, calls, values, failures = sensor_controller
+    timer = controller._timer
+
+    def https_poll_scheduled():
+        return not controller._active and timer.isActive() and timer.interval() == 30_000
+
     controller.set_sensor_demand("widget", {"battery_level"})
     controller.start()
-    wait(qapp, lambda: len(calls) == 1 and controller._timer.remainingTime() > 0)
-    assert 29_000 <= controller._timer.remainingTime() <= 30_000
+    wait(qapp, https_poll_scheduled)
+    assert timer.isSingleShot()
+    assert len(calls) == 1
 
     now[0] += 30
     controller.wake()
-    wait(qapp, lambda: len(calls) == 2 and controller._timer.remainingTime() > 0)
+    wait(qapp, https_poll_scheduled)
+    assert len(calls) == 2
     assert controller.connection == ConnectionState.LIVE
+    assert controller.polling.samples["battery_level"].received_monotonic == now[0]
 
     controller.access_allowed = False
     controller.wake()
-    wait(qapp, lambda: controller._timer.remainingTime() >= 89_000)
+    wait(qapp, lambda: timer.isActive() and timer.interval() == 90_000)
     now[0] += 90
     controller.wake()
-    wait(qapp, lambda: controller.connection == ConnectionState.STALE and not controller._timer.isActive())
+    wait(qapp, lambda: controller.connection == ConnectionState.STALE and not timer.isActive())
     assert len(calls) == 2
 
 
@@ -242,6 +250,34 @@ def test_charge_time_uses_fresh_upper_limit_and_manual_fallback(sensor_controlle
     assert controller.reading_state("estimated_runtime") == "ready"
     controller.settings = replace(controller.settings, manual_max=None)
     assert controller.remaining_time is None
+
+
+def test_ac_charge_presentation_accounts_for_usb_in_total_output(sensor_controller, qapp):
+    controller, now, _, values, _ = sensor_controller
+    controller.settings = replace(controller.settings, capacity_wh=2000)
+    values.update(powInSumW=300, powGetAcIn=300, powGetAcOut=-150, powOutSumW=150, cmsBattSoc=60, cmsMaxChgSoc=90,
+                  powGetQcusb1=0, powGetTypec1=0)
+    controller.set_sensor_demand("widget", {"estimated_runtime"})
+    controller.set_sensor_demand("ports", {"ac_output", "usb_a1", "usb_c1"})
+    controller.refresh()
+    wait(qapp, lambda: "api" not in controller._active)
+    assert controller.remaining_presentation.mode == "charge"
+    assert controller.remaining_presentation.hours == 4
+    assert controller.remaining_presentation_sensors == CORE | {"maximum_charge_level"}
+
+    now[0] += 61
+    values.update(powOutSumW=200, powGetQcusb1=-10, powGetTypec1=-40)
+    controller.refresh()
+    wait(qapp, lambda: "api" not in controller._active)
+    assert controller.remaining_presentation.hours == 6
+
+    now[0] += 61
+    values.update(powOutSumW=300, powGetQcusb1=-50, powGetTypec1=-100)
+    controller.refresh()
+    wait(qapp, lambda: "api" not in controller._active)
+    assert controller.remaining_presentation.mode == "infinity"
+    assert controller.remaining_time is None
+    assert controller.remaining_presentation_sensors == {"ac_input", "battery_level"}
 
 
 def test_timeout_retains_values_and_retries_without_renewing_credentials(sensor_controller, qapp, monkeypatch):

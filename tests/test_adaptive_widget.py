@@ -2,11 +2,11 @@ from dataclasses import replace
 import sys
 
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPointF, Qt
 from PySide6.QtGui import QEnterEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
@@ -102,6 +102,37 @@ def test_application_owns_one_overlay_and_hotkeys_are_aliases(runtime):
     runtime.hotkey("toggle_main")
     assert not runtime.widget.isVisible()
     assert runtime.main_action is runtime.mini_action
+
+
+def test_protective_background_is_absent_from_widget_and_tray_menus(runtime):
+    widget_menu = runtime.widget.overlay.menu
+    widget_menu.aboutToShow.emit()
+    tray_menu = runtime.tray.contextMenu()
+    tray_menu.aboutToShow.emit()
+    label = i18n.t("restore_overlay")
+    for menu in (widget_menu, tray_menu, *tray_menu.findChildren(QMenu)):
+        assert label not in {action.text() for action in menu.actions()}
+
+
+def test_protective_background_settings_button_previews_until_saved(runtime, qapp):
+    controller = runtime.controller
+    controller.update_widget(opacity=0)
+    dashboard = runtime.dashboard
+    widget_settings = dashboard.appearance_tabs.widget(1)
+    restore = next(button for button in widget_settings.findChildren(QPushButton)
+                   if button.text() == i18n.t("restore_overlay"))
+
+    restore.click()
+    wait_until(qapp, lambda: controller.ui_settings.widget.opacity == pytest.approx(0.82))
+    assert controller.store.load().widget.opacity == 0
+
+    dashboard.reject()
+    assert controller.ui_settings.widget.opacity == 0
+
+    restore.click()
+    wait_until(qapp, lambda: dashboard.save_button.isEnabled())
+    dashboard.save_button.click()
+    assert controller.store.load().widget.opacity == pytest.approx(0.82)
 
 
 def test_visibility_flags_are_cumulative_and_details_only_is_exclusive(runtime):
