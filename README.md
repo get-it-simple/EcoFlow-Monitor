@@ -9,9 +9,10 @@ user-confirmed working reference. Other model profiles are untested examples
 from the API documentation; see [device profiles](DEVICE_PROFILES.md).
 
 Animated examples use demonstration data and cycle through charging,
-discharging, and balanced power. The dashboard includes the energy balance.
+discharging, and balanced power. The dashboard shows the energy balance and uses
+25% background opacity over a gradient.
 
-![Dashboard: charging, discharging, and balanced power](assets/dashboard.gif)
+![Dashboard at 25% background opacity showing charging, discharging, and balanced power](assets/dashboard.gif)
 ![Minimal widget: charging, discharging, and balanced power](assets/widget-minimal.gif)
 ![Expanded widget: charging, discharging, and balanced power](assets/widget-expanded.gif)
 
