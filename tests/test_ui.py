@@ -301,11 +301,12 @@ def test_power_units_follow_discovered_catalog_and_live_language_changes(runtime
     assert package_file is not None
     english_catalog = (Path(package_file).parent / "en" / "strings.json").read_text(encoding="utf-8")
     (english / "strings.json").write_text(english_catalog, encoding="utf-8")
-    (translated / "strings.json").write_text(json.dumps({"unit_watt": "test-unit"}), encoding="utf-8")
+    translated_unit = "tW"
+    (translated / "strings.json").write_text(json.dumps({"unit_watt": translated_unit}), encoding="utf-8")
     monkeypatch.setattr(i18n, "_translator", i18n.Translator(catalogs))
     controller = runtime.controller
     controller.telemetry = Telemetry(50, 280, 80, time.time(), time.monotonic())
-    for language, unit in (("en", "W"), ("xx", "test-unit"), ("en", "W")):
+    for language, unit in (("en", "W"), ("xx", translated_unit), ("en", "W")):
         controller.apply_settings(replace(controller.settings, language=language))
         assert runtime.mini.labels["input_power"].text() == "50 " + unit
         assert runtime.mini.labels["output_power"].text() == "280 " + unit
