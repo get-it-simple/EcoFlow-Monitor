@@ -83,12 +83,14 @@ class RemainingTimePresentation:
 
 def present_remaining_time(hours: float | None, charging: bool, ac_power: float | None, ac_fresh: bool,
                            soc: float | None, soc_fresh: bool) -> RemainingTimePresentation:
+    if charging and hours is not None:
+        return RemainingTimePresentation("charge", hours=hours)
     if ac_power is not None and not isinstance(ac_power, bool) and math.isfinite(ac_power) and ac_power > 0:
         if ac_fresh and soc_fresh and soc is not None and not isinstance(soc, bool) and math.isfinite(soc) and 0 <= soc <= 100:
             return RemainingTimePresentation("infinity", charge_fraction=soc / 100)
         return RemainingTimePresentation("waiting")
     if hours is not None:
-        return RemainingTimePresentation("charge" if charging else "runtime", hours=hours)
+        return RemainingTimePresentation("runtime", hours=hours)
     return RemainingTimePresentation("waiting")
 
 
@@ -113,9 +115,9 @@ def charge_hours(telemetry: Telemetry | None, capacity_wh: float, ceiling: float
         return None
     if capacity_wh <= 0 or not 0 <= ceiling <= 100 or not 0 <= telemetry.soc_pct <= 100:
         return None
-    if telemetry.output_w < 0 or telemetry.input_w <= telemetry.output_w:
+    if telemetry.soc_pct >= ceiling or telemetry.output_w < 0 or telemetry.input_w <= telemetry.output_w:
         return None
-    return capacity_wh * max(ceiling - telemetry.soc_pct, 0) / 100 / (telemetry.input_w - telemetry.output_w)
+    return capacity_wh * (ceiling - telemetry.soc_pct) / 100 / (telemetry.input_w - telemetry.output_w)
 
 
 class RuleConditions(Protocol):

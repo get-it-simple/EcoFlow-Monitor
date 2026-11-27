@@ -44,6 +44,28 @@ def test_display_pause_preference_preserves_schema_and_defaults(tmp_path):
         AppSettings.from_dict(payload)
 
 
+def test_dashboard_appearance_defaults_preserve_legacy_and_widget_preferences():
+    original = replace(AppSettings(), transparency=False, background_opacity=0.37)
+    payload = original.to_dict()
+    del payload["appearance"]["dashboard_opacity"]
+    del payload["appearance"]["dashboard_summary_order"]
+    assert AppSettings.from_dict(payload) == original
+
+
+@pytest.mark.parametrize("key,value", [
+    ("dashboard_opacity", True),
+    ("dashboard_opacity", 1.01),
+    ("dashboard_summary_order", None),
+    ("dashboard_summary_order", ["battery_level", "input_power", "input_power"]),
+    ("dashboard_summary_order", ["battery_level", "input_power", "connection_status"]),
+])
+def test_invalid_dashboard_appearance_is_rejected(key, value):
+    payload = AppSettings().to_dict()
+    payload["appearance"][key] = value
+    with pytest.raises(ValueError):
+        AppSettings.from_dict(payload)
+
+
 def test_invalid_file_is_preserved_until_explicit_save_with_backup(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.path.write_bytes(b"broken original")

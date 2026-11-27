@@ -3,18 +3,22 @@ from ctypes import wintypes
 from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtWidgets import QStyle, QStyleOptionSlider
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters import reference_effects
 from ecoflow_monitor.application import Application
 from ecoflow_monitor.integrations import IntegrationRule
 from ecoflow_monitor.ui.common import app_icon
+from ecoflow_monitor.ui.dashboard import Dashboard
 from ecoflow_monitor.ui.integrations import ProfileDialog
 from ecoflow_monitor.ui.percent_editor import PercentEditor
-from ecoflow_monitor.ui.settings_window import SettingsWindow
-from ecoflow_monitor.ui.theme import accent_text
+from ecoflow_monitor.ui.settings_window import SCALE_PREVIEW_DELAY_MS, SettingsWindow
+from ecoflow_monitor.ui.theme import accent_text, settings_style
+from ecoflow_monitor.ui.tokens import COLORS
 
 
 @pytest.mark.parametrize("minimum,maximum,decimals", [(0, 100, 0), (50, 300, 0), (0, 100, 2)])
@@ -141,6 +145,95 @@ def test_percent_sliders_save_reset_cancel_and_rules(tmp_path, qapp):
         close_runtime(runtime, qapp)
 
 
+def test_scale_preview_waits_for_release_and_leaves_other_drafts_responsive(tmp_path, qapp, monkeypatch):
+    runtime = Application(tmp_path / "settings.json", native=False)
+    try:
+        runtime.open_settings()
+        dashboard = runtime.dashboard
+        dashboard.navigation.setCurrentRow(2)
+        applied = []
+        apply = Dashboard.apply_appearance
+
+        def record_appearance(window):
+            previous = window._scale
+            apply(window)
+            if window._scale != previous:
+                applied.append(window._scale)
+
+        monkeypatch.setattr(Dashboard, "apply_appearance", record_appearance)
+        slider = dashboard.scale.slider
+        slider.setSliderDown(True)
+        slider.setSliderPosition(125)
+        slider.setSliderPosition(129)
+        assert dashboard.scale.value() == 129
+        assert "font-size:21px" in dashboard.appearance_examples["dashboard_scale"].sample.text()
+        dashboard.dashboard_alpha.setValue(70)
+        wait_until(qapp, lambda: runtime.controller.ui_settings.dashboard_opacity == 0.7)
+        QTest.qWait(SCALE_PREVIEW_DELAY_MS + 50)
+        assert applied == []
+        slider.setSliderDown(False)
+        assert runtime.controller.ui_settings.scale == 1
+        wait_until(qapp, lambda: runtime.controller.ui_settings.scale == 1.29)
+        assert applied == [1.29]
+        assert runtime.controller.store.load().scale == 1
+
+        widget_scale = dashboard.main_scale
+        for _ in range(3):
+            QTest.keyClick(widget_scale.slider, Qt.Key.Key_Right)
+            QTest.qWait(90)
+        assert runtime.controller.ui_settings.widget.scale == 1
+        dashboard.hide()
+        QTest.qWait(SCALE_PREVIEW_DELAY_MS + 50)
+        assert runtime.controller.ui_settings.widget.scale == 1
+        dashboard.show()
+        wait_until(qapp, lambda: runtime.controller.ui_settings.widget.scale == 1.03)
+        dashboard.scale.setValue(150)
+        dashboard.reject()
+        QTest.qWait(SCALE_PREVIEW_DELAY_MS + 50)
+        assert runtime.controller.preview is None
+        assert dashboard.scale.value() == 100
+
+        dashboard.scale.setValue(129)
+        line = dashboard.scale.spin.lineEdit()
+        dashboard.scale.spin.selectAll()
+        QTest.keyClicks(line, "1")
+        assert not dashboard.scale.spin.hasAcceptableInput()
+        QTest.qWait(SCALE_PREVIEW_DELAY_MS + 50)
+        assert runtime.controller.preview is None
+        QTest.keyClicks(line, "50")
+        assert dashboard.scale.value() == 150
+        dashboard.save()
+        assert runtime.controller.store.load().scale == 1.5
+        assert runtime.controller.preview is None
+    finally:
+        close_runtime(runtime, qapp)
+
+
+@pytest.mark.parametrize("scale", [1, 1.25, 1.29, 1.5, 2])
+@pytest.mark.design
+def test_percent_slider_paints_round_handle_at_fractional_scale(qapp, scale):
+    editor = PercentEditor(default=50)
+    editor.setStyleSheet(settings_style(scale=scale))
+    editor.resize(520, 140)
+    editor.show()
+    try:
+        slider = editor.slider
+        for enabled, focus in [(True, False), (True, True), (False, False)]:
+            slider.setEnabled(enabled)
+            slider.setFocus() if focus else slider.clearFocus()
+            qapp.processEvents()
+            option = QStyleOptionSlider()
+            slider.initStyleOption(option)
+            handle = slider.style().subControlRect(QStyle.ComplexControl.CC_Slider, option,
+                                                   QStyle.SubControl.SC_SliderHandle, slider)
+            image = slider.grab().toImage()
+            ratio = image.devicePixelRatio()
+            fill = QColor(COLORS["accent" if enabled else "subtle"])
+            assert image.pixelColor(round(handle.center().x() * ratio), round(handle.center().y() * ratio)) == fill
+            assert image.pixelColor(round((handle.right() - 1) * ratio), round((handle.top() + 1) * ratio)) != fill
+    finally:
+        editor.close()
+        editor.deleteLater()
 @pytest.mark.parametrize("color,text", [("#ffffff", "#000000"), ("#ffff00", "#000000"), ("#000000", "#ffffff"), ("#0000ff", "#ffffff")])
 @pytest.mark.design
 def test_accent_chooses_readable_text(color, text):

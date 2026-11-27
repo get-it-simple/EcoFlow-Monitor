@@ -14,4 +14,6 @@ GEOMETRY = {"field_width": 320, "range_width": 536, "long_field_width": 620, "fo
 def surface(opacity: float, role: str = "surface") -> str:
     color = COLORS[role].lstrip("#")
     red, green, blue = (int(color[index:index + 2], 16) for index in (0, 2, 4))
-    return f"rgba({red},{green},{blue},{round(max(0, min(1, opacity)) * 255)})"
+    alpha = round(max(0, min(1, opacity)) * 255)
+    qt_alpha = alpha / 255 if alpha == 1 else alpha
+    return f"rgba({red},{green},{blue},{qt_alpha})"

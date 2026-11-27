@@ -5,7 +5,7 @@ import logging
 import sys
 from uuid import UUID
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, Signal
+from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QTimer, Qt, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ecoflow_monitor.diagnostics import event
@@ -15,7 +15,11 @@ from ecoflow_monitor.system_activity import SystemActivity
 WM_POWERBROADCAST = 0x218
 WM_TIMECHANGE = 0x001E
 WM_WTSSESSION_CHANGE = 0x2B1
+PBT_POWERSETTINGCHANGE = 0x8013
+DEVICE_NOTIFY_CALLBACK = 2
 SESSION_DISPLAY = UUID("2b84c20e-ad23-4ddf-93db-05ffbd7efca5").bytes_le
+SESSION_PRESENCE = UUID("3c0f4548-c03f-4c4d-b9f2-237ede686376").bytes_le
+DISPLAY_EVENTS = {0: "display_off", 1: "display_on", 2: "display_dim"}
 
 
 class PowerSetting(ctypes.Structure):
@@ -34,10 +38,26 @@ class SessionInfo(ctypes.Structure):
     _fields_ = [("level", wintypes.DWORD), ("data", SessionData)]
 
 
+class PowerCallbackParameters(ctypes.Structure):
+    _fields_ = [("callback", ctypes.c_void_p), ("context", ctypes.c_void_p)]
+
+
 class WindowsActivity:
+    _callbacks = {}
+
     def __init__(self):
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.wts = ctypes.WinDLL("wtsapi32", use_last_error=True)
+        self.power = ctypes.WinDLL("powrprof", use_last_error=True)
+        self.user.RegisterSuspendResumeNotification.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.user.RegisterSuspendResumeNotification.restype = wintypes.HANDLE
+        self.user.UnregisterSuspendResumeNotification.argtypes = [wintypes.HANDLE]
+        self.user.UnregisterSuspendResumeNotification.restype = wintypes.BOOL
+        self.power.PowerSettingRegisterNotification.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(wintypes.HANDLE)]
+        self.power.PowerSettingRegisterNotification.restype = wintypes.DWORD
+        self.power.PowerSettingUnregisterNotification.argtypes = [wintypes.HANDLE]
+        self.power.PowerSettingUnregisterNotification.restype = wintypes.DWORD
         self.user.RegisterPowerSettingNotification.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
         self.user.RegisterPowerSettingNotification.restype = wintypes.HANDLE
         self.user.UnregisterPowerSettingNotification.argtypes = [wintypes.HANDLE]
@@ -52,12 +72,49 @@ class WindowsActivity:
         self.wts.WTSFreeMemory.argtypes = [ctypes.c_void_p]
         self.wts.WTSFreeMemory.restype = None
 
-    def register_power(self, hwnd):
-        guid = (ctypes.c_ubyte * 16).from_buffer_copy(SESSION_DISPLAY)
+    def register_suspend(self, hwnd):
+        handle = self.user.RegisterSuspendResumeNotification(hwnd, 0)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return handle
+
+    def unregister_suspend(self, handle):
+        if not self.user.UnregisterSuspendResumeNotification(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def register_power(self, hwnd, setting=SESSION_DISPLAY):
+        guid = (ctypes.c_ubyte * 16).from_buffer_copy(setting)
         handle = self.user.RegisterPowerSettingNotification(hwnd, ctypes.byref(guid), 0)
         if not handle:
             raise ctypes.WinError(ctypes.get_last_error())
         return handle
+
+    def read_display(self, report):
+        callback_type = ctypes.WINFUNCTYPE(wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p)
+
+        @callback_type
+        def callback(context, kind, data):
+            if kind == PBT_POWERSETTINGCHANGE and data:
+                setting = PowerSetting.from_address(data)
+                if bytes(setting.guid) == SESSION_DISPLAY and setting.length == 4:
+                    report(setting.value)
+            return 0
+
+        guid = (ctypes.c_ubyte * 16).from_buffer_copy(SESSION_DISPLAY)
+        parameters = PowerCallbackParameters(ctypes.cast(callback, ctypes.c_void_p), None)
+        handle = wintypes.HANDLE()
+        error = self.power.PowerSettingRegisterNotification(
+            ctypes.byref(guid), DEVICE_NOTIFY_CALLBACK, ctypes.byref(parameters), ctypes.byref(handle))
+        if error:
+            raise ctypes.WinError(error)
+        self._callbacks[handle.value] = (callback, parameters)
+        return handle.value
+
+    def stop_read_display(self, handle):
+        error = self.power.PowerSettingUnregisterNotification(handle)
+        if error:
+            raise ctypes.WinError(error)
+        self._callbacks.pop(handle, None)
 
     def register_session(self, hwnd):
         if not self.wts.WTSRegisterSessionNotification(hwnd, 0):
@@ -89,6 +146,7 @@ class WindowsActivity:
 class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
     changed = Signal(object)
     clock_changed = Signal()
+    display_read = Signal(int, int)
 
     def __init__(self, parent=None, native=True, backend=None):
         QObject.__init__(self, parent)
@@ -99,8 +157,17 @@ class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
         self.window = None
         self._hwnd = None
         self._power = None
+        self._presence = None
+        self._suspend = None
+        self._display_read_handle = None
+        self._display_revision = 0
         self._session = False
         self._started = False
+        self._display_check = QTimer(self, singleShot=True)
+        self._display_check.timeout.connect(self._read_display)
+        self._display_timeout = QTimer(self, singleShot=True, interval=2000)
+        self._display_timeout.timeout.connect(self._stop_display_read)
+        self.display_read.connect(self._accept_display_read, Qt.ConnectionType.QueuedConnection)
 
     @staticmethod
     def _failed(operation, error):
@@ -127,10 +194,66 @@ class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
         except OSError as error:
             self._failed("register_session", error)
         self._read_session()
+        self._power = self._register("register_display", self.backend.register_power, self._hwnd)
+        self._presence = self._register("register_presence", self.backend.register_power, self._hwnd, SESSION_PRESENCE)
+        self._suspend = self._register("register_suspend", self.backend.register_suspend, self._hwnd)
+
+    def _register(self, name, operation, *args):
         try:
-            self._power = self.backend.register_power(self._hwnd)
+            return operation(*args)
         except OSError as error:
-            self._failed("register_display", error)
+            self._failed(name, error)
+
+    def _read_display(self):
+        if not self._started:
+            return
+        if self._display_read_handle is not None:
+            self._stop_display_read()
+        if self.state.sleeping or not self.state.display_off or self._display_read_handle is not None:
+            return
+        revision = self._display_revision
+        self._display_read_handle = self._register(
+            "read_display", self.backend.read_display, lambda value: self._post_display_read(revision, value))
+        if self._display_read_handle is not None:
+            self._display_timeout.start()
+
+    def _post_display_read(self, revision, value):
+        if self._started and revision == self._display_revision:
+            self.display_read.emit(revision, value)
+
+    def _stop_display_read(self):
+        self._display_timeout.stop()
+        self._display_revision += 1
+        if self._display_read_handle is not None:
+            try:
+                self.backend.stop_read_display(self._display_read_handle)
+            except OSError as error:
+                self._failed("stop_read_display", error)
+            else:
+                self._display_read_handle = None
+
+    def _accept_display_read(self, revision, value):
+        if not self._started or revision != self._display_revision or self.state.sleeping or value not in DISPLAY_EVENTS:
+            return
+        self._publish(replace(self.state, display_off=value == 0))
+
+    def _power_transition(self, name):
+        if name == "suspend":
+            if not self.state.sleeping:
+                self._display_check.stop()
+                self._display_revision += 1
+                self.transition(name)
+            return
+        state = self.state.transition(name)
+        if state == self.state and (name != "resume_user" or not state.locked):
+            return
+        try:
+            state = replace(state, locked=self.backend.locked())
+        except OSError as error:
+            self._failed("read_session", error)
+        self._publish(state)
+        if state.display_off:
+            self._display_check.start(0)
 
     def _read_session(self):
         try:
@@ -159,36 +282,47 @@ class SystemActivityWatcher(QObject, QAbstractNativeEventFilter):
                 self.transition("lock")
             elif msg.wParam == 8:
                 self.transition("unlock")
+                if self.state.display_off and not self.state.sleeping:
+                    self._display_check.start(0)
             elif msg.wParam in {1, 3, 5}:
                 self._read_session()
         elif msg.message == WM_POWERBROADCAST:
             name = {4: "suspend", 6: "resume", 7: "resume_user", 18: "resume"}.get(msg.wParam)
             if name is not None:
-                if name in {"resume", "resume_user"}:
-                    self._read_session()
-                self.transition(name)
+                self._power_transition(name)
                 return True, 1
-            if msg.wParam == 0x8013 and msg.lParam:
+            if msg.wParam == PBT_POWERSETTINGCHANGE and msg.lParam:
                 setting = PowerSetting.from_address(msg.lParam)
-                if bytes(setting.guid) == SESSION_DISPLAY and setting.length == 4:
-                    name = {0: "display_off", 1: "display_on", 2: "display_dim"}.get(setting.value)
+                guid = bytes(setting.guid)
+                if guid == SESSION_DISPLAY and setting.length == 4:
+                    name = DISPLAY_EVENTS.get(setting.value)
                     if name is not None:
+                        self._display_revision += 1
                         self.transition(name)
                         return True, 1
+                if guid == SESSION_PRESENCE and setting.length == 4 and setting.value == 0:
+                    if self.state.awaiting_user and not self.state.sleeping:
+                        self._power_transition("resume_user")
+                    return True, 1
         return False, 0
 
     def stop(self):
         if not self._started:
             return
         self._started = False
+        self._display_check.stop()
+        self._stop_display_read()
         QApplication.instance().removeNativeEventFilter(self)
-        for operation, value in (("unregister_power", self._power), ("unregister_session", self._hwnd if self._session else None)):
+        for operation, value in (("unregister_power", self._power), ("unregister_power", self._presence),
+                                 ("unregister_suspend", self._suspend), ("unregister_session", self._hwnd if self._session else None)):
             if value is not None:
                 try:
                     getattr(self.backend, operation)(value)
                 except OSError as error:
                     self._failed(operation, error)
         self._power = None
+        self._presence = None
+        self._suspend = None
         self._session = False
         self._hwnd = None
         if self.window is not None:

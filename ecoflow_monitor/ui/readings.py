@@ -3,7 +3,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from ecoflow_monitor.i18n import t
-from ecoflow_monitor.ui.common import metric_text
+from ecoflow_monitor.ui.common import duration, metric_text, number
 from ecoflow_monitor.ui.metrics import metric_label, metric_tooltip
 from ecoflow_monitor.ui.tokens import COLORS, RADIUS
 from ecoflow_monitor.ui.typography import ValueLabel
@@ -21,6 +21,7 @@ class MetricReading(MotionSurface):
         self.hover_only = False
         self.fit_values = False
         self._value_bottom = 0
+        self._display = ""
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.box = QVBoxLayout(self)
@@ -30,7 +31,6 @@ class MetricReading(MotionSurface):
         self.label = ValueLabel(self)
         self.label.setWordWrap(True)
         self.value = ValueLabel(self)
-        self.value.setWordWrap(key == "estimated_runtime")
         from ecoflow_monitor.ui.polling import LoadingIndicator
         self.loader = LoadingIndicator(controller, self.value)
         self.infinity = None
@@ -45,18 +45,21 @@ class MetricReading(MotionSurface):
         self.configure(1)
         self.refresh()
 
-    def configure(self, scale, size=24, clear=False, labels=True, hover=False, padding=0, minimum_width=100, label_width=None, *, fit=False, reserved_bottom=0):
+    def configure(self, scale, size=24, clear=False, labels=True, hover=False, padding=0, minimum_width=100, label_width=None, *, fit=False, reserved_bottom=0, fixed_slot=False):
         self.motion_radius = RADIUS["card"] * scale
-        signature = (scale, size, clear, labels, hover, padding, minimum_width, label_width, fit, reserved_bottom)
+        signature = (scale, size, clear, labels, hover, padding, minimum_width, label_width, fit, reserved_bottom, fixed_slot)
         if getattr(self, "_configuration", None) == signature:
             self.refresh()
             return
         self._configuration = signature
         self.fit_values = fit
+        self.fixed_slot = fixed_slot
         self._value_bottom = round(reserved_bottom * scale)
         self._fit_signature = None
-        self.value.setSizePolicy(QSizePolicy.Policy.Ignored if fit else QSizePolicy.Policy.Preferred,
-                                 QSizePolicy.Policy.Ignored if fit else QSizePolicy.Policy.Preferred)
+        policy = self.value.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored if fit or fixed_slot else QSizePolicy.Policy.Preferred)
+        policy.setVerticalPolicy(QSizePolicy.Policy.Ignored if fit else QSizePolicy.Policy.Preferred)
+        self.value.setSizePolicy(policy)
         self.label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.label_width = label_width
         self.label.setWordWrap(label_width is None)
@@ -69,27 +72,45 @@ class MetricReading(MotionSurface):
             font = QFont(self.font())
             font.setPixelSize(max(1, round(pixels * scale)))
             font.setWeight(QFont.Weight(weight))
+            if label is self.value and self.key == "estimated_runtime":
+                font.setFeature(QFont.Tag("tnum"), 1)
             label.setFont(font)
             label.setStyleSheet(f"color: {COLORS[role]}; background: transparent; font-size: {max(1, round(pixels * scale))}px; font-weight: {weight};")
             label.outlined = clear
             label.ensurePolished()
             label.setMinimumHeight(max(round(pixels * 1.25 * scale), label.fontMetrics().height()))
-        self.setMinimumWidth(round(minimum_width * scale))
+        if not fixed_slot:
+            self.setMinimumWidth(round(minimum_width * scale))
         self.refresh()
+
+    def _reference_value(self):
+        if self.key == "estimated_runtime":
+            return duration(888.5)
+        if self.key in {"battery_level", "minimum_discharge_level", "maximum_charge_level"}:
+            return number(100, "%")
+        return number(8888 if self.label_width is not None else -8888, t("unit_watt"))
+
+    def _label_height(self, width):
+        metrics = QFontMetricsF(self.label.font())
+        if self.key == "estimated_runtime" and self.label.wordWrap():
+            rect = QRectF(0, 0, max(1, width), 1000000)
+            return max(round(metrics.boundingRect(rect, Qt.TextFlag.TextWordWrap, t(key)).height())
+                       for key in ("estimated_runtime", "estimated_charge_time"))
+        return max(self.label.fontMetrics().height(), self.label.heightForWidth(round(width)))
 
     def baseline_size(self, width=None):
         scale, pixels, clear, labels, hover, padding = self._configuration[:6]
         font = QFont(self.value.font())
         font.setPixelSize(max(1, round(pixels * scale)))
         metrics = QFontMetricsF(font)
-        text = metric_text(self.controller, self.key)
+        text = self._reference_value()
         inset = round(padding * scale)
         inner = max(1, width - 2 * inset) if width is not None else metrics.horizontalAdvance(text) + 4
-        flags = Qt.TextFlag.TextWordWrap if self.value.wordWrap() else Qt.TextFlag.TextSingleLine
+        flags = Qt.TextFlag.TextWordWrap if self.value.wordWrap() and self.label_width is None else Qt.TextFlag.TextSingleLine
         bounds = metrics.boundingRect(QRectF(0, 0, inner, 1000000), flags, text)
         height = max(round(pixels * 1.25 * scale), metrics.height(), bounds.height())
         if labels:
-            height += max(self.label.minimumHeight(), self.label.fontMetrics().height(), self.label.heightForWidth(round(inner))) + self.box.spacing()
+            height += self._label_height(inner) + self.box.spacing()
         return QSize(round(max(bounds.width() + 4, self.label.minimumSizeHint().width() if labels else 0) + 2 * inset),
                      round(height + 2 * inset + self._value_bottom))
 
@@ -97,7 +118,7 @@ class MetricReading(MotionSurface):
         return self.baseline_size() if self.fit_values else super().sizeHint()
 
     def minimumSizeHint(self):
-        return self.baseline_size(self.width()) if self.fit_values else super().minimumSizeHint()
+        return QSize(0, self.baseline_size().height()) if self.fit_values else super().minimumSizeHint()
 
     def _value_font(self, pixels):
         color = COLORS["output" if self.key == "battery_level" and self.motion.state.mode == "discharging" else TONES.get(self.key, "text")]
@@ -110,11 +131,19 @@ class MetricReading(MotionSurface):
             self.value.setStyleSheet(style)
 
     def fit_value(self):
-        if not self.fit_values:
+        if not (self.fit_values or self.fixed_slot):
             return
+        if self.key == "estimated_runtime" and self.label.wordWrap() and not self.label.isHidden():
+            margins = self.box.contentsMargins()
+            self.label.setFixedHeight(self._label_height(self.width() - margins.left() - margins.right()))
         self.box.activate()
-        rect = self.value.contentsRect().adjusted(2, 2, -2, -2)
-        text = metric_text(self.controller, self.key)
+        rect = self.value.contentsRect()
+        if self.value.outlined:
+            rect.adjust(2, 2, -2, -2)
+        if not self.fit_values:
+            self._update_value_text(rect)
+            return
+        text = self._reference_value()
         signature = (rect.width(), rect.height(), text, self.value.font().family(), self.value.wordWrap())
         if getattr(self, "_fit_signature", None) != signature:
             self._fit_signature = signature
@@ -134,6 +163,19 @@ class MetricReading(MotionSurface):
                     upper = pixels - 1
             self._fitted_pixels = lower
         self._value_font(self._fitted_pixels)
+        self._update_value_text(rect)
+
+    def _update_value_text(self, rect):
+        displayed = self._display
+        if displayed.strip():
+            font = QFontMetricsF(self.value.font())
+            flags = Qt.TextFlag.TextWordWrap if self.value.wordWrap() else Qt.TextFlag.TextSingleLine
+            bounds = font.boundingRect(QRectF(0, 0, max(1, rect.width()), 1000000), flags, displayed)
+            if bounds.width() > rect.width() or bounds.height() > rect.height():
+                displayed = font.elidedText(displayed, Qt.TextElideMode.ElideRight, max(0, rect.width()))
+        if self.value.text() != displayed:
+            self.value.setText(displayed)
+        self.value.setToolTip(self._display if displayed != self._display else "")
 
     def refresh(self):
         self.motion.refresh()
@@ -157,7 +199,9 @@ class MetricReading(MotionSurface):
         width = getattr(self, "label_width", None)
         self.label.setText(self.label.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, width) if width is not None else label)
         self.label.setToolTip(label)
-        self.value.setText(display)
+        self._display = display
+        if not (self.fit_values or self.fixed_slot):
+            self.value.setText(display)
         self._layout_loader(state)
         self.value.setVisible(not self.hover_only or self.underMouse() or self.hasFocus())
         tooltip = metric_tooltip(self.key, self.controller)
@@ -166,11 +210,14 @@ class MetricReading(MotionSurface):
         if text == "—":
             tooltip += "\n" + t("missing_data")
         self.setToolTip(tooltip)
-        self.setAccessibleName(label + ": " + (t("sensor_" + state) if state in {"loading", "refreshing"} else text))
+        spoken = t("sensor_loading") if state == "loading" else text.lstrip()
+        if state == "refreshing":
+            spoken = f"{t('sensor_refreshing')} · {spoken}"
+        self.setAccessibleName(label + ": " + spoken)
         self.value.setAccessibleName(self.accessibleName())
-        if self.fit_values:
+        if self.fit_values or self.fixed_slot:
             self.fit_value()
-        elif self.key == "battery_level":
+        if not self.fit_values and self.key == "battery_level":
             self._value_font(self.value.font().pixelSize())
 
     def event(self, event):
@@ -203,13 +250,15 @@ class EnergyBalance(QWidget):
         self.controller = controller
         self.battery = battery
         self._scale = 1
+        self._track_opacity = 1.0
         self.motion = motion_driver(controller)
         self.motion.add(self)
         self.setMinimumHeight(12)
 
-    def configure(self, scale, material="Panel"):
+    def configure(self, scale, material="Panel", *, track_opacity=1.0):
         self._scale = scale
         self.material = material
+        self._track_opacity = track_opacity
         self.setMinimumHeight(round(12 * scale))
 
     def motion_active(self):
@@ -239,7 +288,9 @@ class EnergyBalance(QWidget):
         radius = 4 * self._scale
         rect = QRectF(0, self.height() / 2 - radius, self.width(), 2 * radius)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(COLORS["border"]))
+        track = QColor(COLORS["border"])
+        track.setAlphaF(self._track_opacity)
+        painter.setBrush(track)
         painter.drawRoundedRect(rect, radius, radius)
         if known:
             painter.setBrush(QColor(COLORS["output" if state.mode == "discharging" else "accent"] if self.battery else COLORS["input"]))

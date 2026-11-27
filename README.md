@@ -9,9 +9,10 @@ user-confirmed working reference. Other model profiles are untested examples
 from the API documentation; see [device profiles](DEVICE_PROFILES.md).
 
 Animated examples use demonstration data and cycle through charging,
-discharging, and balanced power. The dashboard includes the energy balance.
+discharging, and balanced power. The dashboard shows the energy balance and uses
+25% background opacity over a gradient.
 
-![Dashboard: charging, discharging, and balanced power](assets/dashboard.gif)
+![Dashboard at 25% background opacity showing charging, discharging, and balanced power](assets/dashboard.gif)
 ![Minimal widget: charging, discharging, and balanced power](assets/widget-minimal.gif)
 ![Expanded widget: charging, discharging, and balanced power](assets/widget-expanded.gif)
 
@@ -68,18 +69,21 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   Only one instance runs per user in a Windows session, even from another folder.
 - Collapse AC outlets and Other outputs with the centered arrow shown on hover
   or keyboard focus. Compact AC can share a row with Other outputs when space permits.
-- Time remaining shows an infinity symbol on fresh AC input; its green contour
-  reflects battery charge. A spinner marks an unavailable estimate. Notifications
-  open a current-status list with shortcuts to the related settings.
+- Time remaining shows an estimate to the upper charge limit when the battery is
+  below that limit and fresh input power exceeds total output, including USB loads.
+  Otherwise, fresh AC input shows an infinity symbol whose green contour reflects
+  battery charge. A spinner marks an unavailable estimate. Notifications open a
+  current-status list with shortcuts to the related settings.
 - Press **Ctrl+Alt+NumPad 5** to show or hide monitoring. Change this shortcut and
   assign other actions in **Hotkeys**. A shortcut owned by another
   application is reported as unavailable.
 - Resize the widget between a minimal numeric display, compact cards, a larger
   display, or a wide row. Choose readings for Small, Large, or only when expanded
-  in Appearance; Small readings also appear in Large. Reorder by dragging or
-  Move up/Move down. Extra readings open in an attached details panel without
-  moving the widget. Controls appear on hover or keyboard focus; the device name
-  and full connection status are optional. Drag a free surface to move it.
+  in Appearance. Small readings can also appear in Minimal and Large. Reorder by
+  dragging or using Move up and Move down. Extra readings open in an attached
+  details panel without moving the widget. Controls appear on hover or keyboard
+  focus. The device name and full connection status are optional. Drag a free
+  surface to move it.
 - The widget has its own scale, background, pin, position lock and click-through. Click-through requires
   the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
   controls; the tray offers the same action.
@@ -103,6 +107,11 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 - Saved preferences, window placement, and English/Ukrainian interface languages.
 
 ### Appearance and monitoring status
+
+In **Appearance → General**, set **Main window background opacity** from 0% to
+100%. The title bar shows charge, input and output power, and connection status
+on pages outside Monitoring. Use **Order of readings in the title bar** to arrange
+the three readings. Appearance includes examples that respond to your changes.
 
 Choose Panel, Overlay or Clear for the widget in Appearance. **Background opacity** ranges from
 0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain
@@ -165,7 +174,8 @@ Change this in **Settings → Appearance → General → Pause when the display 
 Work resumes automatically once all applicable pause conditions clear. Auto first waits
 for new readings and a new target check, then applies its normal stability delay.
 Display dimming alone does not pause work. Saved Auto choices, settings drafts and
-window visibility are retained; resuming does not bring windows to the foreground.
+window visibility are retained. The widget restores its transparent window after
+wake without taking focus.
 
 EcoFlow Monitor requests Windows Efficiency mode for its own process where
 supported. Windows can still sleep and turn off its display normally. A CLI command
@@ -224,6 +234,8 @@ uses MQTT for DELTA 3 MAX, switches to HTTPS polling if the stream is unavailabl
 and returns to MQTT when fresh readings resume. **HTTPS only** uses the configured
 polling intervals throughout. While MQTT is active, readings update as they arrive.
 Monitoring shows the current transport next to the last update when space permits.
+**Renew MQTT access** queues behind an in-progress HTTPS request and reconnects
+with the replacement access once EcoFlow issues it.
 
 **Collect device diagnostics** requests separate permission to record sanitized
 official API responses locally, including when ordinary logging is Off. Nothing is

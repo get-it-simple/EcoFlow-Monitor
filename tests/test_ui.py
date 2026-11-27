@@ -15,7 +15,8 @@ from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.adapters.integrations import IntegrationObservation, TransitionResult
 from ecoflow_monitor.settings import SettingsStore
-from ecoflow_monitor.ui.common import metric_text, status_tooltip
+from ecoflow_monitor.ui.appearance_examples import sample_reading
+from ecoflow_monitor.ui.common import duration, metric_text, status_tooltip
 from ecoflow_monitor.ui.common import effective_scale
 from ecoflow_monitor.ui.settings_window import SettingsWindow
 
@@ -25,11 +26,19 @@ class NoCredentials:
         raise AssertionError("UI tests must not access credentials")
 
 
+@pytest.mark.parametrize(("hours", "expected"), [
+    (None, "—"), (0, "\u20070:00"), (0.125, "\u20070:07"),
+    (9.99, "\u20079:59"), (10, "10:00"), (123.5, "123:30"),
+])
+def test_duration_formats_hours_and_minutes(hours, expected):
+    assert duration(hours) == expected
+
+
 def test_remaining_time_switches_between_charge_limit_and_runtime(runtime, qapp):
     controller = runtime.controller
     controller.settings = replace(controller.settings, capacity_wh=2000, language="en")
     i18n.setup("en")
-    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80)
+    controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80, ports=(("ac_input", 700),))
     controller.connection = ConnectionState.LIVE
     controller.changed.emit()
     readings = (runtime.window.monitoring.readings["estimated_runtime"],
@@ -37,14 +46,18 @@ def test_remaining_time_switches_between_charge_limit_and_runtime(runtime, qapp)
     for reading in readings:
         reading.refresh()
         assert reading.label.toolTip() == "Time to charge limit"
-        assert reading.value.text() == "≈ 1 h 12 min"
+        assert reading.value.text() == "\u20071:12"
         assert "input minus output" in reading.toolTip()
-        assert "Time to charge limit" in reading.accessibleName()
-    controller.telemetry = replace(controller.telemetry, input_w=0)
+        assert "USB loads" in reading.toolTip()
+        assert reading.accessibleName() == "Time to charge limit: 1:12"
+        assert reading.infinity.isHidden()
+    controller.telemetry = replace(controller.telemetry, input_w=0, ports=(("ac_input", 0),))
     for reading in readings:
         reading.refresh()
         assert reading.label.toolTip() == i18n.t("estimated_runtime")
-        assert reading.value.text() == "≈ 3 h 0 min"
+        assert reading.value.text() == "\u20073:00"
+        assert reading.accessibleName() == "Time remaining: 3:00"
+    assert sample_reading("estimated_runtime")[0] == "\u20077:40"
     controller.telemetry = replace(controller.telemetry, input_w=200)
     assert metric_text(controller, "estimated_runtime") == "—"
     controller.telemetry = replace(controller.telemetry, input_w=700)
@@ -85,10 +98,10 @@ def test_system_rule_fields_fill_available_table_width(qapp, conditions):
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 def test_charging_time_label_fits_monitor_and_widget(runtime, qapp, monkeypatch, language, scale):
     from PySide6.QtCore import QRect
-    from PySide6.QtGui import QScreen
+    from PySide6.QtGui import QFontMetricsF, QScreen
     monkeypatch.setattr(QScreen, "availableGeometry", lambda self: QRect(0, 0, 1920, 1200))
     controller = runtime.controller
-    controller.settings = replace(controller.settings, language=language, scale=scale,
+    controller.settings = replace(controller.settings, language=language, scale=scale, capacity_wh=2000,
                                   widget=replace(controller.settings.widget, enabled=True, scale=scale))
     controller.telemetry = Telemetry(700, 200, 50, time.time(), controller.clock(), 20, 80)
     controller.connection = ConnectionState.LIVE
@@ -99,7 +112,8 @@ def test_charging_time_label_fits_monitor_and_widget(runtime, qapp, monkeypatch,
     runtime.open_dashboard(0)
     qapp.processEvents()
     assert "estimated_runtime" in runtime.widget.composition.visible
-    for reading in (runtime.window.monitoring.readings["estimated_runtime"], runtime.widget.readings["estimated_runtime"]):
+    readings = (runtime.window.monitoring.readings["estimated_runtime"], runtime.widget.readings["estimated_runtime"])
+    for reading in readings:
         reading.refresh()
         assert reading.rect().contains(reading.label.geometry())
         if reading.label.wordWrap():
@@ -112,6 +126,17 @@ def test_charging_time_label_fits_monitor_and_widget(runtime, qapp, monkeypatch,
     destination.mkdir(parents=True, exist_ok=True)
     runtime.window.grab().save(str(destination / f"charge-monitor-{language}-{scale}.png"))
     runtime.widget.grab().save(str(destination / f"charge-widget-{language}-{scale}.png"))
+
+    for soc, expected in [(70, "10:00"), (69.95, "\u20079:59")]:
+        controller.telemetry = replace(controller.telemetry, input_w=0, output_w=100, soc_pct=soc)
+        controller.changed.emit()
+        qapp.processEvents()
+        for reading in readings:
+            assert reading.label.toolTip() == ("Час роботи" if language == "uk" else "Time remaining")
+            assert reading.value.text() == expected
+            metrics = QFontMetricsF(reading.value.font())
+            assert metrics.horizontalAdvance(expected) <= reading.value.contentsRect().width()
+            assert metrics.horizontalAdvance("\u20079") == pytest.approx(metrics.horizontalAdvance("10"), abs=0.5)
 
 
 @pytest.mark.parametrize("language", ["en", "uk"])
@@ -299,11 +324,12 @@ def test_power_units_follow_discovered_catalog_and_live_language_changes(runtime
     assert package_file is not None
     english_catalog = (Path(package_file).parent / "en" / "strings.json").read_text(encoding="utf-8")
     (english / "strings.json").write_text(english_catalog, encoding="utf-8")
-    (translated / "strings.json").write_text(json.dumps({"unit_watt": "test-unit"}), encoding="utf-8")
+    translated_unit = "tW"
+    (translated / "strings.json").write_text(json.dumps({"unit_watt": translated_unit}), encoding="utf-8")
     monkeypatch.setattr(i18n, "_translator", i18n.Translator(catalogs))
     controller = runtime.controller
     controller.telemetry = Telemetry(50, 280, 80, time.time(), time.monotonic())
-    for language, unit in (("en", "W"), ("xx", "test-unit"), ("en", "W")):
+    for language, unit in (("en", "W"), ("xx", translated_unit), ("en", "W")):
         controller.apply_settings(replace(controller.settings, language=language))
         assert runtime.mini.labels["input_power"].text() == "50 " + unit
         assert runtime.mini.labels["output_power"].text() == "280 " + unit

@@ -215,7 +215,7 @@ class Application(QObject):
         if self._stopped or not hasattr(self, "monitor_action"):
             return
         self.monitor_action.setChecked(self.window.isVisible())
-        self.main_action.setChecked(self.widget.isVisible())
+        self.main_action.setChecked(self.controller.ui_settings.widget.enabled)
         if self._activity_paused:
             return
         handles = set()
@@ -400,7 +400,7 @@ class Application(QObject):
         self.confirmations.raise_active()
 
     def preview(self, settings):
-        if self._stopped:
+        if self._stopped or self.controller.preview == settings:
             return
         self.controller.preview = settings
         self.motion_driver.refresh()

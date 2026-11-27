@@ -119,6 +119,7 @@ class Controller(QObject):
     system_activity_changed = Signal(object)
     profiles_ready = Signal(object)
     profile_example_ready = Signal(object, object)
+    mqtt_stream_started = Signal(object, float)
     mqtt_readings_ready = Signal(object)
     credential_cache_updated = Signal()
 
@@ -195,11 +196,13 @@ class Controller(QObject):
         self._mqtt_access: MqttAccess | None = None
         self._mqtt_auth_blocked = False
         self._mqtt_certification_retry_at = 0.0
+        self._mqtt_renew_pending = False
         self.mqtt_access_status = ""
         self._mqtt_retry_at = 0.0
         self._mqtt_retry_delay = MQTT_RETRY_INITIAL
         self._mqtt_fallback = False
         self._telemetry_epoch = 0
+        self.mqtt_stream_started.connect(self._mqtt_started, Qt.ConnectionType.QueuedConnection)
         self.mqtt_readings_ready.connect(self._accept_mqtt, Qt.ConnectionType.QueuedConnection)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -242,8 +245,7 @@ class Controller(QObject):
             if "api" in self._active and self._api_mode == "devices" and self._discovery_pending is None:
                 self._discovery_pending = (None,)
             self.credential_renewal_pending = False
-            if self.mqtt_access_status == "mqtt_access_renewing":
-                self.mqtt_access_status = ""
+            self._cancel_mqtt_renewal()
             self._resume_fields = set()
             self._resume_scans = {module.id for module in self.settings.integrations if module.enabled}
             for state in self.integration_states.values():
@@ -382,7 +384,7 @@ class Controller(QObject):
 
     @property
     def remaining_presentation_sensors(self):
-        if self.telemetry is not None and (dict(self.telemetry.ports).get("ac_input") or 0) > 0:
+        if self.remaining_presentation.mode == "infinity":
             return frozenset(("ac_input", "battery_level"))
         return self.remaining_time_sensors
 
@@ -627,15 +629,27 @@ class Controller(QObject):
 
     @property
     def can_renew_mqtt_access(self) -> bool:
+        return (not self._mqtt_renew_pending and self.mqtt_access_status != "mqtt_access_renewing"
+                and self._mqtt_renewal_allowed())
+
+    def _mqtt_renewal_allowed(self) -> bool:
         return (self.settings.telemetry_transport == "mqtt_with_https_fallback" and bool(self.settings.serial)
                 and self.access_allowed and not self._stopped and not self.system_activity.paused
                 and not self.credential_renewal_required and self.connection not in {ConnectionState.AUTH_ERROR, ConnectionState.UNSUPPORTED}
-                and "api" not in self._active and self.clock() >= self._mqtt_certification_retry_at)
+                and self.clock() >= self._mqtt_certification_retry_at)
 
     def renew_mqtt_access(self) -> None:
         if self.can_renew_mqtt_access and not self._check_credential_expiry():
-            self.mqtt_access_status = "mqtt_access_renewing"
-            self._start_mqtt_setup(renewal=True)
+            self._mqtt_renew_pending = True
+            self.mqtt_access_status = "mqtt_access_renew_waiting"
+            self._continue_api()
+            if self._mqtt_renew_pending:
+                self.changed.emit()
+
+    def _cancel_mqtt_renewal(self):
+        self._mqtt_renew_pending = False
+        if self.mqtt_access_status in {"mqtt_access_renew_waiting", "mqtt_access_renewing"}:
+            self.mqtt_access_status = ""
 
     def _start_mqtt_setup(self, *, renewal=False):
         settings, cancelled = self.settings, self._credential_cancelled
@@ -745,7 +759,6 @@ class Controller(QObject):
         access = cached.broker
         session.reused_access = cached.attempted
         self._mqtt_access = replace(cached, attempted=True)
-        session.deadline = self.clock() + 120
 
         def receive(patch):
             if session.offer(patch, time.time(), self.clock()):
@@ -760,6 +773,7 @@ class Controller(QObject):
             )
 
         def operation():
+            self.mqtt_stream_started.emit(session, self.clock())
             if self._mqtt_stream is stream_telemetry:
                 return stream_telemetry(access, session.serial, session.cancelled, receive,
                                         raw_receive=raw_received, operation=session.operation)
@@ -770,6 +784,11 @@ class Controller(QObject):
         worker.signals.finished.connect(self._completed, Qt.ConnectionType.QueuedConnection)
         self._active[kind] = worker
         self._mqtt_pool.start(worker)
+
+    def _mqtt_started(self, session, started):
+        if session is self._mqtt_session and not self._stopped and not self.system_activity.paused:
+            session.deadline = started + 120
+            self.wake()
 
     def _accept_mqtt(self, session):
         if session is not self._mqtt_session or not self.access_allowed or self.system_activity.paused or self._check_credential_expiry():
@@ -829,6 +848,7 @@ class Controller(QObject):
         self._mqtt_fallback = False
 
     def _clear_mqtt_access(self):
+        self._mqtt_renew_pending = False
         self._mqtt_access = None
         self._mqtt_auth_blocked = False
         self.mqtt_access_status = ""
@@ -846,7 +866,7 @@ class Controller(QObject):
         if session is not None and reason == "broker_auth_rejected":
             self._mqtt_access = None
             self._mqtt_auth_blocked = not session.reused_access
-            if self.mqtt_access_status != "mqtt_access_renewing":
+            if not self._mqtt_renew_pending and self.mqtt_access_status != "mqtt_access_renewing":
                 self.mqtt_access_status = "mqtt_access_rejected"
             retry = session.reused_access
         self._stop_mqtt()
@@ -1075,11 +1095,14 @@ class Controller(QObject):
             getattr(previous, name) != getattr(settings, name) for name in credential_fields[1:])
         if credentials_changed:
             self._clear_mqtt_access()
-        elif self.mqtt_access_status == "mqtt_access_renewing" or previous.telemetry_transport != settings.telemetry_transport:
-            self.mqtt_access_status = ""
+        else:
+            self._cancel_mqtt_renewal()
+            if previous.telemetry_transport != settings.telemetry_transport:
+                self.mqtt_access_status = ""
         session = self._mqtt_session
+        setup_session = getattr(self._active.get("api"), "mqtt_session", None)
         if (device_changed or credentials_changed or previous.telemetry_transport != settings.telemetry_transport
-                or session is not None and session.deadline == float("inf")):
+                or session is not None and session is setup_session):
             self._reset_mqtt()
         self._credential_cancelled.set()
         self._credential_cancelled = threading.Event()
@@ -1656,8 +1679,16 @@ class Controller(QObject):
         state.next_scan = 0
 
     def _continue_api(self):
-        if self._stopped or self.system_activity.paused or "api" in self._active:
+        if self._stopped or self.system_activity.paused or self._work_cancelled.is_set() or "api" in self._active:
             return
+        if self._mqtt_renew_pending:
+            self._mqtt_renew_pending = False
+            if self._mqtt_renewal_allowed() and not self._check_credential_expiry():
+                self.mqtt_access_status = "mqtt_access_renewing"
+                self._start_mqtt_setup(renewal=True)
+                return
+            if self.mqtt_access_status == "mqtt_access_renew_waiting":
+                self.mqtt_access_status = "mqtt_access_renew_failed"
         if self._discovery_pending is not None:
             pending = self._discovery_pending
             self._discovery_pending = None

@@ -162,7 +162,7 @@ Function ${UN}StopInstalled
 wait_exit:
   Call ${UN}InspectExactProcess
   StrCmp $ProcessStatus 0 done
-  StrCmp $ProcessStatus 1 0 failed
+  StrCmp $ProcessStatus 3 failed
   Sleep 100
   IntOp $9 $9 - 1
   IntCmp $9 0 failed wait_exit wait_exit

@@ -1,18 +1,21 @@
 from dataclasses import replace
 import sys
+import time
 
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPointF, Qt
 from PySide6.QtGui import QEnterEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
+from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.settings import AppSettings, METRICS, WidgetPreferences
 from ecoflow_monitor.ui.adaptive_widget import WIDGET
+from ecoflow_monitor.ui.common import metric_text
 from ecoflow_monitor.widget_layout import Rectangle, details_placement, widget_layout
 
 
@@ -47,9 +50,27 @@ def test_layout_respects_hierarchy_expanded_only_and_overflow():
 
 def test_minimal_honors_small_selection_and_keeps_other_metrics_in_details():
     preferences = replace(WidgetPreferences(), small_metrics=("input_power", "estimated_runtime"))
-    result = widget_layout(preferences, 240, 56, 3, 1, WIDGET)
+    result = widget_layout(preferences, 240, 56, 1, 1, WIDGET)
     assert result.visible == ("input_power",)
     assert result.details == ("estimated_runtime",)
+    result = widget_layout(preferences, 240, 56, 3, 1, WIDGET)
+    assert result.visible == ("input_power", "estimated_runtime")
+    assert result.details == ()
+
+
+@pytest.mark.design
+def test_minimal_reflows_all_selected_metrics_between_one_row_and_multiple_rows(runtime, qapp):
+    selected = METRICS[::-1]
+    runtime.controller.update_widget(enabled=True, small_metrics=METRICS, metric_order=selected)
+    widget = runtime.widget
+    for size, expected in (((520, 56), selected), ((240, 56), selected[:3]), ((240, 150), selected)):
+        widget.resize(*size)
+        wait_until(qapp, lambda: widget.composition.mode == "minimal" and widget.composition.visible == expected)
+        assert widget.composition.details == tuple(key for key in selected if key not in expected)
+        visible = [widget.readings[key].geometry() for key in expected]
+        assert all(widget.rect().contains(rect) for rect in visible)
+        assert all(not rect.intersects(other) for index, rect in enumerate(visible) for other in visible[index + 1:])
+        assert len({rect.y() for rect in visible}) == (2 if size[1] == 150 else 1)
 
 
 @pytest.mark.parametrize("dock,core,direction", [
@@ -102,6 +123,37 @@ def test_application_owns_one_overlay_and_hotkeys_are_aliases(runtime):
     runtime.hotkey("toggle_main")
     assert not runtime.widget.isVisible()
     assert runtime.main_action is runtime.mini_action
+
+
+def test_protective_background_is_absent_from_widget_and_tray_menus(runtime):
+    widget_menu = runtime.widget.overlay.menu
+    widget_menu.aboutToShow.emit()
+    tray_menu = runtime.tray.contextMenu()
+    tray_menu.aboutToShow.emit()
+    label = i18n.t("restore_overlay")
+    for menu in (widget_menu, tray_menu, *tray_menu.findChildren(QMenu)):
+        assert label not in {action.text() for action in menu.actions()}
+
+
+def test_protective_background_settings_button_previews_until_saved(runtime, qapp):
+    controller = runtime.controller
+    controller.update_widget(opacity=0)
+    dashboard = runtime.dashboard
+    widget_settings = dashboard.appearance_tabs.widget(1)
+    restore = next(button for button in widget_settings.findChildren(QPushButton)
+                   if button.text() == i18n.t("restore_overlay"))
+
+    restore.click()
+    wait_until(qapp, lambda: controller.ui_settings.widget.opacity == pytest.approx(0.82))
+    assert controller.store.load().widget.opacity == 0
+
+    dashboard.reject()
+    assert controller.ui_settings.widget.opacity == 0
+
+    restore.click()
+    wait_until(qapp, lambda: dashboard.save_button.isEnabled())
+    dashboard.save_button.click()
+    assert controller.store.load().widget.opacity == pytest.approx(0.82)
 
 
 def test_visibility_flags_are_cumulative_and_details_only_is_exclusive(runtime):
@@ -260,6 +312,52 @@ def test_visible_readings_fit_and_have_inner_padding(runtime, qapp, size, langua
         assert reading.rect().contains(reading.value.geometry())
         assert reading.box.contentsMargins().left() > 0
         assert reading.value.outlined
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("size,language,scale", [((240, 56), "uk", 1), ((520, 350), "en", 1.25)])
+def test_telemetry_updates_keep_adaptive_widget_and_details_readings_stable(runtime, qapp, monkeypatch, size, language, scale):
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, language=language, manual_min=20, manual_max=90))
+    controller.update_widget(enabled=True, scale=scale, small_metrics=METRICS[:3],
+                             large_metrics=METRICS[:3], expanded_metrics=("estimated_runtime",))
+    reading_state = Controller.reading_state
+    monkeypatch.setattr(Controller, "reading_state", lambda self, key: "loading" if self.telemetry is None else reading_state(self, key))
+    widget = runtime.widget
+    widget.resize(*size)
+    QTest.qWait(40)
+    widget.reveal_button.setChecked(True)
+    QTest.qWait(40)
+    readings = [*(widget.readings[key] for key in widget.composition.visible),
+                widget.details.readings["estimated_runtime"]]
+
+    def slots():
+        geometry = tuple((reading.geometry(), reading.value.geometry(), reading.value.font().pixelSize()) for reading in readings)
+        return widget.composition, widget.details.geometry(), geometry
+
+    assert widget.composition.visible == METRICS[:3]
+    assert widget.details.isVisible()
+    assert widget.readings["input_power"].loader.isVisible()
+    baseline = slots()
+    for watts, state, time_mode in [(0, ConnectionState.LIVE, "runtime"), (1850, ConnectionState.LIVE, "charge"),
+                                    (98, ConnectionState.STALE, "waiting")]:
+        controller.telemetry = Telemetry(watts, 325, 72, 1795780800, time.monotonic())
+        controller.connection = state
+        controller.changed.emit()
+        QTest.qWait(25)
+        reading = widget.readings["input_power"]
+        assert reading.value.text() == metric_text(controller, reading.key)
+        assert controller.remaining_presentation.mode == time_mode
+        assert widget.details.isVisible()
+        assert slots() == baseline
+    controller.telemetry = replace(controller.telemetry, input_w=12345678901234567890)
+    controller.changed.emit()
+    qapp.processEvents()
+    full_value = metric_text(controller, reading.key)
+    assert "…" in reading.value.text()
+    assert reading.value.toolTip() == full_value
+    assert full_value in reading.accessibleName()
+    assert slots() == baseline
 
 
 @pytest.mark.design

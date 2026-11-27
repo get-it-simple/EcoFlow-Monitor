@@ -36,7 +36,9 @@ def duration(hours: float | None) -> str:
     if hours is None:
         return "—"
     total = max(0, int(hours * 60))
-    return "≈ " + t("duration_hours").format(hours=total // 60, minutes=total % 60)
+    whole_hours, minutes = divmod(total, 60)
+    padding = "\u2007" if whole_hours < 10 else ""
+    return f"{padding}{whole_hours}:{minutes:02d}"
 
 
 def number(value: float | None, unit: str = "") -> str:
@@ -65,7 +67,7 @@ def status_tooltip(controller) -> str:
     if controller.telemetry is None:
         last = t("never_updated")
     else:
-        stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().isoformat(sep=" ", timespec="seconds")
         last = t("last_update").format(timestamp=stamp)
     return t(display_connection(controller).value) + "\n" + last
 

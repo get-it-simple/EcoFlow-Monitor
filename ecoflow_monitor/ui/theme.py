@@ -106,10 +106,8 @@ QCheckBox[switch="true"]::indicator {{ width: {px(40)}px; height: {px(24)}px; bo
 QCheckBox[switch="true"]::indicator:checked {{ background: {c['accent']}; image: url({on}); }}
 QSlider::groove:horizontal {{ height: {px(4)}px; background: {c['border']}; border-radius: {px(2)}px; }}
 QSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: {px(2)}px; }}
-QSlider::handle:horizontal {{ width: {px(20)}px; margin: -{px(8)}px 0; background: {c['accent']}; border: 1px solid {c['accent']}; border-radius: {px(10)}px; }}
-QSlider::handle:horizontal:focus {{ border: 2px solid {c['focus']}; }}
-QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled {{ background: {c['subtle']}; }}
-QSlider::handle:horizontal:disabled {{ border-color: {c['subtle']}; }}
+QSlider::handle:horizontal {{ width: {px(20)}px; margin: -{px(8)}px 0; background: transparent; border: none; }}
+QSlider::sub-page:horizontal:disabled {{ background: {c['subtle']}; }}
 QToolButton:checked {{ background: {c['successSurface']}; border-color: {c['accent']}; }}
 QScrollArea, QScrollArea > QWidget > QWidget, QStackedWidget {{ background: transparent; border: none; }}
 QToolTip {{ color: {c['text']}; background: {c['raised']}; border: 1px solid {c['border']}; padding: {px(8)}px; }}
