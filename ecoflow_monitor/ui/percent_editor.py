@@ -1,8 +1,31 @@
-from PySide6.QtCore import QEvent, QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QGridLayout, QSlider, QWidget
+from PySide6.QtCore import QEvent, QRectF, QSignalBlocker, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QCheckBox, QGridLayout, QSlider, QStyle, QStyleOptionSlider, QWidget
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.ui.components import NumberField
+from ecoflow_monitor.ui.tokens import COLORS
+
+
+class _PercentSlider(QSlider):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        handle = QRectF(self.style().subControlRect(QStyle.ComplexControl.CC_Slider, option,
+                                                     QStyle.SubControl.SC_SliderHandle, self))
+        center = handle.center()
+        radius = min(handle.width(), handle.height()) / 2
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(COLORS["accent" if self.isEnabled() else "subtle"]))
+        painter.drawEllipse(center, radius, radius)
+        if self.isEnabled() and self.hasFocus():
+            width = max(1, round(2 * self.font().pixelSize() / 14))
+            painter.setPen(QPen(QColor(COLORS["focus"]), width))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(center, radius - width / 2, radius - width / 2)
 
 
 class PercentEditor(QWidget):
@@ -16,7 +39,7 @@ class PercentEditor(QWidget):
         self.spin.setDecimals(decimals)
         self.spin.setSuffix(" %")
         self.spin.setValue(default)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = _PercentSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(minimum, maximum)
         self.slider.setValue(round(self.spin.value()))
         self.slider.setMinimumWidth(80)

@@ -1,14 +1,15 @@
 from dataclasses import replace
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QPushButton
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.application import Application
+from ecoflow_monitor.controller import Controller
 from ecoflow_monitor.domain import ConnectionState, Telemetry
 from ecoflow_monitor.settings import AppSettings, METRICS, OverlayPreferences, SettingsStore
 from ecoflow_monitor.ui.common import metric_text
@@ -66,6 +67,300 @@ def test_preview_cancel_and_save_do_not_write_temporary_appearance(runtime, qapp
     assert runtime.controller.store.load().widget.opacity == pytest.approx(0.41)
     dashboard._draft_changed()
     assert not dashboard.save_button.isEnabled()
+
+
+def test_dashboard_summary_order_and_opacity_follow_draft_and_save(runtime):
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    baseline = runtime.controller.settings
+    dashboard.dashboard_alpha.setValue(0)
+    dashboard.dashboard_summary_order.down.click()
+    dashboard._draft_changed()
+    order = ("input_power", "battery_level", "output_power")
+    assert runtime.controller.ui_settings.dashboard_opacity == 0
+    assert dashboard.summary.order == order
+    assert runtime.controller.store.load().dashboard_opacity == 1
+    dashboard.reject()
+    assert dashboard.summary.order == baseline.dashboard_summary_order
+    assert runtime.controller.ui_settings.dashboard_opacity == 1
+
+    dashboard.dashboard_alpha.setValue(50)
+    dashboard.dashboard_summary_order.down.click()
+    dashboard.save()
+    stored = runtime.controller.store.load()
+    assert stored.dashboard_opacity == 0.5
+    assert stored.dashboard_summary_order == order
+    assert stored.widget == baseline.widget
+
+
+def test_dashboard_summary_shows_telemetry_outside_monitoring_and_localized_timestamp(runtime, monkeypatch):
+    runtime.open_dashboard()
+    dashboard, controller = runtime.dashboard, runtime.controller
+    controller.apply_settings(replace(controller.settings, language="uk"))
+    monkeypatch.setattr(Controller, "telemetry_source", property(lambda self: "https_fallback"))
+    controller.telemetry = Telemetry(0, 185, 72, 1795780800, time.monotonic())
+    controller.connection = ConnectionState.LIVE
+    controller.changed.emit()
+
+    assert dashboard.summary.isHidden()
+    for index in range(1, dashboard.tabs.count()):
+        dashboard.navigation.setCurrentRow(index)
+        assert dashboard.summary.isVisible()
+        assert dashboard.summary.readings["input_power"].value.text() == "0\u00a0Вт"
+        assert dashboard.summary.readings["battery_level"].value.text() == "72\u00a0%"
+        tooltip = dashboard.summary.status.toolTip()
+        assert i18n.t("telemetry_active_fallback") in tooltip
+        timestamp = tooltip.splitlines()[1].split(": ", 1)[-1]
+        assert "?" not in timestamp
+        assert timestamp[-6] in "+-" and timestamp[-3] == ":"
+    dashboard.navigation.setCurrentRow(0)
+    assert dashboard.summary.isHidden()
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("language,scale,width", [("en", 1, 1050), ("uk", 1.5, 640)])
+def test_dashboard_summary_readings_keep_their_slots_as_telemetry_changes(runtime, qapp, monkeypatch, language, scale, width):
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, language=language, scale=scale))
+    runtime.open_dashboard()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    dashboard.setMinimumWidth(0)
+    dashboard.resize(width, 750)
+    summary = dashboard.summary
+    reading_state = Controller.reading_state
+    monkeypatch.setattr(Controller, "reading_state", lambda self, key: "loading" if self.telemetry is None else reading_state(self, key))
+    controller.connection = ConnectionState.CONNECTING
+    controller.changed.emit()
+    qapp.processEvents()
+
+    def slots():
+        readings = tuple((reading.geometry(), reading.value.font().pixelSize()) for reading in summary.readings.values())
+        return summary.mapTo(dashboard, QPoint()), readings
+
+    baseline = slots()
+    assert summary.readings["input_power"].loader.isVisible()
+    for watts, source, state in [(0, "mqtt", ConnectionState.LIVE), (1850, "https_fallback", ConnectionState.LIVE),
+                                 (85, "https", ConnectionState.STALE)]:
+        monkeypatch.setattr(Controller, "telemetry_source", property(lambda self: source))
+        controller.telemetry = Telemetry(watts, 185, 72, 1795780800, time.monotonic())
+        controller.connection = state
+        controller.changed.emit()
+        qapp.processEvents()
+        assert summary.readings["input_power"].value.text() == metric_text(controller, "input_power")
+        assert slots() == baseline
+
+
+@pytest.mark.design
+def test_dashboard_opacity_percent_editor_preserves_visible_text_and_selection(runtime, qapp):
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    editor = dashboard.dashboard_alpha
+    dashboard.appearance_scroll.ensureWidgetVisible(editor)
+    spin = editor.spin
+    line = spin.lineEdit()
+    for opacity in (87, 50, 0, 100):
+        editor.slider.setValue(opacity)
+        line.setFocus()
+        line.setSelection(0, len(str(opacity)))
+        dashboard._draft_changed()
+        qapp.processEvents()
+        assert line.hasFocus()
+        assert line.selectedText() == str(opacity)
+        assert line.text() == f"{opacity} %"
+        assert spin.rect().contains(line.geometry())
+        assert line.width() >= line.fontMetrics().horizontalAdvance(line.text()) + 4
+    QTest.keyClick(line, Qt.Key.Key_Home)
+    spin.selectAll()
+    QTest.keyClicks(line, "65")
+    QTest.keyClick(line, Qt.Key.Key_Return)
+    assert editor.slider.value() == editor.value() == 65
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("opacity,alpha", [(0, 0), (50, 192), (100, 255)])
+def test_monitoring_nested_backgrounds_compose_and_balance_readings_use_card_padding(runtime, qapp, opacity, alpha):
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    dashboard.dashboard_alpha.setValue(opacity)
+    dashboard._draft_changed()
+    dashboard.navigation.setCurrentRow(0)
+    monitoring = dashboard.monitoring
+    scroll = dashboard.tabs.currentWidget()
+    for card in (monitoring.balance_card, monitoring.port_sections["inputs"][0]):
+        qapp.processEvents()
+        point = card.mapTo(monitoring, QPoint(8, 28))
+        scroll.ensureVisible(point.x(), point.y(), 20, 20)
+        qapp.processEvents()
+        point = monitoring.mapTo(dashboard, point)
+        image = dashboard.grab().toImage()
+        ratio = image.devicePixelRatio()
+        pixel = image.pixelColor(round(point.x() * ratio), round(point.y() * ratio))
+        assert abs(pixel.alpha() - alpha) <= (1 if card is not monitoring.balance_card else 0)
+    expected = monitoring.cards[0].layout().contentsMargins().left()
+    for reading in monitoring.balance_readings.values():
+        margins = reading.box.contentsMargins()
+        assert margins.left() == margins.top() == margins.right() == margins.bottom() == expected
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("opacity,alpha", [(0, 0), (50, 128), (100, 255)])
+def test_dashboard_shell_alpha_preserves_control_surfaces(runtime, qapp, language, opacity, alpha):
+    runtime.controller.apply_settings(replace(runtime.controller.settings, language=language))
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    dashboard.dashboard_alpha.setValue(opacity)
+    dashboard._draft_changed()
+    qapp.processEvents()
+    image = dashboard.grab().toImage()
+    ratio = image.devicePixelRatio()
+    assert image.pixelColor(round((dashboard.width() - 22) * ratio), round(85 * ratio)).alpha() == alpha
+    if opacity == 0:
+        assert image.pixelColor(round((dashboard.width() - 4) * ratio), round(85 * ratio)).alpha() in (1, 2)
+    assert dashboard.windowOpacity() == 1
+    assert dashboard.close_button.grab().toImage().pixelColor(6, 12).alpha() == 255
+
+
+@pytest.mark.design
+def test_dashboard_summary_compacts_then_restores_full_status(runtime, qapp, monkeypatch):
+    runtime.open_dashboard()
+    dashboard = runtime.dashboard
+    runtime.controller.telemetry = Telemetry(0, 185, 72, 1795780800, time.monotonic())
+    runtime.controller.connection = ConnectionState.LIVE
+    source = "mqtt"
+    monkeypatch.setattr(Controller, "telemetry_source", property(lambda self: source))
+    dashboard.navigation.setCurrentRow(4)
+    dashboard.setMinimumWidth(0)
+    summary = dashboard.summary
+    title_margins = dashboard.titlebar.layout().contentsMargins()
+    shell_margins = dashboard.shell.layout().contentsMargins()
+    insets = title_margins.left() + title_margins.right() + shell_margins.left() + shell_margins.right()
+    wrapped_width = insets + summary.reading_width() + summary.status.full_size_hint().width()
+    dashboard.resize(wrapped_width - 1, 600)
+    qapp.processEvents()
+    assert summary.status.indicator_only
+    dashboard.resize(wrapped_width, 600)
+    qapp.processEvents()
+    assert summary.parentWidget() is dashboard.shell
+    assert not summary.status.indicator_only, (dashboard.width(), wrapped_width, summary.reading_width(),
+                                                summary.status.full_size_hint().width(), summary.status.display_text())
+    assert "MQTT" in summary.status.text()
+    source = "https_fallback"
+    runtime.controller.changed.emit()
+    assert i18n.t("telemetry_active_fallback") in summary.status.accessibleName()
+    for width in range(wrapped_width, 800, 10):
+        dashboard.resize(width, 650)
+        qapp.processEvents()
+        if summary.status.indicator_only and summary.parentWidget() is dashboard.titlebar:
+            break
+    else:
+        pytest.fail("The inline title bar never showed a compact connection indicator")
+    dashboard.resize(1050, 720)
+    qapp.processEvents()
+    assert not summary.status.indicator_only
+    assert i18n.t("telemetry_fallback_short") in summary.status.text()
+    assert dashboard.titlebar.rect().contains(summary.geometry())
+    assert summary.status.width() == summary.status.full_size_hint().width()
+    assert dashboard.close_button.x() - summary.geometry().right() >= 24
+
+
+@pytest.mark.design
+@pytest.mark.parametrize("language", ["en", "uk"])
+@pytest.mark.parametrize("scale", [1, 1.25, 1.29, 1.5, 2])
+def test_dashboard_summary_and_appearance_examples_fit_at_scale(runtime, qapp, language, scale):
+    controller = runtime.controller
+    controller.apply_settings(replace(controller.settings, language=language, scale=scale))
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    qapp.processEvents()
+    summary = dashboard.summary
+    assert summary.parentWidget().rect().contains(summary.geometry())
+    items = [*(reading.geometry() for reading in summary.readings.values()), summary.status.geometry()]
+    assert all(summary.rect().contains(rect) for rect in items)
+    assert all(not rect.intersects(other) for index, rect in enumerate(items) for other in items[index + 1:])
+    sample = dashboard.appearance_examples["dashboard_opacity"]
+    assert sample.isVisible()
+    assert sample.rect().contains(sample.sample.geometry())
+    scroll = dashboard.appearance_scroll
+    scroll_body = scroll.widget()
+    bar = scroll.verticalScrollBar()
+    general_page = dashboard.appearance_tabs.widget(0)
+    language_help = next(button for button in general_page.findChildren(QPushButton)
+                         if button.text() == i18n.t("language_guide"))
+
+    def scroll_reaches_last_example(example):
+        bottom = example.mapTo(scroll_body, QPoint(0, example.height())).y()
+        margin = scroll_body.layout().contentsMargins().bottom()
+        extra = bar.maximum() + scroll.viewport().height() - bottom
+        return extra >= 0 and (bar.maximum() == 0 or extra <= margin + round(32 * scale))
+
+    for width, height in ((700, 650), (1134, 989)):
+        dashboard.resize(width, height)
+        for index, key in ((0, "dashboard"), (1, "widget"), (0, "dashboard")):
+            dashboard.appearance_tabs.setCurrentIndex(index)
+            last_key = "dashboard_summary_order" if index == 0 else "widget_metric_order"
+            last = dashboard.appearance_examples[last_key]
+            wait_until(qapp, lambda: last.isVisible() and scroll_reaches_last_example(last))
+            example = dashboard.appearance_examples[key + "_opacity"]
+            layout = example.parentWidget().parentWidget().layout()
+            assert layout.itemAt(0).geometry().top() == layout.contentsMargins().top()
+            assert example.isVisible()
+            assert example.height() <= max(example.sizeHint().height(), example.heightForWidth(example.width()))
+            if index == 0:
+                language_bottom = dashboard.language.mapTo(scroll_body, QPoint(0, dashboard.language.height())).y()
+                help_top = language_help.mapTo(scroll_body, QPoint()).y()
+                assert 0 < help_top - language_bottom <= round(32 * scale)
+    order = dashboard.dashboard_summary_order
+    example = dashboard.appearance_examples["dashboard_summary_order"]
+    dashboard.appearance_scroll.ensureWidgetVisible(example)
+    qapp.processEvents()
+    group = example.parentWidget()
+    layout = group.parentWidget().layout()
+    caption = layout.itemAt(layout.indexOf(group) - 1).widget()
+    assert 0 < group.y() - caption.geometry().bottom() <= round(32 * scale)
+    assert order.items.y() == 0
+    assert order.items.viewport().rect().contains(order.items.visualItemRect(order.items.item(order.items.count() - 1)))
+    assert 0 < order.up.geometry().top() - order.items.geometry().bottom() <= round(12 * scale)
+    assert 0 < example.y() - order.geometry().bottom() <= round(12 * scale)
+
+
+@pytest.mark.design
+def test_hover_example_cycles_and_respects_reduced_motion_and_visibility(runtime, qapp, monkeypatch):
+    now = [0.0]
+    controller: Controller = runtime.controller
+    monkeypatch.setattr(controller, "clock", lambda: now[0])
+    runtime.open_settings()
+    dashboard = runtime.dashboard
+    dashboard.navigation.setCurrentRow(2)
+    dashboard.monitor_values_on_hover.setChecked(True)
+    example = dashboard.appearance_examples["dashboard_hover"]
+    dashboard.tabs.currentWidget().ensureWidgetVisible(example)
+    qapp.processEvents()
+    hover = dashboard.hover_examples
+    hover.refresh()
+    assert hover.timer.isActive()
+    assert i18n.t("appearance_resting") in example.sample.text()
+    now[0] += 1.5
+    hover.refresh()
+    assert i18n.t("appearance_hovered") in example.sample.text()
+    original = qapp.property("system_animations")
+    try:
+        qapp.setProperty("system_animations", False)
+        hover.refresh()
+        assert not hover.timer.isActive()
+        assert i18n.t("appearance_resting") in example.sample.text()
+        assert i18n.t("appearance_hovered") in example.sample.text()
+    finally:
+        qapp.setProperty("system_animations", original)
+    dashboard.navigation.setCurrentRow(0)
+    hover.refresh()
+    assert not hover.timer.isActive()
 
 
 @pytest.mark.parametrize("version", [0, 1, 2])
@@ -355,6 +650,7 @@ def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
     dashboard = runtime.dashboard
     dashboard.show()
     dashboard.navigation.setCurrentRow(1)
+    dashboard.connection_tabs.setCurrentIndex(1)
     dashboard.activateWindow()
     qapp.processEvents()
     page = dashboard.tabs.currentWidget()
@@ -362,10 +658,14 @@ def test_keyboard_focus_never_outlines_page_containers(runtime, qapp):
     dashboard._focus_binding.keyboard = True
     dashboard._focus_binding.refresh()
     assert dashboard._focus_binding.outline.isHidden()
+    assert dashboard.access.isVisible()
     dashboard.access.setFocus(Qt.FocusReason.TabFocusReason)
     dashboard._focus_binding.refresh()
     assert not dashboard._focus_binding.outline.isHidden()
     assert dashboard._focus_binding.outline.width() < page.width()
+    dashboard.summary.readings["battery_level"].setFocus(Qt.FocusReason.TabFocusReason)
+    dashboard._focus_binding.refresh()
+    assert not dashboard._focus_binding.outline.isHidden()
 
 
 def test_main_flags_do_not_affect_app_shell_and_recover_input_without_shortcut(runtime, qapp):

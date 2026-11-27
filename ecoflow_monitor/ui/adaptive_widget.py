@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QL
 
 from ecoflow_monitor.i18n import t
 from ecoflow_monitor.settings import METRICS
-from ecoflow_monitor.widget_layout import Rectangle, details_placement, widget_layout
+from ecoflow_monitor.widget_layout import Rectangle, compact_metric_geometry, details_placement, widget_layout
 from ecoflow_monitor.ui.common import ScreenTracker, effective_scale, scaled_font, status_color, status_tooltip
 from ecoflow_monitor.ui.components import StatusBadge
 from ecoflow_monitor.ui.focus import FocusBinding
@@ -188,7 +188,7 @@ class AdaptiveWidget(QFrame):
             return
         self.overlay.apply()
         area = self._area()
-        minimal_allowed = bool(set(preferences.small_metrics) & set(METRICS[:3]))
+        minimal_allowed = bool(preferences.small_metrics)
         self.scale = min(effective_scale(self, preferences.scale), area.width() / WIDGET["minimumWidth" if minimal_allowed else "smallWidth"], area.height() / WIDGET["minimumHeight" if minimal_allowed else "smallHeight"])
         scale = self.scale
         self.setMinimumSize(round(WIDGET["minimumWidth" if minimal_allowed else "smallWidth"] * scale), round(WIDGET["minimumHeight" if minimal_allowed else "smallHeight"] * scale))
@@ -250,13 +250,14 @@ class AdaptiveWidget(QFrame):
             return
         preferences = self.controller.ui_settings.widget
         signature = (self.size(), self.scale, replace(preferences, geometry=(0, 0, 0, 0)),
-                     self.controller.ui_settings.language, self.controller.fresh)
+                     self.controller.ui_settings.language)
         if signature == getattr(self, "_layout_signature", None):
             for key in self.composition.visible:
                 self.readings[key].refresh()
             for key in self.composition.details:
                 self.details.readings[key].refresh()
             self.progress.refresh()
+            self._update_status_indicator(preferences)
             return
         self._layout_signature = signature
         self._laying_out = True
@@ -283,8 +284,6 @@ class AdaptiveWidget(QFrame):
             cell_width = round(WIDGET["minimalCellWidth" if minimal else "cellWidth" if probe.mode == "large" else "smallCellWidth"] * scale)
             columns = max(1, (available_width + gap) // (cell_width + gap))
             candidates = preferences.large_metrics if probe.mode == "large" else preferences.small_metrics
-            if minimal:
-                candidates = tuple(key for key in candidates if key in METRICS[:3])
             columns = min(columns, max(1, len(candidates)))
             target_width = max(1, (available_width - gap * (columns - 1)) // columns)
             card_height = 1
@@ -292,21 +291,32 @@ class AdaptiveWidget(QFrame):
             for key, reading in self.readings.items():
                 reading.material = self.shell.material
                 reading.configure(scale, value_size, preferences.opacity == 0, labels, preferences.values_on_hover and not minimal, padding, 0, compact_label_width, fit=True)
-                if key not in candidates:
+                if minimal or key not in candidates:
                     continue
                 card_height = max(card_height, reading.baseline_size(target_width).height())
             usable_height = max(0, self.height() - 2 * inset - metadata_height)
             rows = max(0, (usable_height + gap) // (card_height + gap))
-            self.composition = widget_layout(preferences, width, height, columns, rows, WIDGET)
+            compact = {}
+            capacity = None
+            if minimal:
+                sizes, preferred_widths = self._measure_compact(preferences)
+                compact = compact_metric_geometry(sizes, available_width, usable_height, gap, preferred_widths=preferred_widths)
+                columns = sum(rect.y == 0 for rect in compact.values())
+                capacity = len(compact)
+            self.composition = widget_layout(preferences, width, height, columns, rows, WIDGET, capacity=capacity)
             self.labels = {key: self.readings[key].value for key in self.composition.visible}
             for key, reading in self.readings.items():
                 reading.setVisible(key in self.composition.visible)
             visible_count = len(self.composition.visible)
-            used_rows = math.ceil(visible_count / columns) if visible_count else 0
+            used_rows = math.ceil(visible_count / columns) if visible_count and not minimal else 0
             row_height = card_height if not used_rows else max(card_height, (usable_height - gap * (used_rows - 1)) // used_rows)
             for index, key in enumerate(self.composition.visible):
                 reading = self.readings[key]
-                reading.setGeometry(inset + index % columns * (target_width + gap), y + index // columns * (row_height + gap), target_width, row_height)
+                if minimal:
+                    rect = compact[key]
+                    reading.setGeometry(inset + rect.x, y + rect.y, rect.width, rect.height)
+                else:
+                    reading.setGeometry(inset + index % columns * (target_width + gap), y + index // columns * (row_height + gap), target_width, row_height)
                 if key == "battery_level" and probe.mode == "large" and not probe.wide and row_height >= round(124 * scale):
                     reading.configure(scale, WIDGET["heroValueSize"], preferences.opacity == 0, labels, preferences.values_on_hover, padding, 0, fit=True, reserved_bottom=16)
                     if reading.baseline_size(target_width).width() > target_width:
@@ -321,7 +331,7 @@ class AdaptiveWidget(QFrame):
             button_size = round(36 * scale)
             self.toolbar.setGeometry(max(inset, self.width() - inset - button_size * 4), inset, button_size * 4, button_size)
             self.toolbar.layout().activate()
-            self.status_indicator.setVisible(not preferences.show_connection_status and not self.controller.fresh or minimal and not self.controller.fresh)
+            self._update_status_indicator(preferences)
             indicator_inset = max(TOKENS["focus"]["offset"] + TOKENS["focus"]["width"], round(WIDGET["minimalPadding"] * scale))
             self.status_indicator.setGeometry(indicator_inset, indicator_inset, round(16 * scale), round(16 * scale))
             focusable = [self.overlay.pin, self.reveal_button, self.overlay.menu_button, self.close_button]
@@ -340,6 +350,21 @@ class AdaptiveWidget(QFrame):
         if signature != getattr(self, "_composition_signature", None):
             self._composition_signature = signature
             self.composition_changed.emit()
+
+    def _update_status_indicator(self, preferences):
+        self.status_indicator.setVisible(not self.controller.fresh and
+                                         (not preferences.show_connection_status or self.composition.mode == "minimal"))
+
+    def _measure_compact(self, preferences):
+        cell_width = round(WIDGET["minimalCellWidth"] * self.scale)
+        sizes = {}
+        preferred_widths = {}
+        for key in preferences.metric_order:
+            if key in preferences.small_metrics:
+                size = self.readings[key].baseline_size()
+                sizes[key] = (min(cell_width, size.width()), size.height())
+                preferred_widths[key] = size.width()
+        return sizes, preferred_widths
 
     def _update_details(self):
         if not hasattr(self, "composition"):

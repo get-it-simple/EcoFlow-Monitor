@@ -9,7 +9,7 @@ from ecoflow_monitor.ui.common import ActionButton, status_color, status_text, s
 from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY, RADIUS, TOKENS
 from ecoflow_monitor.ui.motion import motion_driver, paint_status_mark, status_motion_active
-from ecoflow_monitor.ui.typography import draw_outlined
+from ecoflow_monitor.ui.typography import ValueLabel, draw_outlined
 
 
 class LinkButton(ActionButton):
@@ -66,6 +66,11 @@ class NumberField(QDoubleSpinBox):
     def showEvent(self, event):
         super().showEvent(event)
         self._layout_text()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.StyleChange, QEvent.Type.FontChange):
+            self._layout_text()
 
 
 class TextArea(QPlainTextEdit):
@@ -395,27 +400,51 @@ class StatusBadge(QToolButton):
         self.motion = motion_driver(controller)
         self.outlined = False
         self.compact = False
+        self.indicator_only = False
+        self.source = ""
+        self.source_detail = ""
         self.setObjectName("status_badge")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.motion.add(self)
         self.refresh()
 
-    def sizeHint(self):
+    def full_size_hint(self):
         scale = max(0.5, self.font().pixelSize() / 12)
-        return QSize(self.fontMetrics().horizontalAdvance(status_text(self.controller)) + round(40 * scale),
+        side, padding, gap = self._mark_geometry()
+        width = self.fontMetrics().horizontalAdvance(self.display_text()) + side + 2 * padding + gap
+        return QSize(width + (4 if self.outlined else 0),
                      max(round(28 * scale), self.fontMetrics().height() + round(12 * scale)))
 
+    def _mark_geometry(self):
+        scale = max(0.5, self.font().pixelSize() / 12)
+        side = round(16 * scale)
+        return side, round(10 * scale), round(4 * side / 16)
+
+    def sizeHint(self):
+        return self.minimumSizeHint() if self.indicator_only else self.full_size_hint()
+
     def minimumSizeHint(self):
-        return QSize(round(40 * max(0.5, self.font().pixelSize() / 12)), self.sizeHint().height())
+        return QSize(round(40 * max(0.5, self.font().pixelSize() / 12)), self.full_size_hint().height())
+
+    def display_text(self):
+        text = status_text(self.controller)
+        return f"{text} · {self.source}" if self.source else text
+
+    def set_indicator_only(self, enabled):
+        if self.indicator_only != enabled:
+            self.indicator_only = enabled
+            self.refresh()
 
     def refresh(self):
         self.motion.refresh()
-        self.setText("*  " + status_text(self.controller))
+        self.setText("" if self.indicator_only else "*  " + self.display_text())
         retry = self.retry_credentials and self.controller.can_retry_credentials
-        tooltip = status_tooltip(self.controller) + ("\n" + t("onepassword_status_retry") if retry else "")
+        tooltip = "\n".join(part for part in (
+            status_tooltip(self.controller), self.source_detail, t("onepassword_status_retry") if retry else "",
+        ) if part)
         self.setToolTip(tooltip)
         self.setAccessibleName(tooltip)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus if retry else Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus if retry or self.indicator_only else Qt.FocusPolicy.NoFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor if retry else Qt.CursorShape.ArrowCursor)
         self.setStyleSheet(f"color: {status_color(self.controller)}; background: transparent; border: none;")
         self.updateGeometry()
@@ -447,12 +476,14 @@ class StatusBadge(QToolButton):
             painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), self.height() / 2, self.height() / 2)
         painter.setPen(QColor(status_color(self.controller)))
         painter.setFont(self.font())
-        padding = round(10 * max(0.5, self.font().pixelSize() / 12))
-        side = round(16 * max(0.5, self.font().pixelSize() / 12))
-        mark = QRectF(padding, max(0, (self.height() - side) / 2), side, side)
+        side, padding, gap = self._mark_geometry()
+        left = (self.width() - side) / 2 if self.indicator_only else padding
+        mark = QRectF(left, max(0, (self.height() - side) / 2), side, side)
         paint_status_mark(painter, mark, self.motion, self.outlined)
-        rect = self.rect().adjusted(padding + side + round(4 * side / 16), 0, -padding, 0)
-        text = self.fontMetrics().elidedText(status_text(self.controller), Qt.TextElideMode.ElideRight, max(1, rect.width()))
+        if self.indicator_only:
+            return
+        rect = self.rect().adjusted(padding + side + gap, 0, -padding, 0)
+        text = self.fontMetrics().elidedText(self.display_text(), Qt.TextElideMode.ElideRight, max(1, rect.width()))
         if self.outlined:
             draw_outlined(painter, text, self.font(), rect, QColor(status_color(self.controller)), False)
         else:
@@ -508,7 +539,7 @@ class TitleBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         row = QHBoxLayout(self)
         row.setContentsMargins(24, 12, 16, 12)
-        self.title = QLabel(t("app_title"), self)
+        self.title = ValueLabel(t("app_title"), self)
         self.title.setObjectName("brand")
         row.addWidget(self.title, 1)
         self.close_button = QToolButton(self)

@@ -78,10 +78,11 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
   application is reported as unavailable.
 - Resize the widget between a minimal numeric display, compact cards, a larger
   display, or a wide row. Choose readings for Small, Large, or only when expanded
-  in Appearance; Small readings also appear in Large. Reorder by dragging or
-  Move up/Move down. Extra readings open in an attached details panel without
-  moving the widget. Controls appear on hover or keyboard focus; the device name
-  and full connection status are optional. Drag a free surface to move it.
+  in Appearance. Small readings can also appear in Minimal and Large. Reorder by
+  dragging or using Move up and Move down. Extra readings open in an attached
+  details panel without moving the widget. Controls appear on hover or keyboard
+  focus. The device name and full connection status are optional. Drag a free
+  surface to move it.
 - The widget has its own scale, background, pin, position lock and click-through. Click-through requires
   the tray menu and a working recovery shortcut. **Ctrl+Alt+W** restores widget
   controls; the tray offers the same action.
@@ -105,6 +106,11 @@ If Python 3.11 is not installed, choose a newer installed version explicitly.
 - Saved preferences, window placement, and English/Ukrainian interface languages.
 
 ### Appearance and monitoring status
+
+In **Appearance → General**, set **Main window background opacity** from 0% to
+100%. The title bar shows charge, input and output power, and connection status
+on pages outside Monitoring. Use **Order of readings in the title bar** to arrange
+the three readings. Appearance includes examples that respond to your changes.
 
 Choose Panel, Overlay or Clear for the widget in Appearance. **Background opacity** ranges from
 0% (no background) to 100% (solid); Overlay starts at 82%. Text and icons remain

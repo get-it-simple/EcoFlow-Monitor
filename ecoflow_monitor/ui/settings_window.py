@@ -5,7 +5,7 @@ import logging
 from typing import cast
 
 from PySide6.QtCore import QPoint, QSize, QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from ecoflow_monitor import i18n
 from ecoflow_monitor.diagnostics import event, reveal_log
@@ -34,6 +34,11 @@ from ecoflow_monitor.ui.focus import FocusBinding
 from ecoflow_monitor.ui.localization import TranslationBinding
 from ecoflow_monitor.ui.dialogs import LanguageGuideDialog
 from ecoflow_monitor.ui.device_profiles import DeviceProfilesPanel
+from ecoflow_monitor.ui.appearance_examples import AppearanceExample, HoverExamples, SummaryOrderEditor, sample_reading
+from ecoflow_monitor.ui.tokens import SPACE
+
+
+SCALE_PREVIEW_DELAY_MS = 300
 
 
 class SettingsWindow(QDialog):
@@ -90,6 +95,7 @@ class SettingsWindow(QDialog):
         self.load_draft()
         controller.changed.connect(self._refresh_metric_tooltips)
         self.finished.connect(self._close_credentials)
+        self.finished.connect(self._cancel_scale_preview)
         self.finished.connect(lambda: self.preview_changed.emit(None))
         self.error_label = QLabel(self)
         self.error_label.setObjectName("form_error")
@@ -139,6 +145,8 @@ class SettingsWindow(QDialog):
             content = QVBoxLayout(body)
             content.setContentsMargins(0, 24, 0, 0)
             content.setSpacing(24)
+            content.setAlignment(Qt.AlignmentFlag.AlignTop)
+            content.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.connection_tabs.addTab(body, t(key))
             bodies[key] = content
         layout.addStretch()
@@ -372,19 +380,33 @@ class SettingsWindow(QDialog):
 
     def _build_appearance(self):
         layout = self._tab(t("appearance_settings"))
+        self.appearance_scroll = self.tabs.widget(self.tabs.count() - 1)
+        self.appearance_examples = {}
+        self.hover_examples = HoverExamples(self, self.controller, self.appearance_scroll)
         self.appearance_tabs = QTabWidget()
         self.appearance_tabs.tabBar().setDrawBase(False)
         layout.addWidget(self.appearance_tabs)
-        bodies = {}
-        for key, label in (("appearance_general", "appearance_general"), ("appearance_widget", "adaptive_widget")):
-            body = QWidget()
+        bodies = []
+        for label in ("appearance_general", "adaptive_widget"):
+            page = QWidget()
+            page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            body = QWidget(page)
+            page_layout.addWidget(body)
             content = QVBoxLayout(body)
             content.setContentsMargins(0, 24, 0, 0)
             content.setSpacing(24)
-            self.appearance_tabs.addTab(body, t(label))
-            bodies[key] = content
-        general = bodies["appearance_general"]
-        main = bodies["appearance_widget"]
+            self.appearance_tabs.addTab(page, t(label))
+            bodies.append((body, content))
+
+        def show_current_body(index):
+            for tab_index, (body, _) in enumerate(bodies):
+                body.setHidden(tab_index != index)
+
+        self.appearance_tabs.currentChanged.connect(show_current_body)
+        show_current_body(self.appearance_tabs.currentIndex())
+        (_, general), (_, main) = bodies
         form = QFormLayout()
         self.language = QComboBox()
         self.language.addItem(t("language_system"), "system")
@@ -396,7 +418,10 @@ class SettingsWindow(QDialog):
         general.addWidget(language_help, 0, Qt.AlignmentFlag.AlignLeft)
         self.scale = PercentEditor(50, 300)
         self.scale.setAccessibleName(t("scale"))
-        general.addWidget(SettingRow(t("scale"), self.scale))
+        self._appearance_example(general, SettingRow(t("scale"), self.scale), "dashboard_scale")
+        self.dashboard_alpha = PercentEditor()
+        self.dashboard_alpha.setAccessibleName(t("dashboard_opacity"))
+        self._appearance_example(general, SettingRow(t("dashboard_opacity"), self.dashboard_alpha), "dashboard_opacity")
         self.animations = Switch(t("animations"))
         from ecoflow_monitor.adapters.startup import available
         self.start_with_windows = Switch(t("start_with_windows"))
@@ -407,9 +432,16 @@ class SettingsWindow(QDialog):
         general.addWidget(SettingRow(t("pause_on_display_off"), self.pause_on_display_off))
         self.monitor_labels_visible = Switch(t("monitor_labels_visible"))
         self.monitor_values_on_hover = Switch(t("monitor_values_on_hover"))
-        for control, label in ((self.monitor_labels_visible, "monitor_labels_visible"), (self.monitor_values_on_hover, "monitor_values_on_hover"), (self.animations, "animations")):
-            general.addWidget(SettingRow(t(label), control))
-        general.addStretch()
+        self._appearance_example(general, SettingRow(t("monitor_labels_visible"), self.monitor_labels_visible), "dashboard_labels")
+        self.hover_examples.add(
+            self._appearance_example(general, SettingRow(t("monitor_values_on_hover"), self.monitor_values_on_hover), "dashboard_hover"),
+            self.monitor_values_on_hover,
+        )
+        general.addWidget(SettingRow(t("animations"), self.animations))
+        self.dashboard_summary_order = SummaryOrderEditor()
+        general.addWidget(hint(t("dashboard_summary_order")))
+        self._appearance_example(general, self.dashboard_summary_order, "dashboard_summary_order")
+        general.addStretch(1)
         self.mini_enabled = Switch(t("adaptive_widget"))
         self.mini_above = Switch(t("mini_above_taskbar"))
         self.overlay_fields = {}
@@ -428,10 +460,10 @@ class SettingsWindow(QDialog):
         main_material.currentIndexChanged.connect(lambda: self._material_changed("main"))
         self.main_alpha.valueChanged.connect(lambda: self._opacity_changed("main"))
         main.addWidget(SettingRow(t("widget_material"), main_material))
-        main.addWidget(SettingRow(t("background_opacity"), self.main_alpha))
+        self._appearance_example(main, SettingRow(t("background_opacity"), self.main_alpha), "widget_opacity")
         main.addWidget(hint(t("clear_readability")))
         main.addWidget(action(t("restore_overlay"), lambda: self._restore_overlay("main")), 0, Qt.AlignmentFlag.AlignLeft)
-        main.addWidget(SettingRow(t("widget_scale"), self.main_scale))
+        self._appearance_example(main, SettingRow(t("widget_scale"), self.main_scale), "widget_scale")
         self.overlay_fields["main"] = {}
         for name, label in (("pinned", "pin_widget"), ("position_locked", "position_lock"), ("click_through", "click_through")):
             control = Switch(t(label))
@@ -445,7 +477,9 @@ class SettingsWindow(QDialog):
         for name, label in (("widget_device_name", "widget_device_name"), ("widget_connection_status", "widget_connection_status"), ("widget_labels", "monitor_labels_visible"), ("widget_values_hover", "monitor_values_on_hover")):
             control = Switch(t(label))
             setattr(self, name, control)
-            main.addWidget(SettingRow(t(label), control))
+            example = self._appearance_example(main, SettingRow(t(label), control), name)
+            if name == "widget_values_hover":
+                self.hover_examples.add(example, control)
         main.addWidget(hint(t("widget_status_hint")))
         main.addWidget(SettingRow(t("mini_above_taskbar"), self.mini_above))
         self.dock = QComboBox()
@@ -458,14 +492,120 @@ class SettingsWindow(QDialog):
         main.addWidget(heading)
         main.addWidget(hint(t("widget_visibility_hint")))
         self.metrics = MetricVisibilityEditor()
-        main.addWidget(self.metrics)
         metric_buttons = QHBoxLayout()
         metric_buttons.addWidget(action(t("move_up"), lambda: self._move_metric(-1)))
         metric_buttons.addWidget(action(t("move_down"), lambda: self._move_metric(1)))
         metric_buttons.addStretch()
-        main.addLayout(metric_buttons)
-        main.addStretch()
-        layout.addStretch()
+        metrics = QWidget()
+        metric_controls = QVBoxLayout(metrics)
+        metric_controls.setContentsMargins(0, 0, 0, 0)
+        metric_controls.addWidget(self.metrics)
+        metric_controls.addLayout(metric_buttons)
+        self._appearance_example(main, metrics, "widget_metric_order")
+        main.addStretch(1)
+        self._held_scales: dict[PercentEditor, float] = {}
+        self._scale_preview_timers: dict[PercentEditor, QTimer] = {}
+        for control in (self.scale, self.main_scale):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setTimerType(Qt.TimerType.PreciseTimer)
+            timer.setInterval(SCALE_PREVIEW_DELAY_MS)
+            timer.timeout.connect(lambda editor=control: self._apply_scale_preview(editor))
+            self._scale_preview_timers[control] = timer
+            control.valueChanged.connect(lambda _, editor=control: self._scale_edited(editor))
+            control.spin.lineEdit().textEdited.connect(lambda _, editor=control: self._schedule_scale_preview(editor))
+            control.spin.editingFinished.connect(lambda editor=control: self._resume_scale_preview(editor))
+            control.slider.sliderPressed.connect(lambda editor=control: self._schedule_scale_preview(editor))
+            control.slider.sliderReleased.connect(lambda editor=control: self._resume_scale_preview(editor))
+        for control in (self.dashboard_alpha, self.main_alpha):
+            control.valueChanged.connect(self._appearance_input_changed)
+        for control in (self.monitor_labels_visible, self.widget_labels, self.widget_device_name, self.widget_connection_status, self.animations):
+            control.toggled.connect(self._appearance_input_changed)
+        self.dashboard_summary_order.changed.connect(self._appearance_input_changed)
+        self.metrics.changed.connect(self._appearance_input_changed)
+        self.tabs.currentChanged.connect(self._appearance_input_changed)
+
+    def _appearance_example(self, layout, control, key):
+        section = QWidget()
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        policy.setHeightForWidth(True)
+        section.setSizePolicy(policy)
+        group = QVBoxLayout(section)
+        group.setContentsMargins(0, 0, 0, 0)
+        group.setSpacing(SPACE[1])
+        group.addWidget(control)
+        example = AppearanceExample()
+        group.addWidget(example)
+        layout.addWidget(section)
+        self.appearance_examples[key] = example
+        return example
+
+    def _appearance_input_changed(self, *_):
+        if not self._loading:
+            self._refresh_appearance_examples()
+
+    def _scale_edited(self, editor):
+        if not self._loading:
+            if self.tabs.currentWidget() is self.appearance_scroll:
+                self._refresh_scale_example(editor)
+            self._schedule_scale_preview(editor)
+
+    def _refresh_scale_example(self, editor):
+        key = "dashboard_scale" if editor is self.scale else "widget_scale"
+        battery = (sample_reading("battery_level"),)
+        self.appearance_examples[key].set_sample((battery,), self._settings_scale, value_scale=editor.value() / 100)
+
+    def _schedule_scale_preview(self, editor):
+        if self._loading:
+            return
+        current = self.controller.ui_settings
+        self._held_scales.setdefault(editor, current.scale if editor is self.scale else current.widget.scale)
+        self._scale_preview_timers[editor].stop()
+        self._resume_scale_preview(editor)
+
+    def _resume_scale_preview(self, editor):
+        if self._loading or editor not in self._held_scales:
+            return
+        timer = self._scale_preview_timers[editor]
+        if (not timer.isActive() and self.isVisible() and not self.isMinimized() and
+                not editor.slider.isSliderDown() and editor.spin.hasAcceptableInput()):
+            timer.start()
+
+    def _apply_scale_preview(self, editor):
+        self._held_scales.pop(editor, None)
+        self._draft_timer.stop()
+        self._draft_changed()
+
+    def _cancel_scale_preview(self):
+        self._draft_timer.stop()
+        for timer in self._scale_preview_timers.values():
+            timer.stop()
+        self._held_scales.clear()
+
+    def _refresh_appearance_examples(self):
+        if self.tabs.currentWidget() is not self.appearance_scroll:
+            return
+        examples = self.appearance_examples
+        scale = self._settings_scale
+        battery = (sample_reading("battery_level"),)
+        self._refresh_scale_example(self.scale)
+        self._refresh_scale_example(self.main_scale)
+        examples["dashboard_opacity"].set_sample((battery,), scale, opacity=self.dashboard_alpha.value() / 100, backdrop=True)
+        examples["widget_opacity"].set_sample((battery,), scale, opacity=self.main_alpha.value() / 100, backdrop=True)
+        for key, control in (("dashboard_labels", self.monitor_labels_visible), ("widget_labels", self.widget_labels)):
+            examples[key].set_sample(((sample_reading("battery_level", with_label=control.isChecked()),),), scale)
+        name = ((t("appearance_device_example"), "text"),)
+        examples["widget_device_name"].set_sample((name, battery) if self.widget_device_name.isChecked() else (battery,), scale)
+        status = ((f"● {t('connected')} · MQTT", "accent"),)
+        examples["widget_connection_status"].set_sample((status, battery) if self.widget_connection_status.isChecked() else (battery,), scale)
+        self.dashboard_summary_order.refresh_labels()
+        order = tuple(sample_reading(key) for key in self.dashboard_summary_order.order())
+        examples["dashboard_summary_order"].set_sample(((*order, *status),), scale)
+        widget_order = tuple(sample_reading(key, with_label=self.widget_labels.isChecked())
+                             for key in self.metrics.order if self.metrics.modes[key] in {"small", "large"})
+        examples["widget_metric_order"].set_sample((widget_order or ((t("missing_data"), "muted"),),), scale)
+        self.hover_examples.animations = self.animations.isChecked()
+        self.hover_examples.refresh()
 
     def _language_guide(self):
         dialog = LanguageGuideDialog(self)
@@ -560,6 +700,7 @@ class SettingsWindow(QDialog):
     def load_draft(self):
         was_loading = self._loading
         self._loading = True
+        self._cancel_scale_preview()
         settings = self.controller.settings
         self._baseline = settings
         self.show_keys.setChecked(False)
@@ -601,6 +742,8 @@ class SettingsWindow(QDialog):
                 control.setSuffix(" " + t("unit_seconds"))
                 control.setAccessibleName(t("polling_" + name) + ": " + t(label))
         self.scale.setValue(settings.scale * 100)
+        self.dashboard_alpha.setValue(settings.dashboard_opacity * 100)
+        self.dashboard_summary_order.set_order(settings.dashboard_summary_order)
         self.animations.setChecked(settings.animations)
         self.start_with_windows.setChecked(settings.start_with_windows)
         self.pause_on_display_off.setChecked(settings.pause_on_display_off)
@@ -623,6 +766,7 @@ class SettingsWindow(QDialog):
         self.dock.setCurrentIndex(max(0, self.dock.findData(settings.widget.dock)))
         self.metrics.load(settings)
         self.metrics.refresh_tooltips(self.controller)
+        self._refresh_appearance_examples()
         self.hotkey_rows = self._reset_hotkeys()
         self._loading = was_loading
         if not self._loading:
@@ -799,6 +943,8 @@ class SettingsWindow(QDialog):
             widget=self._widget_draft(),
             monitor_labels_visible=self.monitor_labels_visible.isChecked(),
             monitor_values_on_hover=self.monitor_values_on_hover.isChecked(),
+            dashboard_opacity=self._baseline.dashboard_opacity if self.dashboard_alpha.value() == round(self._baseline.dashboard_opacity * 100) else self.dashboard_alpha.value() / 100,
+            dashboard_summary_order=self.dashboard_summary_order.order(),
             manual_min_retained=self.minimum.spin.value(), manual_max_retained=self.maximum.spin.value(),
         )
         changes = {name: getattr(draft, name) for name in draft.__dataclass_fields__ if getattr(draft, name) != getattr(self._baseline, name)}
@@ -854,7 +1000,9 @@ class SettingsWindow(QDialog):
             self.error_label.clear()
             self._show_hotkey_issues(())
             if self._dirty:
-                self.preview_changed.emit(draft)
+                preview = replace(draft, scale=self._held_scales.get(self.scale, draft.scale),
+                                  widget=replace(draft.widget, scale=self._held_scales.get(self.main_scale, draft.widget.scale)))
+                self.preview_changed.emit(None if preview == self.controller.settings else preview)
             else:
                 self.preview_changed.emit(None)
         except (ValueError, OSError, SettingsError, CredentialError) as error:
@@ -870,6 +1018,8 @@ class SettingsWindow(QDialog):
     def save(self):
         if self.onepassword.busy or self.device_profiles.busy or any(editor.recording or editor.conflicted for _, editor, _ in self.hotkey_rows.values()):
             return
+        for editor in self._scale_preview_timers:
+            editor.spin.interpretText()
         rollback: Callable[[], None] | None = None
         try:
             draft = self.gather()
@@ -926,6 +1076,8 @@ class SettingsWindow(QDialog):
                 if name in fields:
                     with QSignalBlocker(control):
                         if name == "scale":
+                            self._held_scales.pop(self.main_scale, None)
+                            self._scale_preview_timers[self.main_scale].stop()
                             control.setValue(current.scale * 100)
                         else:
                             control.setChecked(getattr(current, name))
@@ -951,6 +1103,7 @@ class SettingsWindow(QDialog):
             self._baseline = replace(self._baseline, widget=replace(self._baseline.widget, **baseline_edits))
         finally:
             self._loading = False
+        self._refresh_appearance_examples()
         self._draft_changed()
 
     def sync_runtime_overlays(self):
@@ -969,6 +1122,13 @@ class SettingsWindow(QDialog):
         self.refresh_visible_log_status()
         self.integrations_section.set_expanded(True)
         self._fit_content()
+        for editor in self._held_scales:
+            self._resume_scale_preview(editor)
+
+    def hideEvent(self, event):
+        for timer in self._scale_preview_timers.values():
+            timer.stop()
+        super().hideEvent(event)
 
     def _fit_content(self):
         area = self.screen().availableGeometry()

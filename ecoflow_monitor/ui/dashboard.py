@@ -4,13 +4,14 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, Q
 
 from ecoflow_monitor.ui.common import ScreenTracker, clamp_window, effective_scale, scaled_font
 from ecoflow_monitor.ui.components import Navigation, StatusBadge, TitleBar
+from ecoflow_monitor.ui.dashboard_summary import DashboardSummary
 from ecoflow_monitor.ui.monitoring import MonitoringPage
 from ecoflow_monitor.ui.reference_style import icon_path
 from ecoflow_monitor.ui.resize import WindowResize
 from ecoflow_monitor.ui.scrollbar import install_scrollbars
 from ecoflow_monitor.ui.settings_window import SettingsWindow
 from ecoflow_monitor.ui.theme import settings_style
-from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY, RADIUS
+from ecoflow_monitor.ui.tokens import COLORS, GEOMETRY, RADIUS, SPACE, surface
 from ecoflow_monitor.i18n import t
 
 
@@ -59,6 +60,12 @@ class Dashboard(SettingsWindow):
         self.navigation_button.clicked.connect(self.navigation_menu)
         self.titlebar.layout().insertWidget(0, self.navigation_button)
         shell_layout.addWidget(self.titlebar)
+        self.summary = DashboardSummary(controller, self.titlebar)
+        self.summary.hide()
+        self._summary_wrapped = False
+        self.titlebar.layout().setStretchFactor(self.brand, 0)
+        self.titlebar.layout().insertWidget(2, self.summary)
+        self.titlebar.layout().insertStretch(3, 1)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -136,8 +143,10 @@ class Dashboard(SettingsWindow):
         self.activateWindow()
 
     def apply_appearance(self):
-        scale = effective_scale(self, self.controller.ui_settings.scale)
+        settings = self.controller.ui_settings
+        scale = effective_scale(self, settings.scale)
         self._apply_minimum(scale)
+        self._apply_shell_style(scale, settings.dashboard_opacity)
         signature = (scale, self.controller.settings.language)
         if getattr(self, "_appearance_signature", None) == signature:
             self.refresh()
@@ -146,13 +155,12 @@ class Dashboard(SettingsWindow):
         self._scale = scale
         self._settings_scale = scale
         scaled_font(self, scale)
-        self.setStyleSheet(settings_style(scale=scale) + f"""
-QWidget#dashboard {{ background: transparent; }}
-QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {round(RADIUS['window'] * scale)}px; }}
-""")
+        self.setStyleSheet(settings_style(scale=scale) + "\nQWidget#dashboard { background: transparent; }")
         if not hasattr(self, "sidebar"):
             return
         self.titlebar.setFixedHeight(round(GEOMETRY["header"] * scale))
+        self.titlebar.layout().setContentsMargins(round(24 * scale), round(12 * scale), round(16 * scale), round(12 * scale))
+        self.titlebar.layout().setSpacing(round(SPACE[1] * scale))
         self.sidebar.setFixedWidth(round(GEOMETRY["sidebar"] * scale))
         self.sidebar.layout().setContentsMargins(round(16 * scale), round(24 * scale), round(16 * scale), round(16 * scale))
         self.footer.configure(scale)
@@ -163,7 +171,34 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
         self.resize_controls.scale = scale
         self.resize_controls.layout()
         self._update_navigation_layout()
+        self._refresh_appearance_examples()
         self.refresh()
+
+    def _apply_shell_style(self, scale, opacity):
+        signature = (scale, opacity)
+        if getattr(self, "_shell_signature", None) == signature:
+            return
+        self._shell_signature = signature
+        clear = opacity == 0
+        hit_area = surface(1 / 255)
+        hit_style = (
+            f" QWidget#title_bar, QWidget#dashboard_summary, QListWidget#navigation, QFrame#card {{ background: {hit_area}; }}"
+            if clear else ""
+        )
+        self.shell.setStyleSheet(
+            f"QFrame#app_shell {{ background: {surface(opacity)}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: {round(RADIUS['window'] * scale)}px; }}"
+            f" QFrame#balance_card {{ background: {surface(opacity, 'canvas')}; }}"
+            f" QFrame#ports_card {{ background: {surface(opacity or 1 / 255, 'canvas')}; }}" + hit_style
+        )
+        if getattr(self, "_clear_shell", False) != clear:
+            self._clear_shell = clear
+            self.brand.outlined = clear
+            self.brand.update()
+            self.summary.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, clear)
+            for edge in (*self.resize_controls.edges, self.resize_controls.grip):
+                edge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, clear)
+                edge.setStyleSheet(f"background: {hit_area};" if clear else "")
 
     def _apply_minimum(self, scale):
         area = self.screen().availableGeometry()
@@ -183,6 +218,7 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
 
     def _page_changed(self, index):
         self.navigation.setCurrentRow(index)
+        self._refresh_summary()
         if hasattr(self, "footer"):
             self.footer.setVisible(index != 0)
         self.error_label.setVisible(index != 0 and bool(self.error_label.text()))
@@ -202,7 +238,45 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
                 self.navigation.item(index).setText(t(key))
         if hasattr(self, "footer"):
             self.footer.configure(self._scale)
+        self._refresh_summary()
         self.error_label.setVisible(self.tabs.currentIndex() != 0 and bool(self.error_label.text()))
+
+    def _refresh_summary(self):
+        if self.tabs.currentIndex() <= 0:
+            self.summary.hide()
+            return
+        settings = self.controller.ui_settings
+        self.summary.refresh(self._scale, settings.dashboard_summary_order, settings.dashboard_opacity == 0)
+        self._layout_summary()
+
+    def _layout_summary(self):
+        if self.tabs.currentIndex() <= 0 or not self.summary.order:
+            return
+        row = self.titlebar.layout()
+        margins = row.contentsMargins()
+        shell = self.shell.layout()
+        shell_margins = shell.contentsMargins()
+        controls = [self.brand, self.close_button]
+        if not self.navigation_button.isHidden():
+            controls.append(self.navigation_button)
+        row_width = self.width() - shell_margins.left() - shell_margins.right() - margins.left() - margins.right()
+        inline_width = row_width - row.spacing() * len(controls)
+        inline_width -= sum(row.itemAt(row.indexOf(control)).sizeHint().width() for control in controls)
+        reading_width = self.summary.reading_width()
+        status = self.summary.status
+        wrapped = reading_width + status.minimumSizeHint().width() > inline_width
+        self.summary.row.setContentsMargins(margins.left() if wrapped else 0, 0, margins.right() if wrapped else 0, 0)
+        available = row_width if wrapped else inline_width
+        self.summary.set_status_compact(reading_width + status.full_size_hint().width() > available)
+        if wrapped != self._summary_wrapped:
+            self._summary_wrapped = wrapped
+            if wrapped:
+                row.removeWidget(self.summary)
+                shell.insertWidget(1, self.summary, 0, Qt.AlignmentFlag.AlignLeft)
+            else:
+                shell.removeWidget(self.summary)
+                row.insertWidget(2, self.summary)
+        self.summary.show()
 
     def refresh_monitoring(self):
         self.refresh()
@@ -230,6 +304,7 @@ QFrame#app_shell {{ background: {COLORS['surface']}; border: 1px solid {COLORS['
         expanded = self.width() >= round(800 * self._scale)
         self.sidebar.setVisible(expanded)
         self.navigation_button.setVisible(not expanded)
+        self._layout_summary()
 
     def moveEvent(self, event):
         super().moveEvent(event)

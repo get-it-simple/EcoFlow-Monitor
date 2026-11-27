@@ -65,7 +65,7 @@ def status_tooltip(controller) -> str:
     if controller.telemetry is None:
         last = t("never_updated")
     else:
-        stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        stamp = datetime.fromtimestamp(controller.telemetry.received_utc).astimezone().isoformat(sep=" ", timespec="seconds")
         last = t("last_update").format(timestamp=stamp)
     return t(display_connection(controller).value) + "\n" + last
 

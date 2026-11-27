@@ -10,7 +10,7 @@ from PySide6.QtCore import QEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QScrollArea
 import pytest
-from qt_helpers import close_runtime
+from qt_helpers import close_runtime, wait_until
 
 from ecoflow_monitor.adapters import hotkeys
 from ecoflow_monitor.application import Application
@@ -43,7 +43,7 @@ def test_repeated_scaling_keeps_all_monitor_content_visible(runtime, qapp, langu
         assert controller.settings.scale == scale
         assert window.monitoring.readings["battery_level"].value.font().pixelSize() == round(36 * scale)
         page = window.tabs.widget(0)
-        assert page.widget().height() >= page.widget().minimumSizeHint().height()
+        wait_until(qapp, lambda: page.widget().height() >= page.widget().minimumSizeHint().height())
         page.verticalScrollBar().setValue(page.verticalScrollBar().maximum())
         assert window.monitoring.msi_section.isHidden() is (not msi)
 

@@ -400,7 +400,7 @@ class Application(QObject):
         self.confirmations.raise_active()
 
     def preview(self, settings):
-        if self._stopped:
+        if self._stopped or self.controller.preview == settings:
             return
         self.controller.preview = settings
         self.motion_driver.refresh()

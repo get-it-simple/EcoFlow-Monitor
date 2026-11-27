@@ -13,7 +13,7 @@ from ecoflow_monitor.ui.notifications import NotificationIndicator
 from ecoflow_monitor.ui.credential_renewal import CredentialRenewalBanner
 from ecoflow_monitor.ui.readings import EnergyBalance, MetricReading
 from ecoflow_monitor.ui.sections import CollapsibleSection
-from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS, REFLOW_INTERVAL_MS
+from ecoflow_monitor.ui.tokens import GEOMETRY, RADIUS, REFLOW_INTERVAL_MS, SPACE
 from ecoflow_monitor.ui.motion import MotionMessage, MotionSurface
 from ecoflow_monitor.polling import PORT_KEYS
 from ecoflow_monitor.ui.polling import LoadingIndicator, telemetry_source_text
@@ -135,6 +135,9 @@ class MonitoringPage(QWidget):
     def refresh(self):
         settings = self.controller.ui_settings
         scale = getattr(self.window(), "_scale", effective_scale(self, settings.scale))
+        opacity = settings.dashboard_opacity
+        clear = opacity == 0
+        material = "Clear" if clear else "Panel" if opacity == 1 else "Overlay"
         telemetry = self.controller.telemetry
         timestamp = (t("last_update").format(timestamp=datetime.fromtimestamp(telemetry.received_utc).astimezone().strftime("%H:%M"))
                      if telemetry else t("never_updated"))
@@ -149,7 +152,8 @@ class MonitoringPage(QWidget):
             card.layout().setContentsMargins(*(round(16 * scale),) * 4)
         self.balance_card.layout().setContentsMargins(*(round(24 * scale),) * 4)
         for reading in self.balance_readings.values():
-            reading.configure(scale, 28)
+            reading.material = material
+            reading.configure(scale, 28, clear=clear, padding=SPACE[3])
         self.balance_title.setText(t("energy_balance"))
         for group, (card, title, grid, note) in self.port_sections.items():
             title.setText(t({"inputs": "inputs", "ac": "ac_outlets", "other": "other_outputs"}[group]))
@@ -160,7 +164,7 @@ class MonitoringPage(QWidget):
             if group != "inputs":
                 card.set_collapsed(getattr(self.controller.settings, group + "_collapsed"))
         telemetry = self.controller.telemetry
-        self.balance.configure(scale)
+        self.balance.configure(scale, material, track_opacity=opacity)
         self.battery_progress.configure(scale)
         self.balance.refresh()
         self.battery_progress.refresh()

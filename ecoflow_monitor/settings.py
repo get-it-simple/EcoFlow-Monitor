@@ -14,6 +14,7 @@ from ecoflow_monitor.polling import PollingPreferences
 
 
 METRICS = ("battery_level", "input_power", "output_power", "estimated_runtime", "minimum_discharge_level", "maximum_charge_level")
+DASHBOARD_SUMMARY_METRICS = METRICS[:3]
 HOTKEY_ACTIONS = ("toggle_monitor", "toggle_mini", "open_dashboard", "recover_widgets", "toggle_main")
 
 
@@ -159,6 +160,8 @@ class AppSettings:
     scale: float = 1
     transparency: bool = True
     background_opacity: float = 0.82
+    dashboard_opacity: float = 1
+    dashboard_summary_order: tuple[str, ...] = DASHBOARD_SUMMARY_METRICS
     animations: bool = True
     monitor_visible: bool = True
     monitor_labels_visible: bool = True
@@ -220,6 +223,10 @@ class AppSettings:
             raise ValueError("Invalid logging mode")
         if len(self.metric_order) != len(METRICS) or set(self.metric_order) != set(METRICS):
             raise ValueError("Invalid metric order")
+        order = self.dashboard_summary_order
+        if (not isinstance(order, tuple) or len(order) != len(DASHBOARD_SUMMARY_METRICS)
+                or any(not isinstance(key, str) for key in order) or set(order) != set(DASHBOARD_SUMMARY_METRICS)):
+            raise ValueError("Invalid dashboard summary order")
         if any(type(value) is not bool for value in (self.transparency, self.animations, self.main_enabled, self.monitor_visible, self.monitor_labels_visible, self.monitor_values_on_hover, self.mini_enabled, self.mini_above_taskbar)):
             raise ValueError("Boolean preference expected")
         if any(not isinstance(value, str) for value in (self.serial, self.credential_ref, self.language, self.credential_source, self.onepassword_access_ref, self.onepassword_secret_ref)):
@@ -232,7 +239,7 @@ class AppSettings:
             if reference or self.credential_source == "1password":
                 if normalize_secret_reference(reference) != reference:
                     raise ValueError("onepassword_reference_error")
-        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.main_scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1)):
+        for value, minimum, maximum in ((self.capacity_wh, 1, 1000000), (self.scale, 0.5, 3), (self.main_scale, 0.5, 3), (self.mini_scale, 0.5, 3), (self.mini_transparency, 0, 1), (self.background_opacity, 0, 1), (self.dashboard_opacity, 0, 1)):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not minimum <= value <= maximum:
                 raise ValueError("Invalid numeric setting")
         for value in (self.manual_min, self.manual_max, self.manual_min_retained, self.manual_max_retained):
@@ -285,7 +292,8 @@ class AppSettings:
             "logging": {"mode": self.logging_mode},
             "telemetry_export": asdict(self.telemetry_export),
             "appearance": {"scale": self.scale, "transparency": self.transparency, "background_opacity": self.background_opacity, "animations": self.animations, "visible": self.monitor_visible, "geometry": list(self.monitor_geometry), "monitor_labels_visible": self.monitor_labels_visible, "monitor_values_on_hover": self.monitor_values_on_hover,
-                           "pause_on_display_off": self.pause_on_display_off},
+                           "pause_on_display_off": self.pause_on_display_off, "dashboard_opacity": self.dashboard_opacity,
+                           "dashboard_summary_order": list(self.dashboard_summary_order)},
             "mini_widget": {"enabled": self.mini_enabled, "metrics": list(self.mini_metrics), "hidden_metrics": list(self.mini_hidden_metrics), "scale": self.mini_scale, "transparency": self.mini_transparency, "position": list(self.mini_position), "dock": self.mini_dock, "above_taskbar": self.mini_above_taskbar},
         }
 
@@ -307,6 +315,9 @@ class AppSettings:
             raise ValueError("Settings groups must be objects")
         if any(not isinstance(group, dict) for group in (eco, msi, automation, appearance, mini, workspace, diagnostics)):
             raise ValueError("Settings groups must be objects")
+        summary_order = appearance.get("dashboard_summary_order", defaults.dashboard_summary_order)
+        if not isinstance(summary_order, (list, tuple)):
+            raise ValueError("Dashboard summary order must be an array")
         onepassword = eco.get("onepassword", {})
         if not isinstance(onepassword, dict):
             raise ValueError("1Password settings must be an object")
@@ -355,6 +366,8 @@ class AppSettings:
             main_enabled=boolean(workspace, "main_enabled", False),
             main_scale=workspace.get("main_scale", appearance.get("scale", data.get("ui_scale", 1))),
             background_opacity=appearance.get("background_opacity", 140 / 255 if data.get("version", 0) < 3 else defaults.background_opacity),
+            dashboard_opacity=appearance.get("dashboard_opacity", defaults.dashboard_opacity),
+            dashboard_summary_order=tuple(summary_order),
             monitor_visible=boolean(appearance, "visible", True), monitor_geometry=tuple(appearance.get("geometry", defaults.monitor_geometry)),
             monitor_labels_visible=boolean(appearance, "monitor_labels_visible", True),
             monitor_values_on_hover=boolean(appearance, "monitor_values_on_hover", False),

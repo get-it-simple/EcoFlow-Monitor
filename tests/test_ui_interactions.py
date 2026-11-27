@@ -59,6 +59,11 @@ def test_display_drafts_reset_save_cancel_and_merge(runtime):
         dialog.appearance_tabs.setCurrentIndex(0)
         dialog.monitor_labels_visible.setChecked(False)
         dialog.monitor_values_on_hover.setChecked(True)
+        dialog.appearance_tabs.setCurrentIndex(1)
+        dialog.main_alpha.setValue(63)
+        dialog.appearance_tabs.setCurrentIndex(0)
+        assert not dialog.monitor_labels_visible.isChecked() and dialog.monitor_values_on_hover.isChecked()
+        assert dialog.gather().widget.opacity == 0.63
         assert runtime.controller.settings.monitor_labels_visible
         dialog.load_draft()
         assert dialog.appearance_tabs.currentIndex() == 0
