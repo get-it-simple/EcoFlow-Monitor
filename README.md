@@ -2,7 +2,7 @@
 
 Windows monitoring for **EcoFlow devices**, with optional CLI integrations
 and automatic profile selection based on running applications, input power, and
-battery charge. Version **0.19.2**.
+battery charge.
 
 The application uses the official EcoFlow developer API. DELTA 3 MAX is the
 user-confirmed working reference. Other model profiles are untested examples
